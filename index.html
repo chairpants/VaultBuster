@@ -116,7 +116,8 @@
 } }
 </script>
 <script src="catalog.js"></script>
-<script src="art.js"></script>
+<script src="covers.js"></script>  <!-- built by fetch-covers.mjs -->
+<script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store.js -->
 <script type="module">
   // file:// can't load local files as ES modules, so: import three from the CDN
   // here (https CORS is fine), expose the globals, then load store.js as a
