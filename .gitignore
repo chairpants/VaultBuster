@@ -1,0 +1,8 @@
+node_modules/
+*.log
+# untracked for now — 79MB of raw cover images was blowing out the initial
+# push (HTTP 400 on a ~86MB pack). The app doesn't need it: covers.js
+# (fetched from TMDB) and the old art.js path are what's actually loaded
+# at runtime. Add this back / push separately if you want the raw source
+# images archived too.
+art/
