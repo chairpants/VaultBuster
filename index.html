@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf8">
+<title>VaultBuster</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bb-blue: #00349c; --bb-blue-dark: #001f5c; --bb-yellow: #ffd400; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #000;
+    font-family: Verdana, Geneva, sans-serif; user-select: none; }
+  canvas { display: block; }
+
+  /* ---------- title / pause screen ---------- */
+  #titleScreen { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 26px; cursor: pointer;
+    background: radial-gradient(ellipse at 50% 30%, #0b2a7a 0%, var(--bb-blue-dark) 55%, #000510 100%); }
+  #logo { background: var(--bb-blue); border: 6px solid var(--bb-yellow); border-radius: 14px;
+    padding: 26px 46px; transform: skewX(-8deg); box-shadow: 0 14px 50px #000c; }
+  #logo h1 { font-family: "Arial Black", Arial, sans-serif; font-style: italic; font-weight: 900;
+    color: var(--bb-yellow); font-size: clamp(40px, 9vw, 96px); letter-spacing: 2px;
+    text-shadow: 3px 3px 0 #0008; }
+  #logo .tag { color: #fff; text-align: center; font-weight: bold; font-size: clamp(12px, 1.8vw, 20px);
+    letter-spacing: 5px; margin-top: 4px; }
+  #enterHint { color: var(--bb-yellow); font-weight: bold; letter-spacing: 3px; font-size: 18px;
+    animation: blink 1.4s infinite; text-shadow: 0 2px 6px #000; }
+  #controlsHelp { color: #cfe0ff; font-size: 13px; line-height: 1.9; text-align: center;
+    background: #0008; padding: 14px 22px; border-radius: 8px; }
+  #controlsHelp b { color: var(--bb-yellow); }
+  @keyframes blink { 50% { opacity: .25; } }
+  #titleScreen.paused #enterHint { color: #fff; }
+  /* resume screen (already played once) goes translucent so the still-running
+     scene shows through behind it instead of hiding it; first-run intro stays opaque */
+  #titleScreen.paused { background: rgba(3, 10, 30, .55); backdrop-filter: blur(1px); }
+
+  /* ---------- HUD ---------- */
+  #crosshair { position: fixed; z-index: 10; left: 50%; top: 50%; width: 6px; height: 6px;
+    margin: -3px; border-radius: 50%; background: var(--bb-yellow); box-shadow: 0 0 4px #000;
+    pointer-events: none; }
+  #hoverTip { position: fixed; z-index: 10; left: 50%; top: calc(50% + 26px); transform: translateX(-50%);
+    background: var(--bb-blue); color: #fff; border: 2px solid var(--bb-yellow);
+    padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: bold; white-space: nowrap;
+    pointer-events: none; display: none; text-shadow: 1px 1px 0 #0008; }
+  #hoverTip .cat { color: var(--bb-yellow); font-weight: normal; font-size: 11px; }
+  #holdingTag { position: fixed; z-index: 10; right: 14px; top: 14px; background: var(--bb-blue);
+    color: #fff; border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 14px;
+    font-size: 13px; font-weight: bold; display: none; max-width: 320px; }
+  #holdingTag .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
+  #keysHint { position: fixed; z-index: 10; left: 14px; bottom: 12px; color: #9db8ee; font-size: 11px;
+    line-height: 1.7; text-shadow: 0 1px 2px #000; pointer-events: none; }
+  #keysHint b { color: var(--bb-yellow); }
+  #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 64px; transform: translateX(-50%);
+    color: #fff; background: var(--bb-blue); border: 2px solid var(--bb-yellow); border-radius: 4px;
+    padding: 8px 16px; font-size: 13px; font-weight: bold; display: none; }
+
+  /* ---------- held-up tape overlay ---------- */
+  #inspect { position: fixed; z-index: 12; inset: 0; display: none; align-items: center;
+    justify-content: center; background: #0007; pointer-events: none; }
+  #inspect img { max-height: 72vh; max-width: 46vh; border: 4px solid #14181f;
+    box-shadow: 0 24px 70px #000e; border-radius: 3px; }
+
+  /* ---------- H toggles every HUD overlay off ---------- */
+  body.nohud #keysHint, body.nohud #tvBar, body.nohud #tvHint,
+  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #crosshair { display: none !important; }
+
+  /* ---------- TV / now playing bar ---------- */
+  #tvBar { position: fixed; z-index: 15; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: none; gap: 8px; align-items: center; background: #000c; border: 2px solid var(--bb-yellow);
+    border-radius: 6px; padding: 8px 12px; }
+  #tvBar button { border: 2px solid var(--bb-yellow); background: var(--bb-blue); color: var(--bb-yellow);
+    font-size: 14px; font-weight: bold; width: 40px; height: 34px; border-radius: 4px; cursor: pointer; }
+  #tvBar button:hover { background: var(--bb-yellow); color: var(--bb-blue-dark); }
+  #nowPlaying { color: #fff; font-size: 12px; max-width: 46vw; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  #nowPlaying b { color: var(--bb-yellow); }
+</style>
+</head>
+<body>
+<div id="titleScreen">
+  <div id="logo">
+    <h1>VAULTBUSTER</h1>
+    <div class="tag">WOW! WHAT A SELECTION.</div>
+  </div>
+  <div id="enterHint">CLICK TO ENTER THE STORE</div>
+  <div id="controlsHelp">
+    <b>W A S D</b> — walk &nbsp;·&nbsp; <b>MOUSE</b> — look &nbsp;·&nbsp; <b>CLICK</b> a tape — pick up &amp; hold it up · <b>CLICK</b> again — tuck in hand · <b>RIGHT-CLICK</b> — put back<br>
+    <b>E</b> — insert tape into the store TV &nbsp;·&nbsp; <b>SPACE</b> — pause / play &nbsp;·&nbsp; <b>, .</b> — prev / next episode<br>
+    <b>ESC</b> — put tape back / menu &nbsp;·&nbsp; <b>SHIFT</b> — hustle &nbsp;·&nbsp; <b>C</b> — crouch &nbsp;·&nbsp; <b>L</b> — lights out<br>
+    <b>H</b> — hide HUD &nbsp;·&nbsp; <b>F</b> — fullscreen &nbsp;·&nbsp; <b>MOUSE WHEEL</b> — zoom while seated &nbsp;·&nbsp; 1600+ tapes on the shelves
+  </div>
+</div>
+
+<div id="crosshair" hidden></div>
+<div id="hoverTip"></div>
+<div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
+<div id="keysHint" hidden><b>WASD</b> walk · <b>CLICK</b> pick up / hold up · <b>R-CLICK</b> put back · <b>E</b> TV / couch / lamp · <b>C</b> crouch · <b>SPACE</b> pause · <b>L</b> lights · <b>H</b> hide HUD · <b>F</b> fullscreen · <b>WHEEL</b> zoom (seated) · <b>ESC</b> menu</div>
+<div id="tvHint"></div>
+<div id="inspect"><img id="inspectArt" alt=""></div>
+
+<div id="tvBar">
+  <button id="tvPrev" title="Previous episode">⏮</button>
+  <button id="tvPause" title="Pause / play">⏯</button>
+  <button id="tvNext" title="Next episode">⏭</button>
+  <button id="tvEject" title="Eject">⏹</button>
+  <div id="nowPlaying"></div>
+</div>
+
+  <!-- off-screen decode source for the VideoTexture — never displayed, just sampled -->
+  <video id="vid" crossorigin="anonymous" playsinline style="position: fixed; right: 0; bottom: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none;"></video>
+
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script src="catalog.js"></script>
+<script src="art.js"></script>
+<script type="module">
+  // file:// can't load local files as ES modules, so: import three from the CDN
+  // here (https CORS is fine), expose the globals, then load store.js as a
+  // classic script — which file:// happily allows.
+  import * as THREE from "three";
+  import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+  import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+  import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+  import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+  import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+  import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+  window.THREE = THREE; window.mergeGeometries = mergeGeometries;
+  window.EffectComposer = EffectComposer; window.RenderPass = RenderPass;
+  window.UnrealBloomPass = UnrealBloomPass; window.ShaderPass = ShaderPass;
+  window.OutputPass = OutputPass;
+  const s = document.createElement("script"); s.src = "store.js";
+  document.body.appendChild(s);
+</script>
+</body>
+</html>
