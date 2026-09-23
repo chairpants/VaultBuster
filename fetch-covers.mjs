@@ -82,7 +82,7 @@ async function search(id, s) {
   return null;
 }
 
-const manifest = {}, art = {};
+const manifest = {}, art = {}, hi = {};         // hi: art key -> TMDB image path, for the full-res inspect view
 const toData = async url => "data:image/jpeg;base64," + Buffer.from(await (await fetch(url)).arrayBuffer()).toString("base64");
 const ids = [...shows.keys()];
 let done = 0;
@@ -96,10 +96,10 @@ async function work() {
       const d = await tmdb(ref);
       const name = d.name ?? d.title, year = (d.first_air_date ?? d.release_date ?? "").slice(0, 4);
       manifest[id] = { title: s.title, match: `${name} (${year})`, ref, via, votes: d.vote_count ?? 0, poster: d.poster_path, seasons: [] };
-      if (d.poster_path) art[`tmdb/${id}.jpg`] = await toData(IMG + d.poster_path);
+      if (d.poster_path) { art[`tmdb/${id}.jpg`] = await toData(IMG + d.poster_path); hi[`tmdb/${id}.jpg`] = d.poster_path; }
       for (const n of s.seasons) {
         const sp = d.seasons?.find(x => x.season_number === n)?.poster_path;
-        if (sp && sp !== d.poster_path) { art[`tmdb/${id}-s${n}.jpg`] = await toData(IMG + sp); manifest[id].seasons.push(n); }
+        if (sp && sp !== d.poster_path) { art[`tmdb/${id}-s${n}.jpg`] = await toData(IMG + sp); hi[`tmdb/${id}-s${n}.jpg`] = sp; manifest[id].seasons.push(n); }
       }
     } catch (e) { manifest[id] = { title: s.title, error: String(e.message) }; }
     if (++done % 50 === 0) console.log(done, "/", shows.size);
@@ -129,7 +129,8 @@ for (const id of moviePosters) art[`poster/${id}.jpg`] = await toData("https://i
 const posters = moviePosters.map(id => `poster/${id}.jpg`);
 tvPosters.forEach((id, i) => posters.splice(i * 4, 0, `art/${id}-tall.jpg`));   // a show every 4th poster
 console.log("posters:", posters.join(", "));
-fs.writeFileSync("covers.js", `window.VAULT_ART = ${JSON.stringify(art)};\nwindow.VAULT_POSTERS = ${JSON.stringify(posters)};\n`);
+fs.writeFileSync("covers.js", `window.VAULT_ART = ${JSON.stringify(art)};\nwindow.VAULT_POSTERS = ${JSON.stringify(posters)};\n` +
+  `window.VAULT_ART_HI = ${JSON.stringify(hi)};\n`);
 fs.writeFileSync("tmdb-covers.json", JSON.stringify(manifest, null, 1));
 const vals = Object.values(manifest);
 console.log(`${vals.filter(m => m.match).length} matched, ${vals.filter(m => m.match === null).length} unmatched, ` +
