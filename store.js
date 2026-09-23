@@ -34,6 +34,10 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x1b2b4d, 24, 60);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 120);
 camera.rotation.order = "YXZ";
+const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
+camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
+let setExteriorDay;                        // (isDay) => ... — swaps the exterior's own day/night rig; wired up below, called from setLights
+const exteriorClouds = [];                 // drifted a little each frame, see the main loop
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -170,6 +174,22 @@ const mat = {
   wood: new THREE.MeshLambertMaterial({ color: 0x7a4a22 }),
   tapeBody: new THREE.MeshLambertMaterial({ color: 0x101318 }),
   backing: new THREE.MeshLambertMaterial({ color: 0xeef0f2 }),
+  storefront: new THREE.MeshLambertMaterial({ color: 0x8fb8d8, transparent: true, opacity: 0.16 }), // big display glass — barely tinted, meant to be seen through
+  mullion: new THREE.MeshLambertMaterial({ color: 0x2a2e35 }),
+  sidewalk: new THREE.MeshLambertMaterial({ color: 0x9a9d9f }),
+  sidewalkJoint: new THREE.MeshBasicMaterial({ color: 0x6f7274 }),
+  pavement: new THREE.MeshLambertMaterial({ color: 0x55595e }),
+  road: new THREE.MeshLambertMaterial({ color: 0x2b2d31 }),
+  curb: new THREE.MeshLambertMaterial({ color: 0xb9bcc0 }),
+  grass: new THREE.MeshLambertMaterial({ color: 0x3f7d3a }),
+  trunk: new THREE.MeshLambertMaterial({ color: 0x5b4327 }),
+  leaves: new THREE.MeshLambertMaterial({ color: 0x2e6b34 }),
+  leaves2: new THREE.MeshLambertMaterial({ color: 0x3a7d3f }),
+  bench: new THREE.MeshLambertMaterial({ color: 0x2f5233 }),
+  cloud: new THREE.MeshLambertMaterial({ color: 0xf2f4f6, emissive: 0x141b30, emissiveIntensity: 0.4 }), // dim emissive so they don't vanish to black under moonlight
+  lineWhite: new THREE.MeshBasicMaterial({ color: 0xe8e8e8 }),
+  lineYellow: new THREE.MeshBasicMaterial({ color: 0xe8c33c }),
+  aluminum: new THREE.MeshLambertMaterial({ color: 0xc2c6cb }),
 };
 let panelMats = [];                        // ceiling panel groups — dimmed in lights-out, flicker independently on warm-up
 const allLights = [];                      // every light that lights-out kills (base intensity in userData.on)
@@ -191,10 +211,19 @@ function box(w, h, d, m, x, y, z) {
   const ceil = new THREE.Mesh(new THREE.PlaneGeometry(XW, STORE.z), mat.ceil);
   ceil.rotation.x = Math.PI / 2; ceil.position.set(XC, STORE.h, STORE.z / 2); scene.add(ceil);
 
-  // walls (front wall split around the entrance doors)
-  const Z = STORE.z, H = STORE.h, T = 0.2;
-  box(-0.8 - XL, H, T, mat.wall, (XL - 1 - 1.8) / 2, H / 2, 0);              // front-left (overlaps 1m past XL, hidden)
-  box(2 * XR - 3.6, H, T, mat.wall, 1.8 + (XR - 1.8) / 1, H / 2, 0);         // front-right
+  // walls (front wall is mostly glass on either side of the doors, like a
+  // real video-store front — low bulkhead, tall storefront glass, header band)
+  const Z = STORE.z, H = STORE.h, T = 0.2, KICK = 0.4, HEAD = 2.7;
+  const storefront = (x0, x1, z) => {
+    const w = x1 - x0, cx = (x0 + x1) / 2;
+    box(w, KICK, T, mat.wall, cx, KICK / 2, z);                             // bulkhead
+    box(w - 0.06, HEAD - KICK - 0.06, 0.05, mat.storefront, cx, (KICK + HEAD) / 2, z);
+    box(w, H - HEAD, T, mat.wall, cx, HEAD + (H - HEAD) / 2, z);            // header
+    const segs = Math.max(1, Math.round(w / 2.6));                          // mullions every ~2.6m
+    for (let i = 1; i < segs; i++) box(0.06, HEAD - KICK, 0.08, mat.mullion, x0 + i * (w / segs), (KICK + HEAD) / 2, z);
+  };
+  storefront(XL - 1, -1.8, 0);                                              // front-left (overlaps 1m past XL, hidden)
+  storefront(1.8, XR, 0);                                                   // front-right
   box(3.6, H - 2.6, T, mat.wall, 0, 2.6 + (H - 2.6) / 2, 0);                 // above doors
   box(XW, H, T, mat.wall, XC, H / 2, Z);                                    // back
   box(T, H, Z, mat.wall, XL, H / 2, Z / 2);                                 // left
@@ -204,13 +233,37 @@ function box(w, h, d, m, x, y, z) {
    [XL + T + 0.01, 2.25, Z / 2, T, Z], [XR - T - 0.01, 2.25, Z / 2, T, Z]]
     .forEach(([x, y, z, w, d]) => box(w, 0.22, d, mat.stripe, x, y, z));
 
-  // entrance: white door frame + two dark glass panes
-  box(0.12, 2.7, 0.35, mat.frame, -1.86, 1.35, 0.1); box(0.12, 2.7, 0.35, mat.frame, 1.86, 1.35, 0.1);
-  box(3.84, 0.12, 0.35, mat.frame, 0, 2.66, 0.1); box(0.06, 2.56, 0.3, mat.frame, 0, 1.28, 0.1);
-  const g1 = box(1.76, 2.56, 0.06, mat.glass, -0.9, 1.28, 0.12);
-  const g2 = box(1.76, 2.56, 0.06, mat.glass, 0.9, 1.28, 0.12);
-  g1.rotation.y = 0.5; g2.rotation.y = -0.5;                                  // doors ajar
-  g1.geometry.translate(0.9, 0, 0); g2.geometry.translate(-0.9, 0, 0);
+  // entrance: aluminum-framed double door, closed — large top & bottom
+  // glass lites split by a mid rail, vertical push/pull bars on the
+  // meeting edge (real storefront doors swing open there, hinged outboard)
+  box(0.12, 2.7, 0.35, mat.frame, -1.86, 1.35, 0.1); box(0.12, 2.7, 0.35, mat.frame, 1.86, 1.35, 0.1); // outer jambs
+  box(3.84, 0.12, 0.35, mat.frame, 0, 2.66, 0.1);                                                      // header
+  {
+    const DW = 1.7, DH = 2.56, DZ = 0.1, DD = 0.06;      // leaf width/height, wall-relative z, rail depth
+    const STILE = 0.22, TOPR = 0.12, BOTR = 0.26, MIDR = 0.1, MIDY = DH * 0.54;
+    box(0.1, DH, 0.3, mat.aluminum, 0, DH / 2, DZ);      // center astragal, where the two leaves meet
+    const door = (cx, handleIn) => {                     // handleIn: which edge (toward center) gets the pull bar
+      const gx0 = cx - DW / 2, gx1 = cx + DW / 2;
+      box(DW, TOPR, DD, mat.aluminum, cx, DH - TOPR / 2, DZ);           // top rail
+      box(DW, MIDR, DD, mat.aluminum, cx, MIDY, DZ);                    // mid rail
+      box(DW, BOTR, DD, mat.aluminum, cx, BOTR / 2, DZ);                // bottom (kick) rail
+      box(STILE, DH, DD, mat.aluminum, gx0 + STILE / 2, DH / 2, DZ);    // stiles
+      box(STILE, DH, DD, mat.aluminum, gx1 - STILE / 2, DH / 2, DZ);
+      const lw = DW - STILE * 2;
+      const topY0 = MIDY + MIDR / 2, topY1 = DH - TOPR, botY0 = BOTR, botY1 = MIDY - MIDR / 2;
+      box(lw, topY1 - topY0, 0.04, mat.storefront, cx, (topY0 + topY1) / 2, DZ);   // large top lite
+      box(lw, botY1 - botY0, 0.04, mat.storefront, cx, (botY0 + botY1) / 2, DZ);   // large bottom lite
+      const barLen = 0.9, barY = DH * 0.42, barX = handleIn > 0 ? gx1 - 0.16 : gx0 + 0.16, barZ = DZ + DD / 2 + 0.05;
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, barLen, 10), mat.aluminum);
+      bar.position.set(barX, barY, barZ); scene.add(bar);
+      for (const dy of [-barLen / 2 + 0.1, barLen / 2 - 0.1]) {          // standoff brackets, bar → door face
+        const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.05, 8), mat.aluminum);
+        bracket.rotation.x = Math.PI / 2;
+        bracket.position.set(barX, barY + dy, DZ + DD / 2 + 0.025); scene.add(bracket);
+      }
+    };
+    door(-0.9, 1); door(0.9, -1);
+  }
 
   // fluorescent ceiling panels (merged per group, emissive) — split into a
   // handful of independently-lit groups so warm-up flicker (see setLights)
@@ -233,6 +286,287 @@ function box(w, h, d, m, x, y, z) {
   const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0, 3.2, 3);
   [new THREE.HemisphereLight(0xdfe8ff, 0x223355, 1.15), new THREE.AmbientLight(0xffffff, 0.32),
    dir, lobby].forEach(l => { l.userData.on = l.intensity; allLights.push(l); scene.add(l); });
+}
+
+// ---------------- exterior (glimpsed through the storefront glass) ----------------
+// Purely a backdrop — outside the walls the player can't reach, just what's
+// visible through the doors and the storefront glass. Everything here lives
+// on EXTERIOR_LAYER only, lit exclusively by the moonlight rig below — the
+// interior's fluorescents/lamps/screens (all on the default layer) never
+// touch it, and it never touches them, regardless of whether the store
+// lights are on or off. It's always night out there, moonlit midnight blue.
+const DAY_SKY = 0x4f8fd6, MOON_SKY = 0x0e1a38;
+scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on (daytime) state at boot
+{
+  const ea = m => { m.layers.set(EXTERIOR_LAYER); scene.add(m); return m; };   // exterior-only add
+  const eb = (w, h, d, m, x, y, z) => {                                       // exterior-only box (mirrors box(), above)
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    b.position.set(x, y, z); return ea(b);
+  };
+  const x0 = WALL_L - 20, x1 = STORE.x + 20, w = x1 - x0, cx = (x0 + x1) / 2;   // well past the building on both sides
+  const SIDEWALK = 1.8;                                  // right outside the doors, before the lot starts
+  const driveTo = -SIDEWALK - 3.5, lotFar = -SIDEWALK - 8, roadFar = -SIDEWALK - 12,
+    grassFar = -SIDEWALK - 22, treesNear = -SIDEWALK - 15.5, treesFar = -SIDEWALK - 23.5;
+  const ground = (zNear, zFar, m) => {
+    const g = new THREE.Mesh(new THREE.PlaneGeometry(w, zNear - zFar), m);
+    g.rotation.x = -Math.PI / 2; g.position.set(cx, 0, (zNear + zFar) / 2); ea(g);
+  };
+  ground(0, -SIDEWALK, mat.sidewalk);                    // sidewalk right outside the doors
+  for (let x = x0 + 1; x < x1; x += 2) {                  // expansion joints
+    const joint = new THREE.Mesh(new THREE.PlaneGeometry(0.03, SIDEWALK), mat.sidewalkJoint);
+    joint.rotation.x = -Math.PI / 2; joint.position.set(x, 0.002, -SIDEWALK / 2); ea(joint);
+  }
+  ground(-SIDEWALK, lotFar, mat.pavement);              // small parking lot: drive aisle first, stalls at the back
+  for (let x = x0 + 1.3; x < x1; x += 2.6) {              // painted stall lines, the full width of the lot
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(0.12, driveTo - lotFar - 0.4), mat.lineWhite);
+    line.rotation.x = -Math.PI / 2; line.position.set(x, 0.002, (driveTo + lotFar) / 2); ea(line);
+  }
+
+  // three parked cars, deliberately different body styles — nosed in toward
+  // the road, so the store looks at their tails. Kept off to the sides of the
+  // building rather than right in front of the doors.
+  const stallX = k => x0 + 2.6 * (k + 1);               // center of stall k, between the painted lines above
+  const stallZ = (driveTo + lotFar) / 2;
+  // Each car is a side-profile silhouette (hood, windshield, roof, rear
+  // glass/deck, with real wheel-arch cutouts) extruded across its width with
+  // a bevel for soft rounded edges, plus a glass greenhouse extruded a hair
+  // wider so it reads as the window band. Built in a local frame where +x is
+  // the nose and z is across the width, then turned so the nose faces the road.
+  const carGlass = new THREE.MeshPhongMaterial({ color: 0x1b2533, specular: 0x8899aa, shininess: 90 });
+  const carTire = new THREE.MeshLambertMaterial({ color: 0x141414 });
+  const carTrim = new THREE.MeshLambertMaterial({ color: 0x232325 });
+  const chrome = new THREE.MeshPhongMaterial({ color: 0xc8ccd2, specular: 0xffffff, shininess: 100 });
+  const tailLamp = new THREE.MeshPhongMaterial({ color: 0x9a1616, specular: 0x552222, shininess: 60 });
+  const headLamp = new THREE.MeshPhongMaterial({ color: 0xe8e4cc, specular: 0xffffff, shininess: 80 });
+  const BEV = 0.04, BEVT = 0.06, YB = 0.25, ARCH = 0.5, TIRE = 0.33;
+  const car = (x, z, yaw, s) => {
+    const { L, W, color, noseY, hoodY, cowlX, wsTopX, roofY, rTopX, rBotX, rBotY, rearY, wheels } = s;
+    const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g);
+    const part = (geo, m, px, py, pz) => {
+      const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
+    };
+    const paint = new THREE.MeshPhongMaterial({ color, specular: 0x444444, shininess: 55 });
+    const extrude = (shape, depth, m, bevel) => {
+      const geo = new THREE.ExtrudeGeometry(shape, bevel
+        ? { depth, bevelEnabled: true, bevelSize: BEV, bevelThickness: BEVT, bevelSegments: 3, curveSegments: 12 }
+        : { depth, bevelEnabled: false, curveSegments: 12 });
+      geo.translate(0, 0, -depth / 2);
+      return part(geo, m, 0, 0, 0);
+    };
+
+    // body silhouette: bottom edge rear→front with an arch over each wheel, then the top line front→rear
+    const body = new THREE.Shape();
+    body.moveTo(-L / 2, YB);
+    for (const wx of wheels) { body.lineTo(wx - ARCH, YB); body.absarc(wx, YB, ARCH, Math.PI, 0, true); }
+    body.lineTo(L / 2, YB);
+    const top = [[L / 2 + 0.02, noseY], [L / 2 - 0.2, hoodY - 0.03], [cowlX, hoodY], [wsTopX, roofY], [rTopX, roofY], [rBotX, rBotY]];
+    if (s.bedTop) top.push([-L / 2 + 0.05, s.bedTop], [-L / 2 - 0.02, s.bedTop - 0.06]);
+    else {
+      if (rBotX > -L / 2 + 0.2) top.push([-L / 2 + 0.15, rBotY - 0.02]);
+      top.push([-L / 2 - 0.02, rearY]);
+    }
+    top.forEach(([px, py]) => body.lineTo(px, py));
+    body.lineTo(-L / 2, YB);
+    extrude(body, W - 2 * BEVT, paint, true);
+
+    // greenhouse: follows the windshield and rear glass, pushed outward past the
+    // body's bevel so it shows on the slopes, stopping just under the roof line
+    const gTop = roofY - 0.07, out = 0.055;
+    const along = (ax, ay, bx, by, y) => ax + (bx - ax) * (y - ay) / (by - ay);
+    const shiftFor = (ax, ay, bx, by) => out * Math.hypot(bx - ax, by - ay) / Math.abs(by - ay);
+    const fShift = shiftFor(cowlX, hoodY, wsTopX, roofY);
+    const rShift = s.rearInset ?? -shiftFor(rTopX, roofY, rBotX, rBotY);
+    const glass = new THREE.Shape();
+    glass.moveTo(cowlX + fShift, hoodY);
+    glass.lineTo(along(cowlX, hoodY, wsTopX, roofY, gTop) + fShift, gTop);
+    glass.lineTo(along(rTopX, roofY, rBotX, rBotY, gTop) + rShift, gTop);
+    glass.lineTo(rBotX + rShift, s.bedTop ? hoodY : rBotY);
+    glass.lineTo(cowlX + fShift, hoodY);
+    extrude(glass, W + 0.02, carGlass, false);
+    for (const px of s.pillars || []) part(new THREE.BoxGeometry(0.09, gTop - hoodY + 0.02, W + 0.04), paint, px, (gTop + hoodY) / 2, 0);
+
+    if (s.bedTop) {                                      // pickup cab: rounded rear window on the back of the cab, above the bed
+      const rw = W - 0.4, y0 = s.bedTop + 0.14, y1 = roofY - 0.12, rh = y1 - y0, rr = 0.05;
+      const pane = new THREE.Shape();
+      pane.moveTo(-rw / 2 + rr, 0); pane.lineTo(rw / 2 - rr, 0); pane.quadraticCurveTo(rw / 2, 0, rw / 2, rr);
+      pane.lineTo(rw / 2, rh - rr); pane.quadraticCurveTo(rw / 2, rh, rw / 2 - rr, rh);
+      pane.lineTo(-rw / 2 + rr, rh); pane.quadraticCurveTo(-rw / 2, rh, -rw / 2, rh - rr);
+      pane.lineTo(-rw / 2, rr); pane.quadraticCurveTo(-rw / 2, 0, -rw / 2 + rr, 0);
+      const geo = new THREE.ExtrudeGeometry(pane, { depth: 0.02, bevelEnabled: false, curveSegments: 6 });
+      geo.translate(0, -rh / 2, -0.01); geo.rotateY(Math.PI / 2);           // face it out the back of the cab (-x)
+      const ym = (y0 + y1) / 2;
+      const win = part(geo, carGlass, along(rTopX, roofY, rBotX, rBotY, ym) - BEV - 0.012, ym, 0);
+      win.rotation.z = -Math.atan2(rTopX - rBotX, roofY - rBotY);            // match the cab back's slight lean
+    }
+
+    if (s.bedTop) part(new THREE.BoxGeometry((rBotX - 0.12) - (-L / 2 + 0.05), 0.012, W - 0.2), carTrim,     // bed opening
+      (-L / 2 + 0.05 + rBotX - 0.12) / 2, s.bedTop + BEV + 0.006, 0);
+    if (s.wood) part(new THREE.BoxGeometry(L - 0.9, 0.16, W + 0.03), s.wood, -0.1, 0.8, 0);             // wagon woodgrain side panel
+
+    const trim = s.chromeBumpers ? chrome : carTrim;
+    for (const ex of [-1, 1]) part(new THREE.BoxGeometry(0.12, 0.15, W + 0.04), trim, ex * (L / 2 + 0.08), 0.36, 0);   // bumpers
+    part(new THREE.BoxGeometry(0.02, 0.14, W * 0.42), carTrim, L / 2 + 0.075, noseY - 0.15, 0);                       // grille
+    const tailY = (s.bedTop ?? rearY) - 0.14;
+    for (const sz of [-1, 1]) {
+      part(new THREE.BoxGeometry(0.04, 0.11, 0.3), headLamp, L / 2 + 0.07, noseY - 0.1, sz * (W / 2 - 0.3));
+      part(new THREE.BoxGeometry(0.04, 0.12, 0.34), tailLamp, -L / 2 - 0.07, tailY, sz * (W / 2 - 0.26));
+      part(new THREE.BoxGeometry(0.12, 0.08, 0.1), paint, cowlX - 0.12, hoodY + 0.1, sz * (W / 2 + 0.05));            // mirrors
+      for (const wx of wheels) {
+        const tire = part(new THREE.CylinderGeometry(TIRE, TIRE, 0.24, 18), carTire, wx, TIRE, sz * (W / 2 - 0.13));
+        tire.rotation.x = Math.PI / 2;
+        const hub = part(new THREE.CylinderGeometry(0.19, 0.19, 0.25, 14), chrome, wx, TIRE, sz * (W / 2 - 0.13));
+        hub.rotation.x = Math.PI / 2;
+      }
+    }
+  };
+  car(stallX(3), stallZ + 0.15, 0.03, {                         // maroon sedan: long hood, fastback-ish rear glass, short trunk
+    L: 4.1, W: 1.75, color: 0x8e1b1b, noseY: 0.72, hoodY: 0.92, cowlX: 0.75, wsTopX: 0.05, roofY: 1.38,
+    rTopX: -0.85, rBotX: -1.35, rBotY: 0.98, rearY: 0.78, wheels: [-1.25, 1.25], pillars: [-0.35] });
+  car(stallX(5), stallZ + 0.15, -0.05, {                        // teal station wagon: roof runs to the tail, woodgrain sides
+    L: 4.1, W: 1.72, color: 0x2e7d7a, noseY: 0.72, hoodY: 0.92, cowlX: 0.9, wsTopX: 0.25, roofY: 1.4,
+    rTopX: -1.8, rBotX: -1.97, rBotY: 0.95, rearY: 0.9, wheels: [-1.28, 1.28], pillars: [-0.2, -1.05],
+    wood: new THREE.MeshLambertMaterial({ color: 0x7a5230 }) });
+  car(stallX(16), stallZ + 0.15, 0.02, {                        // cream pickup: tall cab, open bed, chrome bumpers
+    L: 4.1, W: 1.82, color: 0xd8c79a, noseY: 0.82, hoodY: 1.0, cowlX: 0.95, wsTopX: 0.35, roofY: 1.55,
+    rTopX: -0.5, rBotX: -0.53, rBotY: 1.02, bedTop: 1.02, rearInset: 0.1, wheels: [-1.3, 1.3], chromeBumpers: true });
+
+  eb(w, 0.12, 0.15, mat.curb, cx, 0.06, lotFar);
+  ground(lotFar, roadFar, mat.road);                     // the road behind the lot
+  for (let x = x0 + 0.8; x < x1; x += 1.7) {              // dashed centerline
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.12), mat.lineYellow);
+    dash.rotation.x = -Math.PI / 2; dash.position.set(x, 0.002, (lotFar + roadFar) / 2); ea(dash);
+  }
+  ground(roadFar, grassFar, mat.grass);                  // a much deeper stretch of grass on the far side
+  const benchZ = roadFar - 2.2;                          // a bench facing back toward the store, just past the road
+  eb(1.3, 0.05, 0.4, mat.bench, 0, 0.42, benchZ);
+  eb(1.3, 0.4, 0.05, mat.bench, 0, 0.62, benchZ + 0.18);
+  for (const lx of [-0.55, 0.55]) eb(0.06, 0.42, 0.06, mat.dark, lx, 0.21, benchZ);
+
+  // night lighting — these only come on when setExteriorDay flips to night.
+  // Each entry remembers its "on" value; lenses also join the bloom layer so
+  // they glow, but stay dark (and don't bloom) by day.
+  const nightLights = [], nightGlows = [];
+  const ecyl = (rt, rb, h, m, x, y, z, seg = 12) => {
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m); c.position.set(x, y, z); return ea(c);
+  };
+  const glowMat = (color, emissive, on) => {
+    const m = new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: 0 }); m.userData.on = on; nightGlows.push(m); return m;
+  };
+  const nightLight = (l, on) => { l.intensity = 0; l.userData.on = on; l.layers.set(EXTERIOR_LAYER); scene.add(l); nightLights.push(l); return l; };
+
+  // parking-lot street lights: cobra-head fixtures on tall poles at the head
+  // of the stalls, arms reaching out over the cars, sodium orange pooling
+  // straight down. Every 5 stalls (13m), each standing in an empty stall —
+  // stall 4 sits right between the sedan and the wagon, so both get lit.
+  const poleMat = new THREE.MeshPhongMaterial({ color: 0x3b3f45, specular: 0x222222, shininess: 30 });
+  const sodiumLens = glowMat(0x3a2e1c, 0xffae4a, 1.6);
+  const streetLamp = (x, z) => {
+    const armLen = 1.6, hy = 6.0, hz = z + armLen + 0.25;
+    ecyl(0.26, 0.3, 0.5, mat.sidewalk, x, 0.25, z, 14);                     // concrete footing
+    ecyl(0.06, 0.08, 5.6, poleMat, x, 0.5 + 2.8, z, 10);                    // pole
+    eb(0.08, 0.08, armLen, poleMat, x, hy, z + armLen / 2);                 // arm out over the stalls
+    eb(0.46, 0.16, 0.8, poleMat, x, hy - 0.02, hz);                         // head housing
+    eb(0.36, 0.02, 0.62, sodiumLens, x, hy - 0.11, hz).layers.enable(BLOOM_LAYER);
+    const spot = nightLight(new THREE.SpotLight(0xffae4a, 0, 16, 0.72, 0.55, 1.5), 16);
+    spot.position.set(x, hy - 0.15, hz);
+    spot.target.position.set(x, 0, hz); scene.add(spot.target);
+  };
+  for (const k of [4, 9, 14, 19]) streetLamp(stallX(k), lotFar + 0.35);
+
+  // ornamental park lamp beside the bench: black wrought iron, stepped
+  // octagonal base, slim shaft with a collar, flared lantern with a pyramid
+  // cap and finial — softer and warmer than the sodium lot lights
+  const iron = new THREE.MeshPhongMaterial({ color: 0x121212, specular: 0x333333, shininess: 40 });
+  const lanternGlass = glowMat(0x4a3a1c, 0xffcf7a, 1.3);
+  {
+    const px = 1.2, pz = benchZ;
+    ecyl(0.2, 0.24, 0.12, iron, px, 0.06, pz, 8);                           // plinth
+    ecyl(0.12, 0.16, 0.4, iron, px, 0.32, pz, 8);                           // tapered base
+    ecyl(0.14, 0.14, 0.04, iron, px, 0.54, pz, 12);                         // collar
+    ecyl(0.045, 0.06, 2.3, iron, px, 1.7, pz, 10);                          // shaft
+    ecyl(0.08, 0.08, 0.05, iron, px, 1.4, pz, 12);                          // decorative ring
+    ecyl(0.09, 0.05, 0.14, iron, px, 2.92, pz, 8);                          // lantern cradle
+    const glass = ecyl(0.17, 0.12, 0.38, lanternGlass, px, 3.18, pz, 4);    // flared four-sided lantern
+    glass.rotation.y = Math.PI / 4; glass.layers.enable(BLOOM_LAYER);
+    const cap = ea(new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.2, 4), iron));
+    cap.position.set(px, 3.47, pz); cap.rotation.y = Math.PI / 4;
+    const finial = ea(new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), iron)); finial.position.set(px, 3.6, pz);
+    nightLight(new THREE.PointLight(0xffcf7a, 0, 9, 1.5), 4).position.set(px, 3.15, pz);
+  }
+
+  // two nicer tree shapes — a layered pine (stacked tapering cones) and a
+  // round broadleaf (a cluster of lumpy icosahedra so the canopy isn't a
+  // perfect sphere) — over a few staggered rows so the treeline reads as
+  // an actual thicket, not a single thin row of cutouts
+  const pine = (x, z, s, leafMat) => {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * s, 0.12 * s, 1.0 * s, 6), mat.trunk);
+    trunk.position.set(x, 0.5 * s, z); ea(trunk);
+    [[0.8, 1.3, 0.8], [1.55, 1.05, 0.62], [2.2, 0.8, 0.44]].forEach(([y0, h, r]) => {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(r * s, h * s, 8), leafMat);
+      cone.position.set(x, (y0 + h / 2) * s, z); ea(cone);
+    });
+  };
+  const round = (x, z, s, leafMat) => {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * s, 0.13 * s, 1.1 * s, 6), mat.trunk);
+    trunk.position.set(x, 0.55 * s, z); ea(trunk);
+    [[0, 1.7, 0.62], [0.34, 1.5, 0.5], [-0.32, 1.55, 0.48], [0.04, 1.98, 0.46]].forEach(([ox, y, r]) => {
+      const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 0), leafMat);
+      puff.position.set(x + ox * s, y * s, z + (Math.random() - 0.5) * 0.3 * s); ea(puff);
+    });
+  };
+  const rows = [treesNear, (treesNear + treesFar) / 2, treesFar];
+  for (const rz of rows) {
+    const spacing = 1.9 + Math.random() * 0.4;
+    const n = Math.round(w / spacing);
+    for (let i = 0; i < n; i++) {
+      const x = x0 + (i + 0.5) * (w / n) + (Math.random() - 0.5) * 0.7;
+      const z = rz + (Math.random() - 0.5) * 1.6;
+      const s = 0.8 + Math.random() * 0.6;
+      const leafMat = Math.random() < 0.5 ? mat.leaves : mat.leaves2;
+      (Math.random() < 0.6 ? pine : round)(x, z, s, leafMat);
+    }
+  }
+  // fills any gaps above/between the trees. Unlit and exempt from fog: the
+  // scene background itself is never fogged, so a fogged plane read as a
+  // slightly different blue and its corners showed against the open sky
+  const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(w + 40, 26),
+    new THREE.MeshBasicMaterial({ color: DAY_SKY, fog: false }));
+  backdrop.position.set(cx, 10, treesFar - 3); ea(backdrop);
+
+  // subtle clouds — small clusters of flattened, lumpy icosahedra (not
+  // perfect spheres) hanging high over the lot; they're lit by whichever
+  // rig is active below, so they read bright and warm by day and dim,
+  // cool, and barely-there by night for free, without swapping materials
+  const cloud = (x, y, z, s) => {
+    const g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
+    [[0, 0, 0, 0.9], [0.7, 0.05, 0.1, 0.7], [-0.65, 0.02, -0.05, 0.65], [0.2, 0.25, 0.15, 0.55], [-0.3, 0.2, -0.1, 0.5]]
+      .forEach(([ox, oy, oz, r]) => {
+        const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 0), mat.cloud);
+        puff.position.set(ox * s, oy * s, oz * s); puff.scale.y = 0.55; puff.layers.set(EXTERIOR_LAYER); g.add(puff);
+      });
+    exteriorClouds.push(g);
+  };
+  [[-15, 14, -8], [10, 16, -14], [-25, 15, -20], [20, 13, -6], [0, 17, -18], [-8, 15, -24], [28, 14, -16]]
+    .forEach(([px, py, pz]) => cloud(px + (Math.random() - 0.5) * 4, py + (Math.random() - 0.5) * 2, pz + (Math.random() - 0.5) * 4, 2.5 + Math.random() * 1.5));
+
+  // day/night rig — its own layer, so it's the only thing illuminating the
+  // above, and never touches (or is touched by) the interior's fluorescents.
+  // Warm sun by day, cool pale-blue moon by night; setLights() below picks
+  // which one's live, in sync with the store's own lights toggle.
+  const sun = new THREE.DirectionalLight(0xfff3d9, 0.95); sun.position.set(12, 30, -8);
+  const sunFill = new THREE.HemisphereLight(0xaed4f5, 0x4c6a3c, 0.75);
+  const moon = new THREE.DirectionalLight(0xaec2e8, 0.5); moon.position.set(-14, 26, -10);
+  const moonFill = new THREE.HemisphereLight(0x2c3d68, 0x05070f, 0.55);
+  [sun, sunFill, moon, moonFill].forEach(l => { l.layers.set(EXTERIOR_LAYER); scene.add(l); });
+  setExteriorDay = isDay => {
+    sun.intensity = isDay ? 0.95 : 0; sunFill.intensity = isDay ? 0.75 : 0;
+    moon.intensity = isDay ? 0 : 0.5; moonFill.intensity = isDay ? 0 : 0.55;
+    const sky = isDay ? DAY_SKY : MOON_SKY;
+    scene.background.set(sky); backdrop.material.color.set(sky);
+    for (const l of nightLights) l.intensity = isDay ? 0 : l.userData.on;         // street + park lamps: night only
+    for (const m of nightGlows) m.emissiveIntensity = isDay ? 0 : m.userData.on;
+  };
+  setExteriorDay(true);          // matches lightsOut's default (false) — moon/moonFill start off, not double-lit with the sun
 }
 
 // ---------------- lobby + back wall dressing ----------------
@@ -1183,6 +1517,7 @@ function setLights(out) {
   // too readily; this only raises the bar for what counts as "glowing", it doesn't
   // touch the real PointLights doing the room-ambience work above
   bloomPass.threshold = out ? 0.34 : 0.52;
+  setExteriorDay(!out);                      // store lights on = daytime outside, off = moonlit night
 }
 
 // ---------------- player ----------------
@@ -1552,6 +1887,11 @@ renderer.setAnimationLoop(() => {
   for (const b of marquee) {              // marquee chase around the posters
     const v = 0.5 + 0.5 * Math.sin(clockT * 7 + b.phase);
     b.mat.color.setRGB(0.3 + 0.7 * v, 0.27 + 0.62 * v, 0.03 + 0.09 * v);
+  }
+  const cloudSpan = (STORE.x + 20) - (WALL_L - 20);
+  for (const c of exteriorClouds) {       // a slow drift so the sky doesn't feel static
+    c.position.x += dt * 0.15;
+    if (c.position.x > STORE.x + 20) c.position.x -= cloudSpan;
   }
   if (!playing) updateScreensaver(dt); else updateVideoFrame();   // pauses while a tape's actually in, like a real screensaver would
   if (warmup) {                           // fluorescents restriking after lights-on
