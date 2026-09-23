@@ -2,7 +2,20 @@
 
 **A first-person 90s video store you can actually rent from.**
 
+![Walking into VaultBuster](screenshots/entrance.jpg)
+
 Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, and play it on the big-screen TV in the lounge. Every one of the 1,600+ tapes streams real episodes and movies from the Internet Archive. It's built in three.js with no build step and no dependencies, and it runs straight from a `file://` URL.
+
+---
+
+## Screenshots
+
+| Lights on | Lights out |
+|---|---|
+| ![The TV lounge](screenshots/lounge.jpg) | ![The TV lounge after dark](screenshots/lounge-night.jpg) |
+| ![Looking out the front doors by day](screenshots/outside-day.jpg) | ![The lot at night under the sodium lights](screenshots/outside-night.jpg) |
+
+![Down a TV Shows aisle](screenshots/aisle.jpg)
 
 ---
 

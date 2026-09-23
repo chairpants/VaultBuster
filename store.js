@@ -228,8 +228,9 @@ function box(w, h, d, m, x, y, z) {
   box(XW, H, T, mat.wall, XC, H / 2, Z);                                    // back
   box(T, H, Z, mat.wall, XL, H / 2, Z / 2);                                 // left
   box(T, H, Z, mat.wall, XR, H / 2, Z / 2);                                 // right
-  // blue stripe around the walls at eye height
-  [[XC, 2.25, Z - T / 2 - 0.012, XW, 0], [XC, 2.25, T / 2 + 0.012, XW, 0],
+  // blue stripe around the walls at eye height — back and sides only; the
+  // front is glass now, and a stripe there ran straight across the windows
+  [[XC, 2.25, Z - T / 2 - 0.012, XW, 0],
    [XL + T + 0.01, 2.25, Z / 2, T, Z], [XR - T - 0.01, 2.25, Z / 2, T, Z]]
     .forEach(([x, y, z, w, d]) => box(w, 0.22, d, mat.stripe, x, y, z));
 
@@ -467,7 +468,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     eb(0.08, 0.08, armLen, poleMat, x, hy, z + armLen / 2);                 // arm out over the stalls
     eb(0.46, 0.16, 0.8, poleMat, x, hy - 0.02, hz);                         // head housing
     eb(0.36, 0.02, 0.62, sodiumLens, x, hy - 0.11, hz).layers.enable(BLOOM_LAYER);
-    const spot = nightLight(new THREE.SpotLight(0xffae4a, 0, 16, 0.72, 0.55, 1.5), 16);
+    const spot = nightLight(new THREE.SpotLight(0xffae4a, 0, 18, 0.72, 0.55, 1.5), 72);   // tall pole: needs a lot of candela to read on dark asphalt
     spot.position.set(x, hy - 0.15, hz);
     spot.target.position.set(x, 0, hz); scene.add(spot.target);
   };
@@ -491,7 +492,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     const cap = ea(new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.2, 4), iron));
     cap.position.set(px, 3.47, pz); cap.rotation.y = Math.PI / 4;
     const finial = ea(new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), iron)); finial.position.set(px, 3.6, pz);
-    nightLight(new THREE.PointLight(0xffcf7a, 0, 9, 1.5), 4).position.set(px, 3.15, pz);
+    nightLight(new THREE.PointLight(0xffcf7a, 0, 10, 1.5), 14).position.set(px, 3.15, pz);
   }
 
   // two nicer tree shapes — a layered pine (stacked tapering cones) and a
