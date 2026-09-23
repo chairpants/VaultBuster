@@ -15,15 +15,39 @@ const frontAt = y => BAY.depth - (BAY.depth - BAY.top) * y / BAY.h;
 const LEAN = 10 * Math.PI / 180;                  // tapes tip back against each shelf's backing board
 const CAP = BAY.rows * BAY.perRow;                 // 44 tapes per bay face (face-out covers)
 const SLOT_W = 0.13, TAPE = { w: 0.032, h: 0.192, d: 0.105 }; // slot = cover + ≤1/4-tape spread
-const AISLE = { z0: 5.5, segBays: 2, segBaysTV: 4, gap: 3.3, corridor: 3 }; // split bands, center corridor; segBays caps Movies chains (compact 2x2 clusters — far fewer titles), segBaysTV caps TV Shows chains
+const AISLE = { z0: 6.1, segBays: 2, segBaysTV: 4, gap: 3.1, corridor: 3 };   // z0 leaves ~1.75m past the entry rail/gates; gap trimmed so the last band stays put (couch walkway) // split bands, center corridor; segBays caps Movies chains (compact 2x2 clusters — far fewer titles), segBaysTV caps TV Shows chains
 // Movies' side wall pulled in from the original symmetric ±STORE.x so its gap
 // to the nearest shelf endcap (-4.76) matches TV Shows' gap to its wall
 // (2.98, from its endcap at 8.02) — see the aisle-layout section for that math.
 // Right/back/front-right stay at the original STORE.x scale.
 const WALL_L = -7.74;
 const WALL_SHIFT = WALL_L + STORE.x;       // how far the movie-side wall (and everything anchored to it) moves in, ~3.26
-const SNACKS = [["#e63946", "STARBITES"], ["#2a9d8f", "MINT CHILL"], ["#f4a300", "CHOC BOMB"], ["#8e44ad", "GRAPE ZAP"],
-  ["#e76f51", "FRUIT POP"], ["#3d5a80", "LICORICE"], ["#ff6b6b", "RED HOTZ"], ["#457b9d", "BLUE RAZZ"]];
+// cooler stock, shelf by shelf (see the cooler): r/h in meters; glass = bottle
+// color + opacity, label = [background, text]. Grabbing one hands you that unit.
+const DRINK_PRODUCTS = [
+  { name: "AQUA VAULT", kind: "Water", shape: "bottle", r: 0.033, h: 0.215, glass: 0xdff3ff, opacity: 0.35, cap: 0x2a7de1, label: ["#ffffff", "#2a7de1"] },
+  { name: "VAULT COLA", kind: "Soda", shape: "bottle", r: 0.034, h: 0.23, glass: 0x2b120a, opacity: 0.95, cap: 0xd21f26, label: ["#d21f26", "#ffffff"] },
+  { name: "LEMON FIZZ", kind: "Soda", shape: "bottle", r: 0.034, h: 0.23, glass: 0xc9f29a, opacity: 0.55, cap: 0x2e9e3a, label: ["#2e9e3a", "#fff36b"] },
+  { name: "GOLD CROWN", kind: "Beer", shape: "longneck", r: 0.031, h: 0.235, glass: 0x5a2a0a, opacity: 0.93, cap: 0xc9a227, label: ["#f3e6c4", "#9c1c1c"] },
+  { name: "VALLEY PILS", kind: "Beer", shape: "longneck", r: 0.031, h: 0.235, glass: 0x1f5a2a, opacity: 0.9, cap: 0xb8bcc2, label: ["#ffffff", "#1f5a2a"] },
+  { name: "VOLT", kind: "Energy drink", shape: "can", r: 0.029, h: 0.157, label: ["#111111", "#7dff3a"] },
+  { name: "RUSH", kind: "Energy drink", shape: "can", r: 0.029, h: 0.157, label: ["#1b4fd6", "#e6e9ee"] },
+  { name: "VAULT COLA", kind: "Soda", shape: "can", r: 0.033, h: 0.122, label: ["#d21f26", "#ffffff"] },
+  { name: "ORANGE BLAST", kind: "Soda", shape: "can", r: 0.033, h: 0.122, label: ["#ff7a00", "#ffffff"] },
+  { name: "ROOT BEER", kind: "Soda", shape: "can", r: 0.033, h: 0.122, label: ["#5a2d14", "#f3d9a4"] },
+];
+// snack rack stock — each its own shape and size (meters); the rack lays them
+// out in this order (see the snack center), and grabbing one hands you that item
+const SNACK_PRODUCTS = [
+  { name: "FRUIT POP", color: "#e76f51", shape: "bag", w: 0.17, h: 0.23, d: 0.07 },
+  { name: "BLUE RAZZ", color: "#457b9d", shape: "bag", w: 0.14, h: 0.2, d: 0.06 },
+  { name: "GRAPE ZAP", color: "#8e44ad", shape: "tube", w: 0.075, h: 0.21, d: 0.075 },
+  { name: "LICORICE", color: "#b5172a", shape: "box", w: 0.055, h: 0.22, d: 0.03 },
+  { name: "CHOC BOMB", color: "#6b3e26", shape: "box", w: 0.1, h: 0.14, d: 0.035 },
+  { name: "RED HOTZ", color: "#e63946", shape: "box", w: 0.07, h: 0.1, d: 0.028 },
+  { name: "STARBITES", color: "#f4a300", shape: "bar", w: 0.16, h: 0.045, d: 0.016 },
+  { name: "MINT CHILL", color: "#2a9d8f", shape: "gum", w: 0.075, h: 0.028, d: 0.016 },
+];
 const ORDER = ["Comedy", "Action & Adventure", "Sci-Fi & Fantasy", "Horror", "Drama",
   "Family & Kids", "Holiday", "Music", "Animation", "Anime", "Kids & Educational",
   "Sitcoms", "Classic Sitcoms", "Drama & Adventure", "Horror & Anthology",
@@ -574,23 +598,95 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 const colliders = [];
 function solid(w, h, d, m, x, y, z) { colliders.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 }); return box(w, h, d, m, x, y, z); }
 let returnSlotMesh;                          // the E target for the returns counter, set below
+let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
 let flapPivot, flapCollider;                  // the register pass-through flap, set below
 {
-  // checkout cluster shifts in from the wall by the same amount the movie-side
-  // wall was pulled in, so it keeps its original ~0.4m clearance from it
-  const CX = -9 + WALL_SHIFT;
-  solid(3.2, 1.0, 0.7, mat.counter, CX, 0.5, 4);                             // checkout counter
-  solid(3.2, 0.08, 0.78, mat.counterTop, CX, 1.04, 4);
-  box(0.5, 0.3, 0.4, mat.dark, CX, 1.23, 4);                                 // register
+  // checkout cluster: its west end keeps its ~0.4m clearance from the (pulled-in)
+  // movie-side wall; it runs east to RX, where the returns + front counters turn
+  // the corner — their east face at -1.9 sits just shy of the door path (±1.8),
+  // so the counters line the entry lane
+  const RX = -2.25;                            // returns/front counter centerline
+  const CX0 = -9 + WALL_SHIFT - 1.6, CX1 = RX + 0.35, CX = (CX0 + CX1) / 2;
+  solid(CX1 - CX0, 1.0, 0.7, mat.counter, CX, 0.5, 4);                       // checkout counter
+  solid(CX1 - CX0, 0.08, 0.78, mat.counterTop, CX, 1.04, 4);
+  // register: a beige CRT point-of-sale terminal with keyboard + mouse, where
+  // the old black box stood — facing the employee side (toward the doors' wall)
+  {
+    const pos = new THREE.Group(); pos.position.set(-9 + WALL_SHIFT, 1.08, 4); pos.rotation.y = Math.PI; scene.add(pos);   // local +z = employee side
+    const beige = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), beigeDk = new THREE.MeshLambertMaterial({ color: 0xbdb49e });
+    const add = (geo, m, x, y, z, parent = pos) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+    // monitor: swivel base, neck, bezel box, tapered CRT back, recessed screen
+    add(new THREE.CylinderGeometry(0.13, 0.15, 0.025, 24), beigeDk, 0, 0.0125, -0.05);
+    add(new THREE.BoxGeometry(0.1, 0.05, 0.1), beigeDk, 0, 0.05, -0.05);
+    const mon = new THREE.Group(); mon.position.set(0, 0.26, -0.05); mon.rotation.x = -0.06; pos.add(mon);   // tipped back a touch
+    add(new THREE.BoxGeometry(0.4, 0.34, 0.06), beige, 0, 0, 0.1, mon);                                     // front bezel
+    const back = add(new THREE.CylinderGeometry(0.2, 0.12, 0.28, 4, 1).rotateX(Math.PI / 2).rotateZ(Math.PI / 4), beigeDk, 0, 0.005, -0.07, mon);
+    back.scale.set(1.25, 1, 1);                                                                             // squared-off tube housing, wider than tall — wide at the bezel, tapering to the back
+    const scr = makeTexture((ctx, w, h) => {                                                                // green POS screen
+      ctx.fillStyle = "#031a0b"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#39ff7a"; ctx.font = "bold 22px 'Courier New', monospace"; ctx.textBaseline = "top";
+      const lines = ["VAULTBUSTER POS  v2.3", "--------------------", "RENTAL / RETURN", "", "MEMBER #: ______", "TITLE  : ______", "DUE    : 3 NIGHTS", "", "F1 RENT  F2 RETURN", "F3 LATE FEES"];
+      lines.forEach((l, i) => ctx.fillText(l, 16, 14 + i * 24));
+      ctx.fillRect(16 + 9 * 13.2, 14 + 4 * 24, 12, 20);                                                  // block cursor
+      const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h * 0.75);                  // CRT falloff
+      g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,.55)"); ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    }, 320, 256);
+    add(new THREE.BoxGeometry(0.32, 0.25, 0.01), new THREE.MeshLambertMaterial({ color: 0x0c0f0c }), 0, 0.01, 0.128, mon);   // screen recess
+    glow(add(new THREE.PlaneGeometry(0.3, 0.235), new THREE.MeshBasicMaterial({ map: scr }), 0, 0.01, 0.1335, mon));
+    add(new THREE.BoxGeometry(0.012, 0.012, 0.004), new THREE.MeshBasicMaterial({ color: 0x39ff7a }), 0.16, -0.15, 0.132, mon);   // power LED
+    // keyboard: beige slab, raised back edge, key grid on top
+    const keys = makeTexture((ctx, w, h) => {
+      ctx.fillStyle = "#cfc7b2"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#e9e3d3"; ctx.strokeStyle = "#8e866f"; ctx.lineWidth = 1;
+      const rows = 6, kh = h / (rows + 0.6);
+      for (let r = 0; r < rows; r++) {
+        const n = r === 5 ? 1 : 15, kw = r === 5 ? w * 0.45 : (w * 0.74) / 15;
+        for (let k = 0; k < n; k++) { const x = r === 5 ? w * 0.22 : 8 + k * kw; ctx.fillRect(x, 6 + r * kh, kw - 3, kh - 3); ctx.strokeRect(x, 6 + r * kh, kw - 3, kh - 3); }
+      }
+      for (let r = 1; r < 6; r++) for (let k = 0; k < 4; k++) { const x = w * 0.8 + k * (w * 0.19 / 4); ctx.fillRect(x, 6 + r * (h / 6.6), w * 0.04, h / 6.6 - 3); }   // number pad
+    }, 512, 176);
+    const kb = add(new THREE.BoxGeometry(0.44, 0.025, 0.16), [beige, beige, new THREE.MeshLambertMaterial({ map: keys }), beige, beige, beige], 0, 0.02, 0.2);
+    kb.rotation.x = 0.07;                                                                                   // raised at the back
+    // mouse on a pad, cord running back to the monitor
+    add(new THREE.BoxGeometry(0.2, 0.004, 0.17), new THREE.MeshLambertMaterial({ color: 0x1f3f86 }), 0.33, 0.002, 0.2);
+    const mouse = add(new THREE.SphereGeometry(0.035, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), beige, 0.33, 0.004, 0.21);
+    mouse.scale.set(0.85, 0.7, 1.35);
+    add(new THREE.BoxGeometry(0.002, 0.003, 0.018), beigeDk, 0.33, 0.028, 0.185);                          // button split
+    const cord = add(new THREE.CylinderGeometry(0.003, 0.003, 0.3, 6).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x9a927d }), 0.26, 0.004, 0.03);
+    cord.rotation.y = 0.55;
+  }
 
   // returns counter — rotated 90° off the checkout's line so it turns the
   // corner instead of extending it, tucked flush behind checkout's east edge
   // (not jutting out over the shop floor) and running south from that same
   // corner — toward the door — instead of north, so it sits close to the
   // entrance rather than deep in the register nook
-  const RX = -4.49, RZ0 = 3.65, RLEN = 1.3;    // RX flush with checkout's east edge; RZ0 = checkout's south (customer) edge
+  const RZ0 = 3.65, RLEN = 1.3;                // RZ0 = checkout's south (customer) edge
   const RCZ = RZ0 - RLEN / 2;                  // returns' own center z — its north end touches RZ0, it runs south from there
-  solid(0.7, 1.0, RLEN, mat.counter, RX, 0.5, RCZ);
+  // hollow: front (slot side), ends and base, open on the employee (west) side
+  // onto a shelf the returned tapes land on — staff grab them from back there
+  colliders.push({ x0: RX - 0.35, x1: RX + 0.35, z0: RCZ - RLEN / 2, z1: RCZ + RLEN / 2 });
+  const binMat = new THREE.MeshLambertMaterial({ color: 0x1a2440 });
+  box(0.04, 1.0, RLEN, mat.counter, RX + 0.33, 0.5, RCZ);                           // customer-side front
+  for (const dz of [-1, 1]) box(0.7, 1.0, 0.04, mat.counter, RX, 0.5, RCZ + dz * (RLEN / 2 - 0.02));   // ends
+  box(0.7, 0.12, RLEN, mat.counter, RX, 0.06, RCZ);                                 // base
+  box(0.66, 0.02, RLEN - 0.08, binMat, RX - 0.01, 0.5, RCZ);                        // shelf the tapes land on
+  box(0.01, 0.84, RLEN - 0.08, binMat, RX + 0.305, 0.54, RCZ);                      // dark inside of the front
+  const grab = new THREE.Mesh(new THREE.PlaneGeometry(RLEN - 0.08, 0.84),           // the open side: E target from behind the counter
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  grab.position.set(RX - 0.34, 0.54, RCZ); grab.rotation.y = -Math.PI / 2; scene.add(grab);
+  grab.userData.returns = true; aimables.push(grab);
+  // returned tapes, lying flat in a loose stack on the shelf (redrawn when the bin changes — see refreshReturnsBin)
+  const binGroup = new THREE.Group(); scene.add(binGroup);
+  refreshReturnsBin = () => {
+    binGroup.clear();
+    returnBin.slice(-10).forEach((t, i) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), t.sideMat || mat.tapeBody);
+      const pile = i % 3, level = Math.floor(i / 3);   // three piles along the shelf, each tape resting on the one below it
+      m.position.set(RX - 0.05 + (level % 2) * 0.03, 0.51 + TAPE.w / 2 + level * TAPE.w, RCZ - 0.25 + pile * 0.25);
+      m.rotation.y = (i * 0.37) % 0.5 - 0.25; binGroup.add(m);
+    });
+  };
   solid(0.78, 0.08, RLEN, mat.counterTop, RX, 1.04, RCZ);
   returnSlotMesh = box(0.1, 0.03, 0.7, mat.dark, RX + 0.3, 1.085, RCZ);   // east face, facing the shop floor
   returnSlotMesh.userData.returns = true; aimables.push(returnSlotMesh);
@@ -635,6 +731,90 @@ let flapPivot, flapCollider;                  // the register pass-through flap,
   scene.add(tag);
 }
 
+// ---------------- entry lane: barrier rail + security gates ----------------
+// The counters line the west side of the path in from the doors; a steel rail
+// mirrors them on the east side, and anti-theft gate pedestals (the "metal
+// detector") span the lane past the RETURNS counter. Three pedestals make two ~1.2m lanes;
+// the gaps at the counter and at the rail (~0.45-0.5m) are narrower than the
+// player (0.64m), so walking in means walking through a gate.
+{
+  const steel = new THREE.MeshPhongMaterial({ color: 0xb9bec4, specular: 0xffffff, shininess: 80 });
+  const BX = 1.95, Z0 = 0.15, Z1 = 4.35;       // rail line: front wall -> level with the checkout's customer edge
+  const n = Math.round((Z1 - Z0) / 1.05);
+  for (let i = 0; i <= n; i++) {
+    const z = Z0 + i * (Z1 - Z0) / n;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 1.0, 14), steel); post.position.set(BX, 0.5, z); scene.add(post);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.025, 16), steel); foot.position.set(BX, 0.0125, z); scene.add(foot);
+  }
+  for (const y of [0.5, 0.99]) {
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, Z1 - Z0, 14).rotateX(Math.PI / 2), steel);
+    rail.position.set(BX, y, (Z0 + Z1) / 2); scene.add(rail);
+  }
+  colliders.push({ x0: BX - 0.05, x1: BX + 0.05, z0: Z0, z1: Z1 });
+
+  const GZ = 4.0;                              // gate line: past the RETURNS counter, level with the checkout corner and the rail's far end
+  const grey = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
+  const acrylic = new THREE.MeshPhongMaterial({ color: 0xdbe8f0, specular: 0xffffff, shininess: 90, transparent: true, opacity: 0.3, depthWrite: false });
+  const led = new THREE.MeshBasicMaterial({ color: 0x39ff7a });
+  const plate = textPlane("SECURITY", 0.3, 0.07, "#fff", "#2b3038"); plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map });
+  for (const x of [-1.35, 0, 1.35]) {
+    const g = new THREE.Group(); g.position.set(x, 0, GZ); scene.add(g);
+    const add = (geo, m, px, py, pz) => { const o = new THREE.Mesh(geo, m); o.position.set(px, py, pz); g.add(o); return o; };
+    add(new THREE.BoxGeometry(0.12, 0.08, 0.52), grey, 0, 0.04, 0);                       // floor base
+    add(new THREE.BoxGeometry(0.03, 1.42, 0.42), acrylic, 0, 0.08 + 0.71, 0);            // clear antenna panel
+    for (const z of [-0.215, 0.215]) add(new THREE.BoxGeometry(0.05, 1.42, 0.035), grey, 0, 0.08 + 0.71, z);   // side frames
+    add(new THREE.BoxGeometry(0.12, 0.07, 0.52), grey, 0, 1.535, 0);                      // top cap
+    glow(add(new THREE.BoxGeometry(0.03, 0.02, 0.08), led, 0, 1.58, 0.14));               // status LED
+    for (const sx of [-1, 1]) {                                                           // SECURITY plate, both faces
+      const p = plate.clone(); p.position.set(sx * 0.018, 1.36, 0); p.rotation.y = sx * Math.PI / 2; g.add(p);
+    }
+    colliders.push({ x0: x - 0.06, x1: x + 0.06, z0: GZ - 0.26, z1: GZ + 0.26 });
+  }
+}
+
+// ---------------- lobby trash receptacle ----------------
+// Commercial lobby bin, not a plain can: wood-slat cabinet on a bronze plinth,
+// brass trim bands, molded top, and a swinging "THANK YOU" push flap. Stands on
+// the carpet just past the entry rail, facing into the store. E with a snack,
+// drink or popcorn in hand throws it away (the flap swings in).
+let trashFlap = null, trashFlapT = 0;
+{
+  const TX = 2.5, TZ = 3.85, W = 0.56, H = 1.02;
+  const g = new THREE.Group(); g.position.set(TX, 0, TZ); g.rotation.y = 0; scene.add(g);   // front faces +z, into the store
+  const bronze = new THREE.MeshPhongMaterial({ color: 0x3b2a1c, specular: 0x6b5238, shininess: 35 });
+  const brass = new THREE.MeshPhongMaterial({ color: 0xb08432, specular: 0xffe2a0, shininess: 70 });
+  const slats = makeTexture((ctx, w, h) => {
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const x = i * w / n, hue = [28, 25, 30, 26, 29, 27, 24][i];
+      ctx.fillStyle = `hsl(${hue} 48% ${30 + (i % 3) * 3}%)`; ctx.fillRect(x, 0, w / n, h);
+      ctx.strokeStyle = "rgba(40,20,8,.35)"; ctx.lineWidth = 1;                  // wood grain
+      for (let k = 0; k < 6; k++) { ctx.beginPath(); const gx = x + 4 + Math.random() * (w / n - 8); ctx.moveTo(gx, 0); ctx.bezierCurveTo(gx + 3, h * 0.3, gx - 3, h * 0.7, gx + 1, h); ctx.stroke(); }
+      ctx.fillStyle = "#1c1008"; ctx.fillRect(x, 0, 3, h);                        // groove between boards
+    }
+  }, 256, 512);
+  const wood = new THREE.MeshLambertMaterial({ map: slats });
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
+  const parts = [];
+  parts.push(add(new THREE.BoxGeometry(W + 0.06, 0.08, W + 0.06), bronze, 0, 0.04, 0));                 // plinth
+  parts.push(add(new THREE.BoxGeometry(W - 0.02, H - 0.1, W - 0.02), wood, 0, 0.08 + (H - 0.1) / 2, 0)); // slatted body
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+    parts.push(add(new THREE.BoxGeometry(0.045, H - 0.08, 0.045), bronze, x * W / 2, 0.08 + (H - 0.08) / 2, z * W / 2));   // corner posts
+  for (const y of [0.16, H - 0.1]) parts.push(add(new THREE.BoxGeometry(W + 0.02, 0.025, W + 0.02), brass, 0, y, 0));   // brass bands
+  parts.push(add(new THREE.BoxGeometry(W + 0.08, 0.05, W + 0.08), bronze, 0, H + 0.025, 0));             // molded top
+  parts.push(add(new THREE.BoxGeometry(W - 0.04, 0.03, W - 0.04), bronze, 0, H + 0.065, 0));             // raised center
+  for (const [dx, dz, w, d] of [[0, 1, W + 0.08, 0.02], [0, -1, W + 0.08, 0.02], [1, 0, 0.02, W + 0.08], [-1, 0, 0.02, W + 0.08]])
+    parts.push(add(new THREE.BoxGeometry(w, 0.04, d), brass, dx * (W / 2 + 0.03), H + 0.07, dz * (W / 2 + 0.03)));   // tray rim
+  // push flap on the front: bronze panel hinged at its top edge, gold "THANK YOU"
+  parts.push(add(new THREE.BoxGeometry(0.44, 0.3, 0.012), new THREE.MeshLambertMaterial({ color: 0x0c0806 }), 0, 0.74, W / 2 - 0.004));   // dark opening behind it
+  trashFlap = new THREE.Group(); trashFlap.position.set(0, 0.88, W / 2 + 0.006); g.add(trashFlap);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.26, 0.014), bronze); flap.position.y = -0.13; trashFlap.add(flap); parts.push(flap);
+  const thanks = textPlane("THANK YOU", 0.34, 0.08, "#e3b64a", "#3b2a1c");
+  thanks.material = new THREE.MeshLambertMaterial({ map: thanks.material.map }); thanks.position.set(0, -0.13, 0.008); trashFlap.add(thanks); parts.push(thanks);
+  for (const p of parts) { p.userData.trash = true; aimables.push(p); }
+  colliders.push({ x0: TX - W / 2 - 0.04, x1: TX + W / 2 + 0.04, z0: TZ - W / 2 - 0.04, z1: TZ + W / 2 + 0.04 });
+}
+
 // ---------------- lobby extras: tile entry, snacks, popcorn ----------------
 // real video stores tiled the entry/checkout zone and carpeted the aisles —
 // same trick here: a checkerboard plane laid right over the carpet up front.
@@ -645,47 +825,371 @@ let flapPivot, flapCollider;                  // the register pass-through flap,
       ctx.fillStyle = (x + y) % 2 ? "#c9ccd1" : "#eef0f3"; ctx.fillRect(x * W / n, y * H / n, W / n, H / n);
     }
   }, 256, 256);
-  tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping; tileTex.repeat.set(11, 3);
-  const XC = (WALL_L + STORE.x) / 2, XW = STORE.x - WALL_L;
-  const tile = new THREE.Mesh(new THREE.PlaneGeometry(XW, AISLE.z0), new THREE.MeshLambertMaterial({ map: tileTex }));
-  tile.rotation.x = -Math.PI / 2; tile.position.set(XC, 0.003, AISLE.z0 / 2); scene.add(tile);
+  // tile covers just the entry lane + counter area: it ends with the entry rail
+  // (z 4.35, level with the checkout edge) and at the rail line (x 1.95) — carpet
+  // past the rail and out to the glass on the east side
+  const TILE_Z = 4.35, TILE_X1 = 1.95;
+  const XC = (WALL_L + TILE_X1) / 2, XW = TILE_X1 - WALL_L;
+  tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping;
+  tileTex.repeat.set(11 * XW / (STORE.x - WALL_L), 3 * TILE_Z / 5.5);   // same square size as before (the tile was 5.5m deep)
+  const tile = new THREE.Mesh(new THREE.PlaneGeometry(XW, TILE_Z), new THREE.MeshLambertMaterial({ map: tileTex }));
+  tile.rotation.x = -Math.PI / 2; tile.position.set(XC, 0.003, TILE_Z / 2); scene.add(tile);
 }
+// ---------------- snack center: drink cooler, popcorn machine, snack rack ----------------
+// Three fixtures in a row against the movie-side wall, just past the register's
+// customer edge (z 4.35), all facing the store. Each is modeled in its own local
+// frame — front faces +z, width along x, origin at floor center — then turned
+// to face +x. Local +x ends up pointing north (toward the register).
+const SNACK_ZONE = [4.5, 7.95];              // wall z-span the fixtures cover — side-wall posters skip it
+// Branding slots: set window.VAULT_BRANDING = { "cooler-marquee": "data:image/…", … }
+// (data URIs — file:// can't feed local image files to WebGL) to swap in real
+// art; each slot otherwise draws a placeholder. Slot sizes (w x h, meters):
+//   cooler-marquee 0.74x0.2 · cooler-side 0.7x1.66 · popcorn-header 0.52x0.11
+//   popcorn-cart 0.54x0.54 · snack-header 0.96x0.28
+const BRANDING = window.VAULT_BRANDING || {};
+function brandTex(slot, w, h, draw) {
+  if (BRANDING[slot]) { const t = new THREE.TextureLoader().load(BRANDING[slot]); t.colorSpace = THREE.SRGBColorSpace; return t; }
+  const k = 512 / Math.max(w, h);
+  return makeTexture(draw, Math.round(w * k), Math.round(h * k));
+}
+let coolerDoor = null, coolerOpen = false, coolerThermo = null;
+let popcornKit = null;                       // cup geometry/material + popcorn texture, reused for the box in your hand
 {
-  // snack rack against the (moved) movie-side wall, out on the carpet past the
-  // checkout — the strip between the doors and the counter is employees-only,
-  // so customer fixtures live on the shop-floor side instead. Sits in aisle 1's
-  // empty stretch (west has no shelving there), facing the center of the store.
-  const SX = WALL_L + 0.35, SZ = 7.2;
-  const candyTex = makeTexture((ctx, W, H) => {
-    ctx.fillStyle = "#0f1116"; ctx.fillRect(0, 0, W, H);
-    const cols = 2, rows = 4, pad = 10, cw = (W - pad * (cols + 1)) / cols, ch = (H - pad * (rows + 1)) / rows;
-    SNACKS.forEach(([c, label], i) => {
-      const cx = i % cols, cy = Math.floor(i / cols), x = pad + cx * (cw + pad), y = pad + cy * (ch + pad);
-      ctx.fillStyle = c; ctx.fillRect(x, y, cw, ch);
-      ctx.strokeStyle = "#ffffff88"; ctx.lineWidth = 2; ctx.strokeRect(x, y, cw, ch);
-      ctx.fillStyle = "#fff"; ctx.font = "bold 17px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(label, x + cw / 2, y + ch / 2);
-    });
-  }, 256, 512);
-  solid(0.3, 1.1, 1.0, mat.counter, SX, 0.55, SZ);                           // cabinet (collider)
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 1.06), new THREE.MeshBasicMaterial({ map: candyTex }));
-  face.position.set(SX + 0.16, 0.55, SZ); face.rotation.y = Math.PI / 2; scene.add(face);
-  face.userData.snackStand = true; aimables.push(face);
-  const label = textPlane("SNACKS", 0.9, 0.22, "#001f5c", "#ffd400"); label.position.set(SX + 0.17, 1.22, SZ);
-  label.rotation.y = Math.PI / 2; scene.add(label);
+  const WX = WALL_L + 0.1;                    // movie-side wall's inner face
+  const addTo = (parent, geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+  const place = (g, depth, width, z) => {     // back against the wall, facing the store, plus a footprint collider
+    g.rotation.y = Math.PI / 2; g.position.set(WX + 0.01 + depth / 2, 0, z); scene.add(g);
+    colliders.push({ x0: WX, x1: WX + 0.01 + depth, z0: z - width / 2, z1: z + width / 2 });
+  };
+  const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
+  const glass = new THREE.MeshLambertMaterial({ color: 0xcfe9f7, transparent: true, opacity: 0.16, depthWrite: false });
 
-  // popcorn cart, further along the same empty stretch of wall
-  const PX = WALL_L + 0.52, PZ = 8.8;
-  const popTex = makeTexture((ctx, W, H) => {
-    for (let x = 0; x < 8; x++) { ctx.fillStyle = x % 2 ? "#e63946" : "#fff8e7"; ctx.fillRect(x * W / 8, 0, W / 8, H); }
-  }, 256, 256);
-  solid(0.62, 0.72, 0.62, new THREE.MeshLambertMaterial({ map: popTex }), PX, 0.36, PZ);
-  const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.3, 0.32, 16),
-    new THREE.MeshLambertMaterial({ color: 0xfff3d0, transparent: true, opacity: 0.4 }));
-  dome.position.set(PX, 0.88, PZ); scene.add(dome);
-  const corn = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.22, 10),
-    new THREE.MeshLambertMaterial({ color: 0xffd76b })); corn.position.set(PX, 0.63, PZ); scene.add(corn);
-  const psign = textPlane("POPCORN", 0.5, 0.18); psign.position.set(PX + 0.33, 0.5, PZ); psign.rotation.y = Math.PI / 2; scene.add(psign);
+  // ---- drink cooler: glass-door merchandiser, 0.78 wide, 2.1 tall with its marquee ----
+  {
+    const W = 0.78, D = 0.74, H = 1.86, KICK = 0.1, T = 0.035, CZ = 5.0;
+    const g = new THREE.Group();
+    const shell = new THREE.MeshLambertMaterial({ color: 0x1b1d22 });
+    const liner = new THREE.MeshLambertMaterial({ color: 0xe4ebf1, emissive: 0xa9bdd0, emissiveIntensity: 0.35 });   // lit interior — glows a bit in lights-out, like a real one
+    for (const sx of [-1, 1]) addTo(g, new THREE.BoxGeometry(T, H, D), shell, sx * (W / 2 - T / 2), H / 2, 0);
+    addTo(g, new THREE.BoxGeometry(W, T, D), shell, 0, H - T / 2, 0);
+    addTo(g, new THREE.BoxGeometry(W, H, T), shell, 0, H / 2, -D / 2 + T / 2);
+    const slats = makeTexture((ctx, w, h) => {
+      ctx.fillStyle = "#15171b"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#2c3036"; for (let y = 6; y < h; y += 14) ctx.fillRect(10, y, w - 20, 6);
+    }, 256, 64);
+    addTo(g, new THREE.BoxGeometry(W, KICK, D - 0.02), new THREE.MeshLambertMaterial({ map: slats }), 0, KICK / 2, -0.01);  // louvered kick plate
+    // interior: liner walls, floor, a light strip up top, and shelves
+    const IW = W - 2 * T, IB = -D / 2 + T, IF = D / 2 - 0.05, ID = IF - IB, IH = H - T - KICK;
+    addTo(g, new THREE.BoxGeometry(IW, IH, 0.01), liner, 0, KICK + IH / 2, IB + 0.005);
+    for (const sx of [-1, 1]) addTo(g, new THREE.BoxGeometry(0.01, IH, ID), liner, sx * (IW / 2 - 0.005), KICK + IH / 2, (IB + IF) / 2);
+    addTo(g, new THREE.BoxGeometry(IW, 0.01, ID), liner, 0, KICK + 0.005, (IB + IF) / 2);
+    addTo(g, new THREE.BoxGeometry(IW, 0.01, ID), liner, 0, H - T - 0.005, (IB + IF) / 2);
+    glow(addTo(g, new THREE.BoxGeometry(IW - 0.06, 0.018, 0.03), new THREE.MeshBasicMaterial({ color: 0xf4f9ff }), 0, H - T - 0.025, IF - 0.04));
+    const wire = new THREE.MeshLambertMaterial({ color: 0x9aa3ad });
+    const priceStrip = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    // shelf tops (y) for stocking drinks later — plus the cooler floor at KICK
+    g.userData.shelves = [0.46, 0.8, 1.14, 1.48];
+    for (const y of g.userData.shelves) {
+      addTo(g, new THREE.BoxGeometry(IW - 0.02, 0.012, ID - 0.04), wire, 0, y - 0.006, (IB + IF) / 2 - 0.01);
+      addTo(g, new THREE.BoxGeometry(IW - 0.02, 0.028, 0.006), priceStrip, 0, y - 0.01, IF - 0.03);     // price-tag strip on the shelf lip
+    }
+    // ---- drinks: each unit is a small group (body, label, cap); every mesh in it
+    // points back to the unit so the whole bottle/can is what you grab ----
+    {
+      const levels = [KICK + 0.01, ...g.userData.shelves];          // floor, then each shelf top
+      const layout = [[[0], 1], [[1, 2], 1], [[3, 4], 1], [[5, 6], 1], [[7, 8, 9], 2]];   // [products, stack height] per level
+      const silver = new THREE.MeshPhongMaterial({ color: 0xc7ccd2, specular: 0xffffff, shininess: 80 });
+      const labelTex = (p, w, h) => makeTexture((ctx, W, H) => {
+        ctx.fillStyle = p.label[0]; ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = p.label[1]; ctx.fillRect(0, H * 0.08, W, H * 0.05); ctx.fillRect(0, H * 0.87, W, H * 0.05);
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        let f = H * 0.42; ctx.font = `italic 900 ${f}px Arial Black, Arial`;
+        while (ctx.measureText(p.name).width > W * 0.4 && f > 8) { f -= 2; ctx.font = `italic 900 ${f}px Arial Black, Arial`; }
+        for (const cx of [0.25, 0.75]) ctx.fillText(p.name, W * cx, H / 2);   // front + back of the wrap
+      }, w, h);
+      const lathe = (pts, m) => new THREE.Mesh(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 24), m);
+      const build = p => {                    // one template per product; units are clones (shared geometry/materials)
+        const u = new THREE.Group(), { r, h } = p;
+        if (p.shape === "can") {
+          const side = new THREE.MeshLambertMaterial({ map: labelTex(p, 512, Math.round(512 * h / (Math.PI * 2 * r))) });
+          const can = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h * 0.94, 24).rotateY(-Math.PI / 2), [side, silver, silver]);
+          can.position.y = h * 0.47; u.add(can);
+          u.add(lathe([[r, h * 0.94], [r * 0.86, h * 0.985], [r * 0.84, h], [0, h]], silver));   // tapered top + lid
+          u.add(lathe([[0, 0], [r * 0.84, 0], [r, h * 0.03]], silver));                           // domed bottom rim
+        } else {
+          const long = p.shape === "longneck";
+          const body = long
+            ? [[0, 0], [r * 0.92, 0], [r, 0.012], [r, h * 0.55], [r * 0.9, h * 0.62], [r * 0.42, h * 0.76], [r * 0.38, h * 0.95], [0.001, h * 0.95]]
+            : [[0, 0], [r * 0.9, 0], [r, 0.01], [r, h * 0.28], [r * 0.9, h * 0.34], [r, h * 0.42], [r, h * 0.62], [r * 0.92, h * 0.7], [r * 0.45, h * 0.84], [r * 0.42, h * 0.92], [0.001, h * 0.92]];
+          const glassMat = new THREE.MeshPhongMaterial({ color: p.glass, specular: 0xffffff, shininess: 90, transparent: p.opacity < 1, opacity: p.opacity });
+          u.add(lathe(body, glassMat));
+          const [l0, l1] = long ? [0.14, 0.44] : [0.42, 0.62];                 // label band, as fractions of height
+          const band = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.0015, r + 0.0015, h * (l1 - l0), 24, 1, true).rotateY(-Math.PI / 2),
+            new THREE.MeshLambertMaterial({ map: labelTex(p, 512, Math.round(512 * h * (l1 - l0) / (Math.PI * 2 * r))) }));
+          band.position.y = h * (l0 + l1) / 2; u.add(band);
+          const capMat = new THREE.MeshPhongMaterial({ color: p.cap, specular: 0xffffff, shininess: 50 });
+          const cap = long ? new THREE.CylinderGeometry(r * 0.42, r * 0.44, h * 0.05, 16) : new THREE.CylinderGeometry(r * 0.47, r * 0.47, h * 0.08, 16);
+          const capM = new THREE.Mesh(cap, capMat); capM.position.y = long ? h * 0.975 : h * 0.96; u.add(capM);
+        }
+        u.userData.snack = p;
+        return u;
+      };
+      layout.forEach(([ids, stack], li) => {
+        const segW = (IW - 0.03) / ids.length;
+        ids.forEach((pi, si) => {
+          const p = DRINK_PRODUCTS[pi], tmpl = build(p), pitch = 2 * p.r + 0.008;
+          const across = Math.max(1, Math.floor(segW / pitch));
+          const x0 = -(IW - 0.03) / 2 + si * segW + (segW - (across - 1) * pitch) / 2;
+          for (let row = 0; row < 3; row++) for (let a = 0; a < across; a++) for (let k = 0; k < stack; k++) {
+            const u = tmpl.clone();
+            u.position.set(x0 + a * pitch, levels[li] + k * p.h, IF - 0.05 - p.r - row * (2 * p.r + 0.012));
+            u.traverse(m => { if (m.isMesh) { m.userData.unit = u; aimables.push(m); } });
+            g.add(u);
+          }
+        });
+      });
+    }
+    // digital thermometer, stuck in the top hinge-side corner behind the glass
+    const thermoTex = makeTexture(() => {}, 128, 64);
+    const tctx = thermoTex.image.getContext("2d");
+    const thermo = new THREE.Group(); thermo.position.set(IW / 2 - 0.065, H - T - 0.075, IF - 0.02); g.add(thermo);
+    addTo(thermo, new THREE.BoxGeometry(0.085, 0.048, 0.016), new THREE.MeshLambertMaterial({ color: 0xe9ecef }), 0, 0, 0);
+    addTo(thermo, new THREE.PlaneGeometry(0.066, 0.03), new THREE.MeshBasicMaterial({ map: thermoTex }), 0, 0.002, 0.0085);
+    coolerThermo = {
+      temp: 36, shown: null,
+      tick(dt) {                              // drifts up while the door's open, settles back to 36°F once it shuts
+        this.temp += ((coolerOpen ? 46 : 36) - this.temp) * Math.min(1, dt * (coolerOpen ? 0.025 : 0.06));
+        const t = Math.round(this.temp);
+        if (t === this.shown) return;
+        this.shown = t;
+        tctx.fillStyle = "#9fb89a"; tctx.fillRect(0, 0, 128, 64);                    // backlit LCD
+        tctx.fillStyle = "#1d2a1c"; tctx.textAlign = "right"; tctx.textBaseline = "middle";
+        tctx.font = "bold 44px 'Courier New', monospace"; tctx.fillText(String(t), 92, 34);
+        tctx.font = "bold 20px Arial"; tctx.fillText("°F", 122, 24);
+        thermoTex.needsUpdate = true;
+      },
+    };
+    coolerThermo.tick(0);
+    // full glass door, hinged on the register-side (+x) edge, swings out
+    coolerDoor = new THREE.Group(); coolerDoor.position.set(W / 2, 0, D / 2 - 0.02); g.add(coolerDoor);
+    const DW = W, DH = H - KICK, SW = 0.05, doorY = KICK + DH / 2;
+    const doorParts = [
+      addTo(coolerDoor, new THREE.BoxGeometry(SW, DH, 0.04), shell, -SW / 2, doorY, 0),                    // hinge stile
+      addTo(coolerDoor, new THREE.BoxGeometry(SW, DH, 0.04), shell, -DW + SW / 2, doorY, 0),               // latch stile
+      addTo(coolerDoor, new THREE.BoxGeometry(DW, 0.07, 0.04), shell, -DW / 2, KICK + 0.035, 0),           // bottom rail
+      addTo(coolerDoor, new THREE.BoxGeometry(DW, 0.06, 0.04), shell, -DW / 2, H - 0.03, 0),               // top rail
+      addTo(coolerDoor, new THREE.BoxGeometry(DW - 2 * SW, DH - 0.13, 0.012), glass, -DW / 2, KICK + 0.07 + (DH - 0.13) / 2, 0),
+      addTo(coolerDoor, new THREE.CylinderGeometry(0.012, 0.012, 0.9, 10), chrome, -DW + 0.06, 1.0, 0.06), // pull handle
+    ];
+    for (const dy of [-0.4, 0.4]) doorParts.push(addTo(coolerDoor, new THREE.BoxGeometry(0.02, 0.02, 0.05), chrome, -DW + 0.06, 1.0 + dy, 0.035));
+    for (const p of doorParts) { p.userData.coolerDoor = true; aimables.push(p); }
+    // branding: marquee light box on top, full-height graphics on both outer sides
+    const MH = 0.24;
+    addTo(g, new THREE.BoxGeometry(W, MH, 0.16), shell, 0, H + MH / 2, D / 2 - 0.08);
+    const marqueeTex = brandTex("cooler-marquee", 0.74, 0.2, (ctx, w, h) => {
+      const gr = ctx.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, "#e0141e"); gr.addColorStop(1, "#8e0a10");
+      ctx.fillStyle = gr; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `italic 900 ${h * 0.5}px Arial Black, Arial`; ctx.fillText("ICE COLD", w / 2, h * 0.4);
+      ctx.font = `bold ${h * 0.22}px Arial`; ctx.fillText("VAULT COLA · DRINKS", w / 2, h * 0.8);
+    });
+    addTo(g, new THREE.PlaneGeometry(0.74, 0.2), new THREE.MeshBasicMaterial({ map: marqueeTex }), 0, H + MH / 2, D / 2 + 0.001);
+    const sideTex = brandTex("cooler-side", 0.7, 1.66, (ctx, w, h) => {
+      ctx.fillStyle = "#c8101c"; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = w * 0.09;                      // white swoosh
+      ctx.beginPath(); ctx.moveTo(-10, h * 0.62); ctx.bezierCurveTo(w * 0.4, h * 0.5, w * 0.6, h * 0.8, w + 10, h * 0.66); ctx.stroke();
+      ctx.save(); ctx.translate(w / 2, h * 0.32); ctx.rotate(-Math.PI / 2);
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `italic 900 ${w * 0.3}px Arial Black, Arial`; ctx.fillText("VAULT", 0, -w * 0.13);
+      ctx.fillText("COLA", 0, w * 0.2); ctx.restore();
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.font = `bold ${w * 0.1}px Arial`; ctx.fillText("ICE COLD", w / 2, h * 0.9);
+    });
+    const sideMat = new THREE.MeshLambertMaterial({ map: sideTex });
+    for (const sx of [-1, 1]) {
+      const p = addTo(g, new THREE.PlaneGeometry(0.7, 1.66), sideMat, sx * (W / 2 + 0.001), KICK + 0.03 + 1.66 / 2, 0);
+      p.rotation.y = sx * Math.PI / 2;
+    }
+    place(g, D, W, CZ);
+  }
+
+  // ---- popcorn machine: red kettle machine on its cart, condiment shelf on the side ----
+  {
+    const PZ = 6.08, CW = 0.62, CD = 0.46, SHELF = 0.3;
+    const g = new THREE.Group();
+    const pop = (m, what) => { m.userData.popcorn = what; aimables.push(m); return m; };   // popcorn-sequence targets
+    const red = new THREE.MeshLambertMaterial({ color: 0xc8102e });
+    const gold = new THREE.MeshPhongMaterial({ color: 0xd4a017, specular: 0xfff0b0, shininess: 60 });
+    const black = new THREE.MeshLambertMaterial({ color: 0x141414 });
+    // cart: body on casters, gold trim, graphic panel on the front
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      addTo(g, new THREE.CylinderGeometry(0.04, 0.04, 0.035, 12), black, x * (CW / 2 - 0.06), 0.04, z * (CD / 2 - 0.06)).rotation.z = Math.PI / 2;
+      addTo(g, new THREE.BoxGeometry(0.03, 0.07, 0.03), chrome, x * (CW / 2 - 0.06), 0.09, z * (CD / 2 - 0.06));
+    }
+    addTo(g, new THREE.BoxGeometry(CW, 0.66, CD), red, 0, 0.12 + 0.33, 0);
+    addTo(g, new THREE.BoxGeometry(CW + 0.02, 0.025, CD + 0.02), gold, 0, 0.79, 0);
+    addTo(g, new THREE.BoxGeometry(CW + 0.01, 0.02, CD + 0.01), gold, 0, 0.13, 0);
+    const cartTex = brandTex("popcorn-cart", 0.54, 0.54, (ctx, w, h) => {
+      for (let i = 0; i < 9; i++) { ctx.fillStyle = i % 2 ? "#fff6e0" : "#d81e2c"; ctx.fillRect(i * w / 9, 0, w / 9 + 1, h); }
+      ctx.fillStyle = "#ffd400"; ctx.beginPath(); ctx.arc(w / 2, h / 2, w * 0.32, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#8e0a10"; ctx.lineWidth = w * 0.02; ctx.stroke();
+      ctx.fillStyle = "#b3121d"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `italic 900 ${w * 0.1}px Arial Black, Arial`; ctx.fillText("FRESH", w / 2, h * 0.43); ctx.fillText("POPCORN", w / 2, h * 0.57);
+    });
+    addTo(g, new THREE.PlaneGeometry(0.54, 0.54), new THREE.MeshLambertMaterial({ map: cartTex }), 0, 0.46, CD / 2 + 0.001);
+    // kettle cabinet: red plinth + corner posts, glass all round, red top with a lit header
+    const K0 = 0.8, KH = 0.56, KW = 0.58, KD = 0.42;
+    addTo(g, new THREE.BoxGeometry(KW, 0.08, KD), red, 0, K0 + 0.04, 0);
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) addTo(g, new THREE.BoxGeometry(0.03, KH, 0.03), red, x * (KW / 2 - 0.015), K0 + 0.08 + KH / 2, z * (KD / 2 - 0.015));
+    pop(addTo(g, new THREE.BoxGeometry(KW - 0.06, KH, 0.006), glass, 0, K0 + 0.08 + KH / 2, KD / 2 - 0.015), "corn");    // front
+    addTo(g, new THREE.BoxGeometry(KW - 0.06, KH, 0.006), glass, 0, K0 + 0.08 + KH / 2, -KD / 2 + 0.015);   // back
+    for (const sx of [-1, 1]) pop(addTo(g, new THREE.BoxGeometry(0.006, KH, KD - 0.06), glass, sx * (KW / 2 - 0.015), K0 + 0.08 + KH / 2, 0), "corn");
+    const TOP = K0 + 0.08 + KH;
+    addTo(g, new THREE.BoxGeometry(KW, 0.15, KD), red, 0, TOP + 0.075, 0);
+    addTo(g, new THREE.BoxGeometry(KW + 0.015, 0.02, KD + 0.015), gold, 0, TOP + 0.16, 0);
+    addTo(g, new THREE.CylinderGeometry(0.035, 0.05, 0.05, 16), gold, 0, TOP + 0.195, 0);              // little crown on the roof
+    const headerTex = brandTex("popcorn-header", 0.52, 0.11, (ctx, w, h) => {
+      ctx.fillStyle = "#b3121d"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#ffd400"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `italic 900 ${h * 0.72}px Arial Black, Arial`; ctx.fillText("POPCORN", w / 2, h * 0.54);
+    });
+    addTo(g, new THREE.PlaneGeometry(0.52, 0.11), new THREE.MeshBasicMaterial({ map: headerTex }), 0, TOP + 0.075, KD / 2 + 0.001);
+    // inside: warming light, kettle hanging off its rod, popcorn heaped on the deck
+    glow(addTo(g, new THREE.BoxGeometry(KW - 0.12, 0.012, 0.04), new THREE.MeshBasicMaterial({ color: 0xffe2a8 }), 0, TOP - 0.01, 0.1));
+    const steel = new THREE.MeshPhongMaterial({ color: 0xa3a9b0, specular: 0xffffff, shininess: 80 });
+    addTo(g, new THREE.CylinderGeometry(0.007, 0.007, 0.14, 8), steel, 0, TOP - 0.07, -0.02);
+    const kettle = addTo(g, new THREE.CylinderGeometry(0.1, 0.085, 0.1, 20), steel, 0, TOP - 0.19, -0.02); kettle.rotation.z = 0.12;
+    addTo(g, new THREE.CylinderGeometry(0.105, 0.105, 0.012, 20), steel, 0, TOP - 0.135, -0.02).rotation.z = 0.12;
+    const cornTex = makeTexture((ctx, w, h) => {
+      ctx.fillStyle = "#f3cf6b"; ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 900; i++) {
+        ctx.fillStyle = ["#fff8e2", "#fbe8a8", "#f6d77e", "#fffdf4"][i % 4];
+        ctx.beginPath(); ctx.arc(Math.random() * w, Math.random() * h, 2 + Math.random() * 4, 0, Math.PI * 2); ctx.fill();
+      }
+    }, 256, 256);
+    const corn = addTo(g, new THREE.SphereGeometry(0.5, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshLambertMaterial({ map: cornTex, emissive: 0x6a4a10, emissiveIntensity: 0.4 }), 0, K0 + 0.08, 0);
+    corn.scale.set((KW - 0.06) / 1.0, 0.36, (KD - 0.06) / 1.0); pop(corn, "corn");
+    // condiment shelf bolted to the side facing the snack rack (local -x)
+    const SX = -CW / 2 - SHELF / 2, SY = 0.79;
+    addTo(g, new THREE.BoxGeometry(SHELF, 0.025, CD - 0.04), red, SX, SY, 0);
+    addTo(g, new THREE.BoxGeometry(SHELF, 0.03, 0.012), chrome, SX, SY + 0.025, (CD - 0.04) / 2);            // front rail
+    addTo(g, new THREE.BoxGeometry(0.012, 0.03, CD - 0.04), chrome, SX - SHELF / 2, SY + 0.025, 0);          // end rail
+    const brace = addTo(g, new THREE.BoxGeometry(0.02, 0.36, 0.02), chrome, SX + 0.04, SY - 0.13, 0); brace.rotation.z = -0.62;
+    const ST = SY + 0.0125;                   // shelf top
+    // stack of paper popcorn boxes: tapered, red-and-white striped, nested
+    const boxTex = makeTexture((ctx, w, h) => {
+      for (let i = 0; i < 12; i++) { ctx.fillStyle = i % 2 ? "#fffaf0" : "#d81e2c"; ctx.fillRect(i * w / 12, 0, w / 12 + 1, h); }
+      ctx.fillStyle = "#ffd400"; ctx.fillRect(0, h * 0.4, w, h * 0.2);
+    }, 256, 128);
+    const cup = new THREE.CylinderGeometry(0.052, 0.036, 0.12, 4, 1, true); cup.rotateY(Math.PI / 4);
+    const cupMat = new THREE.MeshLambertMaterial({ map: boxTex, side: THREE.DoubleSide });
+    for (let i = 0; i < 8; i++) pop(addTo(g, cup, cupMat, SX + 0.06, ST + 0.06 + i * 0.016, -0.1), "boxes");
+    popcornKit = { cup, cupMat, cornTex };
+    // salt shaker, sugar pourer, butter pump
+    const shakerGlass = new THREE.MeshLambertMaterial({ color: 0xf4f6f8, transparent: true, opacity: 0.75 });
+    pop(addTo(g, new THREE.CylinderGeometry(0.022, 0.024, 0.07, 14), shakerGlass, SX - 0.06, ST + 0.035, 0.1), "salt");
+    pop(addTo(g, new THREE.SphereGeometry(0.023, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), chrome, SX - 0.06, ST + 0.07, 0.1), "salt");
+    const sugarGlass = new THREE.MeshLambertMaterial({ color: 0xfaf3e6, transparent: true, opacity: 0.8 });
+    pop(addTo(g, new THREE.CylinderGeometry(0.03, 0.032, 0.09, 16), sugarGlass, SX + 0.03, ST + 0.045, 0.11), "sugar");
+    pop(addTo(g, new THREE.CylinderGeometry(0.008, 0.032, 0.035, 16), chrome, SX + 0.03, ST + 0.107, 0.11), "sugar");
+    pop(addTo(g, new THREE.CylinderGeometry(0.004, 0.006, 0.03, 8), chrome, SX + 0.03, ST + 0.135, 0.11), "sugar");
+    const butterTex = makeTexture((ctx, w, h) => {
+      ctx.fillStyle = "#f7d44c"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#b3121d"; ctx.fillRect(0, h * 0.34, w, h * 0.32);
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `bold ${h * 0.22}px Arial Black, Arial`; ctx.fillText("BUTTER", w * 0.25, h * 0.5); ctx.fillText("BUTTER", w * 0.75, h * 0.5);
+    }, 256, 128);
+    pop(addTo(g, new THREE.CylinderGeometry(0.045, 0.045, 0.16, 20), new THREE.MeshLambertMaterial({ map: butterTex }), SX - 0.07, ST + 0.08, -0.07), "butter");
+    pop(addTo(g, new THREE.CylinderGeometry(0.012, 0.012, 0.05, 10), black, SX - 0.07, ST + 0.185, -0.07), "butter");
+    pop(addTo(g, new THREE.BoxGeometry(0.03, 0.018, 0.06), black, SX - 0.07, ST + 0.215, -0.05), "butter");   // pump head + nozzle
+    place(g, CD, CW, PZ);
+    colliders.push({ x0: WX, x1: WX + 0.01 + CD, z0: PZ + CW / 2, z1: PZ + CW / 2 + SHELF });   // the side shelf (local -x = world +z)
+  }
+
+  // ---- snack rack: 1.62 tall, sloped shelves, every product its own shape ----
+  {
+    const RZ = 7.45, RW = 1.0, RD = 0.42, RH = 1.62;
+    const g = new THREE.Group();
+    const frame = new THREE.MeshLambertMaterial({ color: 0x1c1f26 });
+    for (const sx of [-1, 1]) addTo(g, new THREE.BoxGeometry(0.03, RH, RD), frame, sx * (RW / 2 - 0.015), RH / 2, 0);
+    const peg = makeTexture((ctx, w, h) => {
+      ctx.fillStyle = "#2a2e36"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#15171b"; for (let y = 8; y < h; y += 16) for (let x = 8; x < w; x += 16) ctx.fillRect(x, y, 3, 3);
+    }, 256, 512);
+    addTo(g, new THREE.BoxGeometry(RW - 0.06, RH - 0.02, 0.02), new THREE.MeshLambertMaterial({ map: peg }), 0, RH / 2, -RD / 2 + 0.01);
+    const headerTex = brandTex("snack-header", 0.96, 0.28, (ctx, w, h) => {
+      ctx.fillStyle = "#00349c"; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "#ffd400"; ctx.lineWidth = h * 0.06; ctx.strokeRect(h * 0.05, h * 0.05, w - h * 0.1, h - h * 0.1);
+      ctx.fillStyle = "#ffd400"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `italic 900 ${h * 0.55}px Arial Black, Arial`; ctx.fillText("SNACKS", w / 2, h * 0.53);
+      ctx.fillStyle = "#fff"; ctx.font = `${h * 0.3}px Arial`; ctx.fillText("★", w * 0.13, h * 0.53); ctx.fillText("★", w * 0.87, h * 0.53);
+    });
+    addTo(g, new THREE.BoxGeometry(RW, 0.3, 0.05), frame, 0, RH - 0.15, -RD / 2 + 0.06);
+    addTo(g, new THREE.PlaneGeometry(0.96, 0.28), new THREE.MeshBasicMaterial({ map: headerTex }), 0, RH - 0.15, -RD / 2 + 0.086);
+    const TILT = 0.12, shelfYs = [0.18, 0.5, 0.8, 1.07];
+    const board = new THREE.MeshLambertMaterial({ color: 0xd9dde2 }), lip = new THREE.MeshLambertMaterial({ color: 0xffd400 });
+    for (const y of shelfYs) {                // tilted toward the shopper, yellow price lip on the front edge
+      const b = addTo(g, new THREE.BoxGeometry(RW - 0.06, 0.015, RD - 0.04), board, 0, y, 0); b.rotation.x = TILT;
+      addTo(g, new THREE.BoxGeometry(RW - 0.06, 0.04, 0.008), lip, 0, y - (RD / 2 - 0.02) * Math.sin(TILT) + 0.012, RD / 2 - 0.02);
+    }
+    // one texture per product: its color, its name, a few shape-specific touches
+    const labelTex = p => makeTexture((ctx, w, h) => {
+      ctx.fillStyle = p.color; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(255,255,255,.18)";
+      if (p.shape === "bag") { ctx.fillRect(0, 0, w, h * 0.08); ctx.fillRect(0, h * 0.92, w, h * 0.08); }  // crimped seals
+      if (p.shape === "bar") { ctx.fillRect(0, h * 0.7, w, h * 0.3); }
+      if (p.shape === "tube") { ctx.fillStyle = "#e9ecef"; ctx.fillRect(0, 0, w, h * 0.06); }
+      if (p.shape === "box") { ctx.strokeStyle = "#ffd400"; ctx.lineWidth = w * 0.05; ctx.strokeRect(w * 0.06, h * 0.06, w * 0.88, h * 0.88); }
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const words = p.name.split(" "), vertical = h > w * 1.2, sliver = h > w * 2.5;   // sliver: licorice-thin
+      const maxW = p.shape === "tube" ? w * 0.4 : w * 0.9;                                 // a tube only shows ~half its wrap
+      let f = (vertical ? w * 0.26 : h * 0.34);
+      ctx.font = `italic 900 ${f}px Arial Black, Arial`;
+      while (Math.max(...words.map(s => ctx.measureText(s).width)) > maxW && f > 8) { f -= 2; ctx.font = `italic 900 ${f}px Arial Black, Arial`; }
+      if (p.shape === "tube") words.forEach((s, i) => { for (const cx of [0.25, 0.75]) ctx.fillText(s, w * cx, h / 2 + (i - (words.length - 1) / 2) * f * 1.05); });
+      else if (sliver) {                      // licorice-thin: name runs up the length, like the real packs
+        ctx.save(); ctx.translate(w / 2, h / 2); ctx.rotate(-Math.PI / 2);
+        let fv = w * 0.62; ctx.font = `italic 900 ${fv}px Arial Black, Arial`;
+        while (ctx.measureText(p.name).width > h * 0.86 && fv > 8) { fv -= 2; ctx.font = `italic 900 ${fv}px Arial Black, Arial`; }
+        ctx.fillText(p.name, 0, 0); ctx.restore();
+      }
+      else if (vertical) words.forEach((s, i) => ctx.fillText(s, w / 2, h / 2 + (i - (words.length - 1) / 2) * f * 1.05));
+      else ctx.fillText(p.name, w / 2, h / 2);
+    }, p.shape === "tube" ? 512 : 256, p.shape === "tube" ? Math.round(512 * p.h / (Math.PI * p.w)) : Math.round(256 * p.h / p.w));
+    // chip bags: a box puffed out in the middle and pinched flat at the sealed top and bottom
+    const pillow = (w, h, d) => {
+      const geo = new THREE.BoxGeometry(w, h, d, 8, 10, 1), pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const nx = pos.getX(i) / (w / 2), ny = pos.getY(i) / (h / 2);
+        pos.setZ(i, pos.getZ(i) * Math.max(0.08, (1 - 0.5 * nx * nx) * (1 - Math.pow(Math.abs(ny), 5))));
+      }
+      geo.computeVertexNormals(); return geo;
+    };
+    const geoFor = p => p.shape === "bag" ? pillow(p.w, p.h, p.d)
+      : p.shape === "tube" ? new THREE.CylinderGeometry(p.w / 2, p.w / 2, p.h, 20).rotateY(-Math.PI / 2)   // texture seam to the back, label (u=.25/.75) front and back
+      : new THREE.BoxGeometry(p.w, p.h, p.d);
+    // [shelf, which half, stack height]: bags bottom, tubes + licorice, theater boxes, then bars + gum piled up top
+    const layout = [[0, -1, 1], [0, 1, 1], [1, -1, 1], [1, 1, 1], [2, -1, 1], [2, 1, 1], [3, -1, 3], [3, 1, 4]];
+    SNACK_PRODUCTS.forEach((p, pi) => {
+      const [si, half, stack] = layout[pi];
+      const tex = labelTex(p);
+      const side = new THREE.MeshLambertMaterial({ color: p.color });
+      const face = new THREE.MeshLambertMaterial({ map: tex });
+      const m = p.shape === "box" || p.shape === "bar" || p.shape === "gum" ? [side, side, side, side, face, side] : face;
+      const geo = geoFor(p);
+      p.geo = geo; p.mat = m;                  // what you get in hand is this exact geometry + material
+      const across = Math.max(1, Math.floor((RW / 2 - 0.05) / (p.w + 0.015)));
+      const x0 = half * (RW / 4) - (across - 1) * (p.w + 0.015) / 2;
+      for (let row = 0; row < 2; row++) for (let a = 0; a < across; a++) for (let k = 0; k < stack; k++) {
+        const z = 0.1 - row * (p.d + 0.05);
+        const y = shelfYs[si] + 0.009 + p.h / 2 + k * p.h - z * Math.tan(TILT);   // sits on the tilted board
+        const u = addTo(g, geo, m, x0 + a * (p.w + 0.015), y, z);
+        u.rotation.x = TILT;
+        u.userData.snack = p; aimables.push(u);
+      }
+    });
+    place(g, RD, RW, RZ);
+  }
 }
 
 // ---------------- posters on the walls ----------------
@@ -734,7 +1238,9 @@ const posterMats = [];                     // lamps-out mode: posters glow faint
   for (let s = 0; s < 16; s++) {           // regular run down both bare side walls, mounted on the beam
     const side = s < 8 ? -1 : 1, i = 8 + s;
     const wx = side < 0 ? WALL_L + 0.36 : STORE.x - 0.36;   // hug whichever wall (movie side pulled in)
-    placePoster(picks[i], wx, 2.1, 2.6 + (s % 8) * 3.25, -side * Math.PI / 2, i);
+    const pz = 2.6 + (s % 8) * 3.25;
+    if (side < 0 && pz + 0.49 > SNACK_ZONE[0] && pz - 0.49 < SNACK_ZONE[1]) continue;   // the cooler/popcorn/snack run stands here
+    placePoster(picks[i], wx, 2.1, pz, -side * Math.PI / 2, i);
   }
 }
 
@@ -879,7 +1385,7 @@ function leanAt(r) {
   const xb0 = back + TAPE.h * sn + 0.002;          // bottom-back corner, so the top-back corner just touches
   return { cx: xb0 - TAPE.h / 2 * sn + (TAPE.w + 0.001) * cs, cy: y0 + TAPE.h / 2 * cs + (TAPE.w + 0.001) * sn };
 }
-function buildFace(tapes, ax, az, s, m, headers = []) {   // s: faces ±z, m: extends ±x along the band; headers: mid-run category signs on an otherwise-empty row
+function buildFace(tapes, ax, az, s, m, headers = [], lead = true) {   // s: faces ±z, m: extends ±x along the band; headers: mid-run category signs on an otherwise-empty row; lead=false shares the previous face's end panel
   const nBays = Math.max(1, Math.ceil(tapes.length / CAP));
   // +m runs to the shopper's left on m>0 faces (either rotation), so mirror
   // bay and slot order there — every face then reads left→right, top→bottom
@@ -923,7 +1429,7 @@ function buildFace(tapes, ax, az, s, m, headers = []) {   // s: faces ±z, m: ex
     kick.translate(frontAt(0) - 0.03, BAY.boardY[0] / 2, zc); uprights.push(kick);
   }
   const side = new THREE.Shape([[0, 0], [BAY.depth, 0], [BAY.top, BAY.h], [0, BAY.h]].map(([x, y]) => new THREE.Vector2(x, y)));
-  for (let b = 0; b <= nBays; b++) {        // blue wedge end panels at every bay boundary
+  for (let b = lead ? 0 : 1; b <= nBays; b++) {   // blue wedge end panels at every bay boundary
     const u = new THREE.ExtrudeGeometry(side, { depth: 0.05, bevelEnabled: false }); u.translate(0, 0, m * b * BAY.len - 0.025); uprights.push(u);
   }
 
@@ -1100,11 +1606,11 @@ function buildFace(tapes, ax, az, s, m, headers = []) {   // s: faces ±z, m: ex
     // so lay their faces out last-first — then every run reads left→right, and
     // consecutive runs join end-to-end: a genre snakes down one side of an
     // aisle and back up the other instead of jumping back to a run's start
-    for (const f of m > 0 ? [...chain].reverse() : chain) x += h * (buildFace(f.tapes, x, az, dir, m, f.headers) + 0.06); // 6cm section break
+    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { x += h * buildFace(f.tapes, x, az, dir, m, f.headers, i === 0); }); // faces butt up and share one end panel
     // stacked genre list on both blue endcaps of the run, facing down the aisle
     const cats = [...new Set(chain.map(f => f.tapes.find(Boolean).category))]; // faces are per-genre chunks, in shelf order
     const tag = tagPlane(cats, frontAt(1.4 + cats.length * 0.08) - 0.04, 0.16);   // fits the wedge where its top edge is
-    const far = x - h * 0.06;               // wall end of the run
+    const far = x;                          // wall end of the run
     [[h * AISLE.corridor / 2 - h * 0.028, -h * Math.PI / 2], [far + h * 0.028, h * Math.PI / 2]]
       .forEach(([tx, ry], i) => {
         const t = i ? tag.clone() : tag;
@@ -1160,7 +1666,7 @@ const tvBackGlow = new THREE.PointLight(0x8899bb, 0, 6, 2); tvBackGlow.position.
 // real work blending them, so it stays soft rather than a visible checkerboard
 function drawPoolGrid(ctx, W, H, cells) {
   ctx.filter = "none"; ctx.clearRect(0, 0, W, H);
-  const nearW = W * 0.4, farW = W * 0.85;        // screen-width at the TV, fanning out down the room
+  const nearW = W * 0.21, farW = W * 0.9;        // ~screen-width (1.5m) at the TV, flaring to ~6.3m down the room — a cone, not a tube
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(W / 2 - nearW / 2, H); ctx.lineTo(W / 2 + nearW / 2, H);
@@ -1179,13 +1685,13 @@ function drawPoolGrid(ctx, W, H, cells) {
   ctx.restore();
   ctx.filter = "none";
 }
-const tvPoolTex = makeTexture((ctx, W, H) => drawPoolGrid(ctx, W, H, screenCells), 256, 320);
+const tvPoolTex = makeTexture((ctx, W, H) => drawPoolGrid(ctx, W, H, screenCells), 512, 320);
 function paintTvPool() {
   drawPoolGrid(tvPoolTex.image.getContext("2d"), tvPoolTex.image.width, tvPoolTex.image.height, screenCells);
   tvPoolTex.needsUpdate = true;
 }
 const tvPoolLen = 5.2;                             // cabinet base out past the couch
-const tvPool = new THREE.Mesh(new THREE.PlaneGeometry(3.6, tvPoolLen),
+const tvPool = new THREE.Mesh(new THREE.PlaneGeometry(7, tvPoolLen),   // rug-wide, so the cone has room to flare
   new THREE.MeshBasicMaterial({ map: tvPoolTex, transparent: true, depthWrite: false, opacity: 0 }));
 tvPool.rotation.x = -Math.PI / 2; tvPool.position.set(TV.x, 0.02, TV.z - 0.06 - tvPoolLen / 2); scene.add(tvPool);
 
@@ -1209,14 +1715,15 @@ function shadowPatch(tex, w, d, z) {
   m.rotation.x = -Math.PI / 2; m.position.set(TV.x, 0.03, z); m.renderOrder = 1;   // drawn after tvPool, so it darkens it
   scene.add(m); return m;
 }
-// table's shadow: narrow at the table, fanning out slightly toward the couch —
-// fills the whole gap between them, floor to floor
-const tvTableShadow = shadowPatch(shadowTrapezoid(0.6, 0.9, 0.8), 2.0, 1.0, TV.z - 2.4);
+// table's shadow: its narrow end starts at the table's TV-side legs/panel
+// (TV.z-1.55), fanning out under the table, across the gap and on 0.5m under
+// the couch front (TV.z-3.35) so there's no lit sliver where the couch begins
+const tvTableShadow = shadowPatch(shadowTrapezoid(0.5, 0.95, 0.8), 2.2, 1.8, TV.z - 2.45);
 // couch's shadow: wide right behind the couch (it's the widest blocker in the
 // room) and keeps fanning out further into the walkway behind it — the near
 // (narrow) end runs forward under the couch itself so there's no lit sliver
 // between the couch's back and where the shadow starts
-const tvCouchShadow = shadowPatch(shadowTrapezoid(0.75, 1.0, 0.82), 3.2, 3.0, TV.z - 4.8);
+const tvCouchShadow = shadowPatch(shadowTrapezoid(0.6, 1.0, 0.82), 4.2, 3.0, TV.z - 4.8);   // fans with the wider cone
 const screenGeo = new THREE.PlaneGeometry(1.8, 1.2);   // big-screen TV, ~4:3
 
 // video is drawn into this canvas fit to its own native aspect (never
@@ -1244,20 +1751,131 @@ const TAPE_FIXES = {
 const tapeFix = tape => TAPE_FIXES[`${tape.id}:${tape.season}`] || {};
 // the colorized rips are garish — force the picture back to black & white
 const BW_SHOWS = new Set(["TwilightZone1959", "AlfredHitchcockPresents"]);
-const tapeFilter = tape => BW_SHOWS.has(tape.id) ? "grayscale(1)" : "none";
 
+// ---------------- TV picture settings: VaultVision's SETTINGS menu, on the TV ----------------
+// Same controls as VaultVision's player (minus captions — no caption tracks
+// here): OVERLAY (the VCR on-screen display), SCANLINES, PIXELATED, B&W,
+// BRIGHTNESS / CONTRAST / COLOR / TINT / SHARPEN, RESET, CLOSE. The crosshair
+// is the remote: right-click the TV (or anywhere while seated) opens it, left-
+// click picks a row — toggles flip, a slider jumps to where you clicked on its
+// bar, the wheel nudges whichever slider you're pointing at. Saved per browser.
+const TV_DEFAULTS = { overlay: true, scanlines: true, pixelated: false, bw: false,
+  brightness: 100, contrast: 100, saturate: 100, hue: 0, sharpen: 0 };
+let tvSet = { ...TV_DEFAULTS };
+try { Object.assign(tvSet, JSON.parse(localStorage.getItem("vaultbuster-tv") || "{}")); } catch {}
+const TV_ROWS = [
+  { k: "overlay", label: "OVERLAY" }, { k: "scanlines", label: "SCANLINES" },
+  { k: "pixelated", label: "PIXELATED" }, { k: "bw", label: "B&W" },
+  { k: "brightness", label: "BRIGHTNESS", min: 50, max: 150, step: 5 },
+  { k: "contrast", label: "CONTRAST", min: 50, max: 150, step: 5 },
+  { k: "saturate", label: "COLOR", min: 0, max: 200, step: 5 },
+  { k: "hue", label: "TINT", min: 0, max: 360, step: 10 },
+  { k: "sharpen", label: "SHARPEN", min: 0, max: 100, step: 5 },
+];
+// menu layout on the 480x320 screen canvas
+const TVM = { rowY: 58, rowH: 23, labelX: 44, barX: 214, barW: 190, chkX: 214, chkW: 26, btnY: 272, btnH: 30,
+  buttons: [{ k: "reset", label: "RESET", x: 128, w: 100 }, { k: "close", label: "CLOSE", x: 252, w: 100 }] };
+let tvMenu = false, tvHover = null;          // hover: a TV_ROWS index, "reset" or "close"
+const osd = { text: "", until: 0 };          // VCR on-screen display (the OVERLAY setting)
+function tvOsd(text, secs = 3) { osd.text = text; osd.until = secs ? performance.now() + secs * 1000 : Infinity; }
+function applyTv() {
+  try { localStorage.setItem("vaultbuster-tv", JSON.stringify(tvSet)); } catch {}
+  // unsharp-mask kernel, as VaultVision: lerp identity -> classic sharpen by SHARPEN
+  const a = tvSet.sharpen / 100 * 1.5;
+  document.getElementById("tvSharpenMatrix")?.setAttribute("kernelMatrix", `0 ${-a} 0 ${-a} ${1 + 4 * a} ${-a} 0 ${-a} 0`);
+  const f = tvSet.pixelated ? THREE.NearestFilter : THREE.LinearFilter;
+  if (videoTex && videoTex.magFilter !== f) { videoTex.magFilter = videoTex.minFilter = f; videoTex.needsUpdate = true; }
+}
+function pictureFilter(tape, withSharpen = true) {
+  const t = tvSet, f = [];
+  if (t.brightness !== 100) f.push(`brightness(${t.brightness}%)`);
+  if (t.contrast !== 100) f.push(`contrast(${t.contrast}%)`);
+  if (t.bw || (tape && BW_SHOWS.has(tape.id))) f.push("grayscale(1)");   // B&W overrides COLOR without losing it
+  else if (t.saturate !== 100) f.push(`saturate(${t.saturate}%)`);
+  if (t.hue) f.push(`hue-rotate(${t.hue}deg)`);
+  if (withSharpen && t.sharpen > 0) f.push("url(#tvSharpen)");
+  return f.join(" ") || "none";
+}
+const scanFx = document.createElement("canvas"); scanFx.width = 480; scanFx.height = 320;   // scanlines + glass vignette, drawn once
+{
+  const c = scanFx.getContext("2d");
+  c.fillStyle = "rgba(0,0,0,.2)"; for (let y = 2; y < 320; y += 3) c.fillRect(0, y, 480, 1);
+  const g = c.createRadialGradient(240, 160, 110, 240, 160, 300); g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,.45)");
+  c.fillStyle = g; c.fillRect(0, 0, 480, 320);
+}
+function drawTvMenu(ctx) {
+  ctx.fillStyle = "rgba(0,8,30,.82)"; ctx.fillRect(20, 12, 440, 296);
+  ctx.strokeStyle = "#7dff9a"; ctx.lineWidth = 2; ctx.strokeRect(20, 12, 440, 296);
+  ctx.fillStyle = "#7dff9a"; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+  ctx.font = "bold 22px 'Courier New', monospace"; ctx.fillText("SETTINGS", 240, 34);
+  ctx.font = "bold 15px 'Courier New', monospace";
+  TV_ROWS.forEach((r, i) => {
+    const y = TVM.rowY + i * TVM.rowH, v = tvSet[r.k];
+    if (tvHover === i) { ctx.fillStyle = "rgba(125,255,154,.18)"; ctx.fillRect(34, y - 10, 412, 21); }
+    ctx.fillStyle = "#7dff9a"; ctx.textAlign = "left"; ctx.fillText(r.label, TVM.labelX, y + 1);
+    ctx.strokeStyle = "#7dff9a"; ctx.lineWidth = 1.5;
+    if (r.min == null) {
+      ctx.strokeRect(TVM.chkX, y - 8, TVM.chkW, 16);
+      if (v) ctx.fillRect(TVM.chkX + 4, y - 4, TVM.chkW - 8, 8);
+    } else {
+      ctx.strokeRect(TVM.barX, y - 7, TVM.barW, 14);
+      ctx.fillRect(TVM.barX, y - 7, (v - r.min) / (r.max - r.min) * TVM.barW, 14);
+      ctx.textAlign = "right"; ctx.fillText(String(v), 444, y + 1);
+    }
+  });
+  ctx.textAlign = "center"; ctx.font = "bold 16px 'Courier New', monospace";
+  for (const b of TVM.buttons) {
+    if (tvHover === b.k) { ctx.fillStyle = "rgba(125,255,154,.25)"; ctx.fillRect(b.x, TVM.btnY, b.w, TVM.btnH); }
+    ctx.strokeStyle = "#7dff9a"; ctx.lineWidth = 2; ctx.strokeRect(b.x, TVM.btnY, b.w, TVM.btnH);
+    ctx.fillStyle = "#7dff9a"; ctx.fillText(b.label, b.x + b.w / 2, TVM.btnY + TVM.btnH / 2 + 1);
+  }
+}
+// what's under screen-canvas point (x, y): a row index, "reset"/"close", or null
+function tvMenuHit(x, y) {
+  for (const b of TVM.buttons) if (x >= b.x && x <= b.x + b.w && y >= TVM.btnY && y <= TVM.btnY + TVM.btnH) return b.k;
+  const i = Math.round((y - TVM.rowY) / TVM.rowH);
+  return i >= 0 && i < TV_ROWS.length && Math.abs(y - (TVM.rowY + i * TVM.rowH)) <= 11 && x >= 34 && x <= 446 ? i : null;
+}
+function tvMenuClick(x, y) {
+  const h = tvMenuHit(x, y);
+  if (h === "close") { tvMenu = false; return; }
+  if (h === "reset") tvSet = { ...TV_DEFAULTS };
+  else if (h != null) {
+    const r = TV_ROWS[h];
+    if (r.min == null) tvSet[r.k] = !tvSet[r.k];
+    else if (x >= TVM.barX - 8) {            // clicked on (or just off) the bar: jump there, snapped to the step
+      const t = Math.max(0, Math.min(1, (x - TVM.barX) / TVM.barW));
+      tvSet[r.k] = Math.round((r.min + t * (r.max - r.min)) / r.step) * r.step;
+    }
+  }
+  applyTv();
+}
+function tvMenuWheel(dir) {                  // wheel over a slider row nudges it one step
+  const r = TV_ROWS[tvHover];
+  if (!r || r.min == null) return false;
+  tvSet[r.k] = Math.max(r.min, Math.min(r.max, tvSet[r.k] + dir * r.step)); applyTv(); return true;
+}
 function updateVideoFrame() {
-  if (!video.videoWidth) return;
   const W = videoCanvas.width, H = videoCanvas.height;
-  const c = tapeFix(playing.tape).crop || { x: 0, y: 0, w: 1, h: 1 };
-  const sx = c.x * video.videoWidth, sy = c.y * video.videoHeight;
-  const sw = c.w * video.videoWidth, sh = c.h * video.videoHeight;
-  const scale = Math.min(W / sw, H / sh);
-  const dw = sw * scale, dh = sh * scale;
   videoCtx.fillStyle = "#000"; videoCtx.fillRect(0, 0, W, H);
-  videoCtx.filter = tapeFilter(playing.tape);
-  videoCtx.drawImage(video, sx, sy, sw, sh, (W - dw) / 2, (H - dh) / 2, dw, dh);
-  videoCtx.filter = "none";
+  if (playing && video.videoWidth) {
+    const c = tapeFix(playing.tape).crop || { x: 0, y: 0, w: 1, h: 1 };
+    const sx = c.x * video.videoWidth, sy = c.y * video.videoHeight;
+    const sw = c.w * video.videoWidth, sh = c.h * video.videoHeight;
+    const scale = Math.min(W / sw, H / sh);
+    const dw = sw * scale, dh = sh * scale;
+    videoCtx.filter = pictureFilter(playing.tape);
+    videoCtx.drawImage(video, sx, sy, sw, sh, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    videoCtx.filter = "none";
+  }
+  if (playing && tvSet.overlay && !tvMenu && (video.paused || performance.now() < osd.until)) {   // VCR-style OSD, top left
+    videoCtx.font = "bold 20px 'Courier New', monospace"; videoCtx.textAlign = "left"; videoCtx.textBaseline = "top";
+    const t = video.paused ? "PAUSE ❚❚" : osd.text;
+    videoCtx.fillStyle = "rgba(0,0,0,.6)"; videoCtx.fillText(t, 26, 22);
+    videoCtx.fillStyle = "#e8ffe8"; videoCtx.fillText(t, 24, 20);
+  }
+  if (tvMenu) drawTvMenu(videoCtx);
+  if (tvSet.scanlines) videoCtx.drawImage(scanFx, 0, 0, W, H);
   videoTex.needsUpdate = true;
 }
 
@@ -1440,6 +2058,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   // fill the (fixed-aspect) screen plane, distorting anything that isn't
   // exactly that aspect
   videoTex = new THREE.CanvasTexture(videoCanvas);
+  queueMicrotask(applyTv);                 // saved picture settings (pixelated filter, sharpen kernel) once the texture exists
   videoTex.colorSpace = THREE.SRGBColorSpace;
   videoMat = new THREE.MeshBasicMaterial({ map: videoTex, color: 0xd9d9d9 }); // -15%, blown-out whites were blinding
   miniScreens = [screenMesh];
@@ -1533,7 +2152,7 @@ addEventListener("keydown", e => {
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "Escape" && held) putBack();
-  if (e.code === "KeyE") onE();
+  if (e.code === "KeyE" && !e.repeat) onE();   // one press, one action — holding E doesn't machine-gun bites, doors, the flap
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
   if (e.code === "Period") stepEpisode(1);
@@ -1552,11 +2171,18 @@ addEventListener("keyup", e => {
   }
 });
 let seatFov = 70;
-canvas.addEventListener("wheel", e => {          // lean in on the couch — zoom for sitting only
+canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoom a held-up cover
+  if (tvMenu && tvMenuWheel(e.deltaY < 0 ? 1 : -1)) return;               // nudging a menu slider
   if (seated) seatFov = Math.max(28, Math.min(70, seatFov + e.deltaY * 0.02));
+  else if (held && inspecting) {
+    coverZoom = Math.max(1, Math.min(6, coverZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    $("inspectArt").style.transform = `scale(${coverZoom})`;
+  }
 });
+let lastActive = 0;                          // last mouse-look or key — the crosshair hides after a few still seconds
 addEventListener("mousemove", e => {
   if (document.pointerLockElement !== canvas) return;
+  lastActive = performance.now();
   player.yaw -= e.movementX * 0.0022;
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * 0.0022));
 });
@@ -1588,12 +2214,18 @@ function move(dt) {
 
 // ---------------- picking / inspecting ----------------
 const raycaster = new THREE.Raycaster();
+const tvRay = new THREE.Raycaster();
+function tvScreenHit() {                     // crosshair on the main TV screen -> its point on the 480x320 screen canvas
+  tvRay.setFromCamera({ x: 0, y: 0 }, camera);
+  const h = tvRay.intersectObject(screenMesh, false)[0];
+  return h && h.distance < 9 ? { x: h.uv.x * videoCanvas.width, y: (1 - h.uv.y) * videoCanvas.height } : null;
+}
 const highlight = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(TAPE.w, TAPE.h, TAPE.d)),
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false; highlight.rotation.y = Math.PI / 2; // tapes lie rotated on the bands
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = false, aimFlap = null;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 let flapOpen = false;
 function toggleFlap() {
@@ -1607,7 +2239,7 @@ function toggleFlap() {
   else if (!flapOpen && i < 0) colliders.push(flapCollider);   // back down — flush with the counters again
 }
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = false; aimFlap = null;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
@@ -1632,13 +2264,20 @@ function pickHover() {
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; }
     else if (aim?.object.userData.returns && aim.distance < 2.4) aimReturns = true;
-    else if (aim?.object.userData.snackStand && aim.distance < 2.4) aimSnack = true;
+    else if ((aim?.object.userData.unit || aim?.object.userData.snack) && (aim.object.userData.unit || aim.object).visible && aim.distance < 2.4)
+      aimSnack = aim.object.userData.unit || aim.object;   // the exact unit you pointed at (a drink's whole group, not just the label you hit)
+    else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
+    else if (aim?.object.userData.popcorn && aim.distance < 2.4) aimPop = aim.object.userData.popcorn;
+    else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
     else if (aim?.object.userData.flap && aim.distance < 2.6) aimFlap = aim.object.userData.flap;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && held) tip.innerHTML = "E — drop tape in Returns";
     else if (aimReturns && returnBin.length) tip.innerHTML = `E — take a tape from Returns (${returnBin.length})`;
-    else if (aimSnack && !held && !heldSnack) tip.innerHTML = "CLICK — grab a snack";
+    else if (aimPop) tip.innerHTML = popcornStep(aimPop, false);
+    else if (aimTrash) tip.innerHTML = held ? "Rentals don't go in the trash" : `E — throw away ${heldSnack ? heldSnack.userData.snack.name : "the popcorn"}`;
+    else if (aimSnack && !held && !heldSnack && !heldPopcorn) tip.innerHTML = `CLICK — grab ${aimSnack.userData.snack.name}${aimSnack.userData.snack.kind ? ` <div class="cat">${aimSnack.userData.snack.kind}</div>` : ""}`;
+    else if (aimCooler) tip.innerHTML = `E — ${coolerOpen ? "close" : "open"} the cooler`;
     else if (aimFlap) tip.innerHTML = `E — ${flapOpen ? "close" : "open"} the counter pass-through`;
     else { tip.style.display = "none"; return; }
     tip.style.display = "block";
@@ -1648,15 +2287,20 @@ canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("mousedown", e => {
   if (document.pointerLockElement !== canvas) return;
   if (e.button === 2) {                                    // right click puts down whatever's in hand
+    if (seated || tvMenu || tvScreenHit()) { tvMenu = !tvMenu; return; }   // ...unless it's aimed at the TV: that's the picture menu
     if (held) putBack();
     else if (heldSnack) dropSnack();
+    else if (heldPopcorn && (heldPopcorn.kind === "kernel" || !heldPopcorn.used)) dropPopcorn();   // a used box only goes in the trash
     return;
   }
   if (e.button !== 0) return;
+  if (tvMenu) { const hit = tvScreenHit(); if (hit) { tvMenuClick(hit.x, hit.y); return; } }
   if (held) { inspecting = !inspecting; return; }          // hold it up / tuck it in hand
   if (heldSnack) return;                                   // hands full
+  if (aimPop) { popcornStep(aimPop, true); return; }
+  if (heldPopcorn) return;                                 // hands full
   if (hovered) pickup(hovered);
-  else if (aimSnack) grabSnack();
+  else if (aimSnack) grabSnack(aimSnack);
 });
 
 // held tape in hand
@@ -1670,24 +2314,144 @@ handArt.rotation.y = -Math.PI / 2; handArt.position.x = -0.017;
 handGroup.add(handBody, handArt);
 handGroup.visible = false;
 
-// held snack in hand — same hand slot as a tape, plain colored box, no inspect
+// held snack in hand — same hand slot as a tape, no inspect. It's the very unit
+// you clicked: same geometry + material, and its rack slot sits empty until you
+// put it back (right-click)
 const snackGroup = new THREE.Group();
 snackGroup.position.copy(handGroup.position); snackGroup.rotation.copy(handGroup.rotation);
 camera.add(snackGroup);
-const snackMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.04), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-snackGroup.add(snackMesh);
 snackGroup.visible = false;
-function grabSnack() {
-  const [color, label] = SNACKS[Math.floor(Math.random() * SNACKS.length)];
-  heldSnack = label; snackMesh.material.color.set(color); snackGroup.visible = true;
-  $("holdingTag").style.display = "block"; $("holdingName").textContent = `Snack — ${label}`;
+function grabSnack(unit) {
+  const p = unit.userData.snack;
+  heldSnack = unit; unit.visible = false;
+  // rebuild it part for part (shared geometry/materials) rather than clone():
+  // clone() deep-copies userData, and a drink's parts point back at their unit
+  const copy = o => {
+    const c = o.isMesh ? new THREE.Mesh(o.geometry, o.material) : new THREE.Group();
+    c.position.copy(o.position); c.rotation.copy(o.rotation); c.scale.copy(o.scale);
+    o.children.forEach(ch => c.add(copy(ch))); return c;
+  };
+  const inHand = copy(unit); inHand.position.set(0, p.shape === "tube" || !p.r ? 0 : -p.h / 2, 0); inHand.rotation.set(0, 0, 0);
+  snackGroup.clear(); snackGroup.add(inHand); snackGroup.visible = true;
+  snackLeft = snackTotal = portions(p);
+  snackTag();
 }
-function dropSnack() {
-  heldSnack = null; snackGroup.visible = false; $("holdingTag").style.display = "none";
+function dropSnack(toss = false) {           // right-click puts an untouched one back on the shelf; opened ones only go in the trash (toss)
+  if (!toss && snackLeft < snackTotal) return;
+  if (toss) restock(heldSnack); else heldSnack.visible = true;
+  heldSnack = null; snackGroup.visible = false; snackGroup.clear(); $("holdingTag").style.display = "none";
 }
+// ---- eating + drinking: E takes a bite / sip. Snacks get bites by size (volume,
+// log-scaled: gum 2 ... a big chip bag 8); drinks get sips by type (always 5+).
+// A finished item stays in your hand as its empty wrapper / can / bottle until
+// you take it to the trash, which is also what restocks its shelf slot.
+let snackLeft = 0, snackTotal = 0, biteAnim = 0, biteGroup = null, biteDrink = false;
+const isDrink = p => !!p.r;
+function portions(p) {
+  if (isDrink(p)) return p.shape === "bottle" ? (p.kind === "Water" ? 8 : 10) : p.shape === "longneck" ? 8 : 6;
+  const vol = p.shape === "tube" ? Math.PI * (p.w / 2) ** 2 * p.h : p.w * p.h * p.d;
+  return Math.max(2, Math.min(8, Math.round(2 + Math.log2(vol / 3e-5))));
+}
+const EMPTY = { bag: "bag", box: "box", bar: "wrapper", gum: "wrapper", tube: "tube", can: "can", bottle: "bottle", longneck: "bottle" };
+function snackTag() {
+  const p = heldSnack.userData.snack, drink = isDrink(p);
+  $("holdingTag").style.display = "block";
+  $("holdingName").textContent = snackLeft
+    ? `${p.kind || "Snack"} — ${p.name} · ${snackLeft} ${drink ? "sip" : "bite"}${snackLeft === 1 ? "" : "s"} left · E to ${drink ? "drink" : "eat"}`
+    : `Empty ${p.name} ${EMPTY[p.shape]} · take it to the trash`;
+}
+function restock(unit) { setTimeout(() => { if (heldSnack !== unit) unit.visible = true; }, 30000); }   // ponytail: fixed 30s restock, no stock tracking
+function consumeSnack() {
+  if (!snackLeft) return;                    // finished: nothing left but the wrapper — trash it
+  snackLeft--; biteAnim = 0.4; biteGroup = snackGroup; biteDrink = isDrink(heldSnack.userData.snack);
+  snackTag();
+}
+
+// ---------------- popcorn: box -> scoop -> toppings (optional) -> eat ----------------
+// heldPopcorn is { kind: "box", fill: 0-8 handfuls, toppings: [] } or { kind: "kernel" }
+// (a single piece, grabbed bare-handed). popcornStep() is the one place the
+// sequence rules live: it returns the hover tip for a station part, and with
+// apply=true actually performs the step.
+let heldPopcorn = null;
+const TOPPINGS = { butter: "buttered", salt: "salted", sugar: "sugared" };
+const popcornGroup = new THREE.Group();
+popcornGroup.position.copy(handGroup.position); popcornGroup.rotation.copy(handGroup.rotation);
+camera.add(popcornGroup); popcornGroup.visible = false;
+const speckMat = (colors, n, r) => new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, map: makeTexture((ctx, w, h) => {
+  ctx.clearRect(0, 0, w, h);
+  for (let i = 0; i < n; i++) { ctx.fillStyle = colors[i % colors.length]; ctx.beginPath(); ctx.arc(Math.random() * w, Math.random() * h, r * (0.5 + Math.random()), 0, Math.PI * 2); ctx.fill(); }
+}, 256, 256) });
+let popMats = null;                          // built on first use (needs popcornKit's texture)
+function popcornVisual() {
+  popcornGroup.clear();
+  const hp = heldPopcorn;
+  if (!hp) { popcornGroup.visible = false; $("holdingTag").style.display = "none"; return; }
+  if (!popMats) {
+    const k = popcornKit;
+    popMats = {
+      plain: new THREE.MeshLambertMaterial({ map: k.cornTex }),
+      butter: new THREE.MeshLambertMaterial({ map: k.cornTex, color: 0xffcc55, emissive: 0x5a3a00, emissiveIntensity: 0.35 }),
+      salt: speckMat(["#ffffff", "#f2f2f2"], 260, 2.2),
+      sugar: speckMat(["#ffffff", "#fff4d0", "#e8f6ff"], 180, 3),
+      kernel: new THREE.MeshLambertMaterial({ color: 0xfff1c8 }),
+      mound: new THREE.SphereGeometry(0.05, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+    };
+    const kg = new THREE.IcosahedronGeometry(0.012, 1), kp = kg.attributes.position;   // lumpy popped kernel
+    for (let i = 0; i < kp.count; i++) kp.setXYZ(i, kp.getX(i) * (0.8 + Math.random() * 0.5), kp.getY(i) * (0.8 + Math.random() * 0.5), kp.getZ(i) * (0.8 + Math.random() * 0.5));
+    kg.computeVertexNormals(); popMats.kernelGeo = kg;
+  }
+  if (hp.kind === "kernel") {
+    const m = new THREE.Mesh(popMats.kernelGeo, popMats.kernel); m.position.set(-0.08, 0.1, -0.05); popcornGroup.add(m);
+    $("holdingName").textContent = "A piece of popcorn · E to eat";
+  } else {
+    popcornGroup.add(new THREE.Mesh(popcornKit.cup, popcornKit.cupMat));
+    if (hp.fill > 0) {                       // mound shrinks as you eat it
+      const h = 0.35 + 0.65 * hp.fill / 8;
+      const mound = new THREE.Mesh(popMats.mound, hp.toppings.includes("butter") ? popMats.butter : popMats.plain);
+      mound.position.y = 0.06; mound.scale.set(1, h, 1); popcornGroup.add(mound);
+      for (const t of ["salt", "sugar"]) if (hp.toppings.includes(t)) {
+        const o = new THREE.Mesh(popMats.mound, popMats[t]); o.position.y = 0.06; o.scale.set(1.02, h * 1.02, 1.02); popcornGroup.add(o);
+      }
+    }
+    const tops = hp.toppings.map(t => TOPPINGS[t]).join(", ");
+    $("holdingName").textContent = hp.fill ? `Popcorn${tops ? ` — ${tops}` : ""} · E to eat`
+      : hp.used ? "Empty popcorn box · refill it or take it to the trash" : "Empty popcorn box";
+  }
+  popcornGroup.visible = true; $("holdingTag").style.display = "block";
+}
+function popcornStep(what, apply) {
+  const hp = heldPopcorn;
+  let tip, act = null;
+  if (held || heldSnack) tip = "Hands full";
+  else if (what === "boxes") {
+    if (!hp) { tip = "CLICK — take a popcorn box"; act = () => heldPopcorn = { kind: "box", fill: 0, toppings: [] }; }
+    else tip = hp.kind === "kernel" ? "Eat that piece first (E)" : "You've already got a box";
+  } else if (what === "corn") {
+    if (!hp) { tip = "CLICK — grab a piece of popcorn"; act = () => heldPopcorn = { kind: "kernel" }; }
+    else if (hp.kind === "kernel") tip = "Eat that piece first (E)";
+    else if (hp.fill === 8) tip = "Your box is full";
+    else { tip = hp.fill ? "CLICK — top it off" : "CLICK — scoop popcorn"; act = () => { hp.fill = 8; hp.used = true; }; }
+  } else {                                   // salt / sugar / butter
+    if (!hp || hp.kind === "kernel") tip = "Grab a popcorn box first";
+    else if (!hp.fill) tip = "Scoop some popcorn first";
+    else if (hp.toppings.includes(what)) tip = `Already ${TOPPINGS[what]}`;
+    else { tip = `CLICK — add ${what}`; act = () => hp.toppings.push(what); }
+  }
+  if (apply && act) { act(); popcornVisual(); }
+  return tip;
+}
+function eatPopcorn() {
+  const hp = heldPopcorn;
+  biteAnim = 0.4; biteGroup = popcornGroup; biteDrink = false;
+  if (hp.kind === "kernel") heldPopcorn = null;
+  else if (hp.fill > 0 && --hp.fill === 0) hp.toppings = [];   // last handful: an empty box, ready for a refill
+  popcornVisual();
+}
+function dropPopcorn() { heldPopcorn = null; popcornVisual(); }
 
 // ---------------- hold a tape up to look at it ----------------
 let inspecting = false;                      // true = box held up in view, false = carried in hand
+let coverZoom = 1;                           // mouse-wheel zoom on the held-up cover (1-6x), reset per pickup
 function releaseFromHand() {                 // clears the hand WITHOUT touching the shelf (TV insert / returns drop-off)
   held = null; inspecting = false; handGroup.visible = false; $("holdingTag").style.display = "none";
 }
@@ -1696,7 +2460,16 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
   if (tape.coverMesh) tape.coverMesh.visible = false;   // gone from the shelf while it's in your hand
   if (tape.bodyMesh) tape.bodyMesh.visible = false;
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tape.title;
-  $("inspectArt").src = artUrl(tape.art);
+  // embedded shelf art shows instantly; the full-res TMDB version swaps in once
+  // it loads (a plain <img> can load cross-origin even from file://). Offline
+  // it just stays on the embedded one.
+  const art = $("inspectArt"), hiPath = window.VAULT_ART_HI?.[tape.art];
+  art.src = artUrl(tape.art); coverZoom = 1; art.style.transform = "";
+  if (hiPath) {
+    const hi = new Image();
+    hi.onload = () => { if (held === tape) art.src = hi.src; };
+    hi.src = "https://image.tmdb.org/t/p/w780" + hiPath;
+  }
   handBody.material = tape.sideMat || mat.tapeBody;
   loadCoverTexture(tape, t => { handArt.material.map = t; handArt.material.needsUpdate = true; });
   handGroup.visible = true;
@@ -1750,8 +2523,8 @@ async function playEpisode(idx) {
   const bits = epTitle.split(" - ");
   const code = /S\d+E\d+/i.test(bits[1] || "") ? bits[1] + " · " : "";
   const name = code ? bits.slice(2).join(" - ") : bits.slice(1).join(" - ") || epTitle;
-  $("tvBar").style.display = "flex";
-  $("nowPlaying").innerHTML = `LOADING <b>${tape.title}</b>…`;
+  $("nowPlaying").style.display = "block";
+  $("nowPlaying").textContent = `Loading: ${tape.title}…`;
   try {
     if (!metaCache[iaId]) metaCache[iaId] = await (await fetch(`https://archive.org/metadata/${iaId}`)).json();
     const fileName = pickFile(metaCache[iaId], eps[idx][2]);
@@ -1764,9 +2537,10 @@ async function playEpisode(idx) {
 
     miniScreens.forEach(m => m.material = videoMat); // every screen shows the tape
     tvGlow.userData.base = 1.6;
-    $("nowPlaying").innerHTML = `NOW PLAYING <b>${tape.title}</b> — ${code}${name}`;
+    $("nowPlaying").textContent = `Now Playing: ${tape.title} — ${code}${name}`;
+    tvOsd(`PLAY ▶ ${code.replace(" · ", "")}`.trim(), 4);
   } catch (err) {
-    $("nowPlaying").innerHTML = `⚠ ${err.message}`;
+    $("nowPlaying").textContent = `⚠ ${err.message}`;
   }
 }
 function eject() {
@@ -1774,24 +2548,21 @@ function eject() {
   video.pause(); video.removeAttribute("src"); video.load();
   playing = null; tvGlow.userData.base = 0;
   miniScreens.forEach(m => m.material = screensaverMat);   // back to the bouncing-logo screensaver
-  $("tvBar").style.display = "none";
+  $("nowPlaying").style.display = "none";
   tableBoxGroup.visible = false;
   if (tape) {                              // the tape comes back out into your hand, not the shelf
-    if (heldSnack) dropSnack();            // make room if a snack's in the way
+    if (heldSnack) dropSnack(snackLeft < snackTotal);   // make room: untouched back on the shelf, opened tossed
+    if (heldPopcorn) dropPopcorn();
     pickup(tape);
   }
 }
 function togglePause() {
   if (!playing || !video.src) return;
   video.paused ? video.play().catch(() => {}) : video.pause();
-  $("tvPause").textContent = video.paused ? "▶" : "⏯";
+  if (!video.paused) tvOsd("PLAY ▶", 2);
 }
 function stepEpisode(d) { if (playing) playEpisode(playing.idx + d); }
 video.addEventListener("ended", () => stepEpisode(1));
-$("tvPrev").onclick = () => stepEpisode(-1);
-$("tvNext").onclick = () => stepEpisode(1);
-$("tvPause").onclick = togglePause;
-$("tvEject").onclick = eject;
 function setLamp(l, on) {
   l.userData.on = on ? LAMP_ON : 0;
   l.intensity = l.userData.on;
@@ -1815,21 +2586,31 @@ function onE() {
   }
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
+  if (aimCooler) { coolerOpen = !coolerOpen; return; }
+  if (aimTrash) {
+    if (heldSnack) dropSnack(true); else if (heldPopcorn) dropPopcorn(); else return;
+    trashFlapT = 0.5; return;                // swing the flap
+  }
   if (aimReturns) {                          // drop a held tape off, or take one back out
     if (held) { returnBin.push(held); releaseFromHand(); }
     else if (returnBin.length) pickup(returnBin.pop());
+    refreshReturnsBin();
     return;
   }
   if (aimTV) {                               // must actually be looking at the screen
     if (held) {
       const tape = held;
-      if (playing) returnBin.push(playing.tape);  // swap: whatever was already in the TV goes to Returns
+      if (playing) { returnBin.push(playing.tape); refreshReturnsBin(); }  // swap: whatever was already in the TV goes to Returns
       playEpisode(0);
       releaseFromHand();                     // the tape leaves your hand...
       showTableBox(tape);                    // ...and its case lands on the coffee table
     }
     else if (playing) eject();
+    return;
   }
+  if (biteAnim > 0) return;                  // still mid-bite: finish chewing first
+  if (heldPopcorn) eatPopcorn();             // nothing else aimed: E eats a handful (or the single piece)
+  else if (heldSnack) consumeSnack();        // ...or a bite / sip of whatever snack or drink you're holding
 }
 // CRT/floor-pool glow tinted by the video: an AMBI_N x AMBI_N sample
 // (VaultVision ambilight trick) — drawImage's own downscale does the
@@ -1842,7 +2623,7 @@ glowCtx.canvas.width = glowCtx.canvas.height = AMBI_N;
 setInterval(() => {
   if (!playing || video.paused || !video.videoWidth) return;
   try {
-    glowCtx.filter = tapeFilter(playing.tape);
+    glowCtx.filter = pictureFilter(playing.tape, false);
     glowCtx.drawImage(video, 0, 0, AMBI_N, AMBI_N);
     const d = glowCtx.getImageData(0, 0, AMBI_N, AMBI_N).data;
     let r = 0, g = 0, b = 0;
@@ -1864,7 +2645,7 @@ $("titleScreen").addEventListener("click", () => {
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
   $("titleScreen").style.display = locked ? "none" : "flex";
-  $("crosshair").hidden = $("keysHint").hidden = !locked;
+  $("crosshair").hidden = !locked;
   if (locked) {
     started = true;
     $("enterHint").textContent = "CLICK TO RESUME";
@@ -1884,6 +2665,16 @@ const clock = new THREE.Clock();
 let clockT = 0;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
+  if (keys.size) lastActive = performance.now();                          // walking counts as moving
+  if (trashFlapT > 0) { trashFlapT = Math.max(0, trashFlapT - dt); trashFlap.rotation.x = 1.1 * Math.sin((1 - trashFlapT / 0.5) * Math.PI); }    // push flap swings in (bottom edge into the bin) and back
+  if (biteGroup) {                                                          // bite / sip: up to the mouth and back
+    biteAnim = Math.max(0, biteAnim - dt);
+    const k = Math.sin((1 - biteAnim / 0.4) * Math.PI), drink = biteDrink;
+    biteGroup.position.set(handGroup.position.x - 0.22 * k, handGroup.position.y + 0.2 * k, handGroup.position.z + 0.12 * k);
+    biteGroup.rotation.set(handGroup.rotation.x + (drink ? 1.0 : 0.35) * k, handGroup.rotation.y, handGroup.rotation.z);
+    if (!biteAnim) biteGroup = null;
+  }
+  document.body.classList.toggle("idle", performance.now() - lastActive > 2500);
   clockT += dt;
   for (const b of marquee) {              // marquee chase around the posters
     const v = 0.5 + 0.5 * Math.sin(clockT * 7 + b.phase);
@@ -1894,7 +2685,13 @@ renderer.setAnimationLoop(() => {
     c.position.x += dt * 0.15;
     if (c.position.x > STORE.x + 20) c.position.x -= cloudSpan;
   }
-  if (!playing) updateScreensaver(dt); else updateVideoFrame();   // pauses while a tape's actually in, like a real screensaver would
+  if (!playing) updateScreensaver(dt);
+  if (playing || tvMenu) updateVideoFrame();
+  if (!playing) screenMesh.material = tvMenu ? videoMat : screensaverMat;   // menu over a blank screen when no tape's in
+  if (tvMenu) {                                   // what the crosshair (the remote) is pointing at on the menu
+    const hit = tvScreenHit();
+    tvHover = hit ? tvMenuHit(hit.x, hit.y) : null;
+  }   // pauses while a tape's actually in, like a real screensaver would
   if (warmup) {                           // fluorescents restriking after lights-on
     warmup.t += dt;
     const done = warmup.t >= warmup.duration;
@@ -1919,12 +2716,14 @@ renderer.setAnimationLoop(() => {
   tvBackGlow.color.copy(tvGlow.color);
   tvBackGlow.intensity = tvGlow.userData.base * (lightsOut ? 1.1 : 0.4);
   tvPool.material.opacity = tvGlow.userData.base && lightsOut ? 0.55 : 0;   // carpet effects are a lights-out-only trick — color is baked into the texture by paintTvPool
-  const shadowOp = tvGlow.userData.base && lightsOut ? 0.95 : 0;
+  const shadowOp = tvGlow.userData.base && lightsOut ? 0.65 : 0;   // matches the carpet's other dark patches — the glass front lets in more light now
   tvTableShadow.material.opacity = tvCouchShadow.material.opacity = shadowOp;
   const crtBase = tvGlow.userData.base ? 0.9 : 0;   // ceiling CRTs tint/dim with whatever's actually playing
   crtGlows.forEach(cg => { cg.color.copy(tvGlow.color); cg.intensity = crtBase * (lightsOut ? 1.8 : 1); });
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
   flapPivot.rotation.x += ((flapOpen ? -Math.PI / 2 : 0) - flapPivot.rotation.x) * Math.min(1, dt * 6);   // eases open/closed
+  coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
+  coolerThermo.tick(dt);
   move(dt);
   if (seated) camera.position.set(seatAt.x, seatAt.y, seatAt.z);
   else {
@@ -1949,13 +2748,15 @@ renderer.setAnimationLoop(() => {
     && (seated || aimTV || aimCouch)
     && document.pointerLockElement === canvas;
   $("tvHint").style.display = showTvHint ? "block" : "none";
-  if (showTvHint) $("tvHint").textContent = seated
-    ? "Press E to stand up"
+  if (showTvHint) $("tvHint").textContent = tvMenu
+    ? "Click to choose · wheel adjusts a slider · right-click closes"
+    : seated
+    ? "Press E to stand up · right-click for picture settings"
     : aimCouch
       ? "Press E to sit on the couch"
       : held
         ? `Press E to insert “${held.title}” into the TV`
-        : (playing ? "Press E to eject the tape" : "Pick up a tape from the shelves to play it here");
+        : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
   renderWithBloom();
 });
 window.__t = {
