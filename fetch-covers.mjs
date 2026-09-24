@@ -132,6 +132,11 @@ console.log("posters:", posters.join(", "));
 fs.writeFileSync("covers.js", `window.VAULT_ART = ${JSON.stringify(art)};\nwindow.VAULT_POSTERS = ${JSON.stringify(posters)};\n` +
   `window.VAULT_ART_HI = ${JSON.stringify(hi)};\n`);
 fs.writeFileSync("tmdb-covers.json", JSON.stringify(manifest, null, 1));
+// year + TMDB vote count per matched title — the store sorts its New Releases
+// walls by these (release year cutoff, and more copies of the more-voted hits)
+const meta = Object.fromEntries(Object.entries(manifest).filter(([, m]) => m.match)
+  .map(([id, m]) => [id, [+(m.match.match(/\((\d{4})\)/)?.[1] ?? 0), m.votes ?? 0]]));
+fs.writeFileSync("meta.js", `window.VAULT_META = ${JSON.stringify(meta)};\n`);
 const vals = Object.values(manifest);
 console.log(`${vals.filter(m => m.match).length} matched, ${vals.filter(m => m.match === null).length} unmatched, ` +
   `${vals.filter(m => m.error).length} errors; ${Object.keys(art).length} images, ` +
