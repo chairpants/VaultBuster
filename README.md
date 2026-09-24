@@ -1,12 +1,12 @@
 # VaultBuster
 
-**A first-person 90s video store you can actually rent from.**
+**Clock in for a shift at a 90s video store.**
 
 **▶ [Play it in your browser](https://chairpants.github.io/VaultBuster/)**
 
 ![Walking into VaultBuster](screenshots/entrance.jpg)
 
-It's a Friday night in the 90s. Walk the aisles under the fluorescent lights, pull a tape off the shelf, and see what you can get up to before closing.
+It's a Friday night and the store is yours. Work the counter, run the register, keep the shelves straight, and deal with whatever the night throws at you. It's a first-person sim of life behind the counter at a neighborhood rental store, down to the rewinder and the security gates.
 
 ---
 
@@ -20,27 +20,27 @@ It's a Friday night in the 90s. Walk the aisles under the fluorescent lights, pu
 
 | Lights on | Lights out |
 |---|---|
-| ![The TV lounge](screenshots/lounge.jpg) | ![The TV lounge after dark](screenshots/lounge-night.jpg) |
+| ![The lounge](screenshots/lounge.jpg) | ![The lounge after dark](screenshots/lounge-night.jpg) |
 | ![Looking out the front doors by day](screenshots/outside-day.jpg) | ![The lot at night under the sodium lights](screenshots/outside-night.jpg) |
 
 ---
 
 ## Features
 
-- **1,600+ tapes** of real movies and TV, and every one of them plays. Episodes stream from the Internet Archive.
-- **Almost everything is interactive.** Pick things up, carry them around, eat the snacks, work the counter. Most of it you'll have to find for yourself.
-- **The lounge:** put a tape in the big-screen TV, sink into the couch, and every screen in the store plays along.
-- **A working register** running a 90s DOS-style point-of-sale system. Log in and poke around.
-- **Security gates** that do exactly what you'd expect if you walk out with a tape you didn't check out.
+- **A real store to run:** 1,600+ tapes on the shelves, a counter, a back room, and a parking lot out front.
+- **A working register:** a 90s DOS-style point-of-sale system with inventory, members, and reports. Log in and poke around.
+- **Counter gear that works:** rewind tapes, desensitize them at checkout, ring the bell, and work the returns slot.
+- **Security gates** that do exactly what you'd expect when a tagged tape walks out the door.
+- **Almost everything is interactive.** Pick things up, carry them around, restock, eat the snacks. Most of it is yours to find.
 - **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
-- **Lights out:** kill the lights and the TV glow takes over the room. Outside, day turns to night.
-- **The store remembers.** Leave and come back, and everything is where you left it.
+- **Lights out:** close up for the night, and it's dark outside too.
+- **The store remembers.** Clock out, come back, and everything is where you left it.
 
 ---
 
 ## Running it
 
-You need an internet connection. three.js loads from a CDN, and the tapes stream from archive.org.
+You need an internet connection, because three.js loads from a CDN.
 
 **Easiest:** play the hosted version at **https://chairpants.github.io/VaultBuster/**.
 
@@ -69,10 +69,7 @@ Neither server has any dependencies.
 | **Click** again | Tuck it in your hand |
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
-| **Right-click** the TV screen | Picture settings menu |
-| **E** | Interact: the TV, the couch, lamps, doors, the register, and plenty more. Some things want E held down |
-| **Space** | Pause / play |
-| **, .** | Previous / next episode |
+| **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down |
 | **L** (tap) | Store lights on/off, which also switches day and night |
 | **L** (hold) | Both side lamps on/off |
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
@@ -89,7 +86,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | File | What it is |
 |---|---|
 | `index.html` | The page, the HUD, and the three.js bootstrap |
-| `store.js` | The whole game: the building, shelving and packing, the lounge, lighting, the exterior, and playback |
+| `store.js` | The whole game: the building, shelving and packing, the lounge, lighting, the exterior, and the TVs |
 | `couch.js` | The procedurally built parlor sofa |
 | `pos.js` | The register's DOS-style POS terminal |
 | `monstervision.js` | Splits the single MonsterVision broadcast tape into one tape per film, with each airing mapped to its real title and year |
