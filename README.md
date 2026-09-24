@@ -86,7 +86,7 @@ Neither server has any dependencies.
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
 | **Right-click** the TV screen | Picture settings menu |
-| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) · put a tape in the counter rewinder / take it out |
+| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) · put a tape in the counter rewinder / take it out · hold to pick up the Dracula standee, tap to set it down anywhere it fits (it faces you — walk around to angle it) |
 | **Space** | Pause / play |
 | **, .** | Previous / next episode |
 | **L** (tap) | Store lights on/off, which also switches day and night |

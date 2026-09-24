@@ -424,6 +424,14 @@ const aimBlockers = [];                    // solid things you can't reach throu
 const lampPools = [];                      // side-lamp floor pools — drowned out whenever the overhead lights are on
 const lamps = [];                          // the two side lamps — holding L toggles both together
 const colliders = [];                      // axis-aligned floor boxes the player can't walk into — walls included
+// the Dracula standee: where it stands (x, z, facing ry), its mesh group once
+// the PNG has loaded, and its collider — one box, refit wherever it's set down
+const cutout = { x: 0, z: 0, ry: 0, g: null, box: { y1: 1.85 }, carried: false };
+function cutoutFit(x, z, ry, b) {            // floor box around the board's solid middle + the strut's foot behind it, at any angle
+  const c = Math.cos(ry), sn = Math.sin(ry), xs = [], zs = [];
+  for (const [lx, lz] of [[-0.4, 0.05], [0.4, 0.05], [-0.4, -0.45], [0.4, -0.45]]) { xs.push(x + lx * c + lz * sn); zs.push(z - lx * sn + lz * c); }
+  return Object.assign(b, { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) });
+}
 const doors = [];                          // hinged interior doors (see makeDoor) — E swings them
 
 // ---------------- store shell ----------------
@@ -2582,11 +2590,14 @@ const wallSpans = [];                        // what the wall runs cover, for li
     sg.position.set(cx, SHORT.h + 0.25, z + 0.066); scene.add(sg);
   }
 
+  // home spot: faces into the aisle at 45°, tucked by the MonsterVision endcap
+  Object.assign(cutout, { x: -1.3, z: bandZ(1) + 0.9, ry: -Math.PI / 4 });
   // ---- cardboard standee (cutout.js): life-size Dracula at the walkway end of
   // the MonsterVision aisle, facing the same way as the covers (into the store). Shaped exactly like the PNG
   // (alpha-tested), printed on the front, plain cardboard on the back, a few
   // cardboard layers between for a visible edge, and an easel strut folded
-  // out behind to hold it up ----
+  // out behind to hold it up. E picks it up and carries it; E again sets it
+  // down anywhere it fits (see "carrying the standee") ----
   if (window.VAULT_CUTOUT) {
     const img = new Image();
     img.onload = () => {
@@ -2601,7 +2612,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
         ctx.fillStyle = "#b98c5a"; ctx.fillRect(0, 0, w, h);
         for (let i = 0; i < 900; i++) { ctx.fillStyle = Math.random() < 0.5 ? "rgba(90,60,30,.18)" : "rgba(255,240,210,.15)"; ctx.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 6, 1); }
       };
-      const g = new THREE.Group(); g.position.set(-1.3, 0, bandZ(1) + 0.9); g.rotation.y = -Math.PI / 4; scene.add(g);   // faces into the aisle at 45°, tucked by the endcap
+      const g = cutout.g = new THREE.Group(); g.position.set(cutout.x, 0, cutout.z); g.rotation.y = cutout.ry; scene.add(g);
       const face = (tex, z, ry = 0) => {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5, side: ry ? THREE.FrontSide : THREE.DoubleSide }));
         m.position.set(0, H / 2, z); m.rotation.y = ry; g.add(m); return m;
@@ -2617,9 +2628,10 @@ const wallSpans = [];                        // what the wall runs cover, for li
       leg.position.set(0, top, -T); leg.rotation.x = Math.atan2(reach, top); g.add(leg);   // swings the foot back (-z), behind the board
       const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.004), new THREE.MeshLambertMaterial({ color: 0x8f6a42 }));
       hinge.position.set(0, top - 0.02, -T - 0.002); g.add(hinge);             // the glued tab the strut folds out from
+      g.traverse(o => { if (o.isMesh) { o.userData.cutout = true; aimables.push(o); } });
     };
     img.src = window.VAULT_CUTOUT;
-    colliders.push({ x0: -1.3 - 0.45, x1: -1.3 + 0.45, z0: bandZ(1) + 0.45, z1: bandZ(1) + 1.35, y1: 1.85 });   // board (on the diagonal) + strut footprint
+    colliders.push(cutout.box); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box);
   }
 
   // ---- candy aisle: band 1's door-side face on the register side, back to back with MonsterVision ----
@@ -3273,6 +3285,7 @@ camera.rotation.y = player.yaw;
 const keys = new Set();
 const HOLD_MS = 450;                       // tap L = overhead lights, hold L = both side lamps
 let lHoldTimer = null, lHeld = false;
+let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
   if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
@@ -3281,7 +3294,10 @@ addEventListener("keydown", e => {
   }
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
-  if (e.code === "KeyE" && !e.repeat) onE();   // one press, one action — holding E doesn't machine-gun bites, doors, the flap
+  if (e.code === "KeyE" && !e.repeat) {
+    if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
+    else onE();                              // one press, one action — holding E doesn't machine-gun bites, doors, the flap
+  }
   if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
@@ -3295,6 +3311,7 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => {
   keys.delete(e.code);
+  if (e.code === "KeyE") { clearTimeout(eHoldTimer); eHoldTimer = null; }   // let go before it's lifted: nothing happens
   if (posTerm?.isOpen() || document.pointerLockElement !== canvas) return;   // no light toggles from the pause menu either
   if (e.code === "KeyL") {
     clearTimeout(lHoldTimer);
@@ -3358,7 +3375,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -3385,10 +3402,59 @@ function toggleDoor(d) {
   colliders.push(next);
   d.open = !d.open;
 }
+// ---- carrying the standee: E lifts it off the floor and it rides ~1.3 m in
+// front of you, turned to face you (walk around it to choose its angle). E sets
+// it down if its footprint is clear, you're not in it, and nothing solid sits
+// between you and the spot; otherwise it tints red and stays in your arms ----
+const CARRY_D = 1.3, cutoutTint = new THREE.Color();
+let cutoutSpot = null;                       // where it'd land this frame, or null if it won't fit there
+function cutoutSpotAhead() {
+  const x = player.x - Math.sin(player.yaw) * CARRY_D, z = player.z - Math.cos(player.yaw) * CARRY_D, ry = player.yaw;
+  const b = cutoutFit(x, z, ry, {});
+  const clear = !colliders.some(c => c.x0 < b.x1 && c.x1 > b.x0 && c.z0 < b.z1 && c.z1 > b.z0) && !playerIn(b);
+  const inside = (px, pz) => colliders.some(c => px > c.x0 && px < c.x1 && pz > c.z0 && pz < c.z1);
+  let reach = true;
+  for (let i = 1; i <= 8 && reach; i++) reach = !inside(player.x + (x - player.x) * i / 8, player.z + (z - player.z) * i / 8);
+  return { x, z, ry, ok: clear && reach };
+}
+function cutoutCarryTick() {
+  if (!cutout.carried || !cutout.g) return;
+  const s = cutoutSpotAhead();
+  cutoutSpot = s.ok ? s : null;
+  cutout.g.position.set(s.x, 0.04, s.z); cutout.g.rotation.y = s.ry;   // lifted just off the floor
+  cutoutTint.set(s.ok ? 0xffffff : 0xff5a5a);
+  cutout.g.traverse(o => {
+    if (!o.isMesh) return;
+    o.userData.baseColor ??= o.material.color.clone();
+    o.material.color.copy(o.userData.baseColor).multiply(cutoutTint);
+  });
+}
+function cutoutSeeThrough(on) {                // life-size and facing you: see-through while carried so you can see where you're going
+  cutout.g.traverse(o => { if (o.isMesh) { o.material.transparent = on; o.material.opacity = on ? 0.45 : 1; o.material.depthWrite = !on; o.material.needsUpdate = true; } });
+}
+function cutoutPickUp() {
+  cutout.carried = true; cutoutSeeThrough(true);
+  colliders.splice(colliders.indexOf(cutout.box), 1);
+  tvBake = bakeTvVis();                      // its shadow on the TV light leaves with it
+}
+function cutoutPutDown() {
+  if (!cutoutSpot) return;
+  Object.assign(cutout, { x: cutoutSpot.x, z: cutoutSpot.z, ry: cutoutSpot.ry, carried: false });
+  cutout.g.position.set(cutout.x, 0, cutout.z);
+  cutout.g.traverse(o => { if (o.isMesh && o.userData.baseColor) o.material.color.copy(o.userData.baseColor); });
+  cutoutSeeThrough(false);
+  colliders.push(cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box));
+  tvBake = bakeTvVis();
+}
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
+  if (cutout.carried) {                      // arms full: the standee is the only thing E does
+    highlight.visible = false;
+    const tip = $("hoverTip"); tip.innerHTML = cutoutSpot ? "E — set the standee down" : "No room for the standee here"; tip.style.display = "block";
+    return;
+  }
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   const hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
   if (hit) hovered = hit.object.userData.tapes[Math.floor(hit.face.a / COVER_V)];
@@ -3432,6 +3498,7 @@ function pickHover() {
     else if (aim?.object.userData.bell && aim.distance < 2.4) aimBell = true;
     else if (aim?.object.userData.desens && aim.distance < 2.4 && held) aimDesens = true;
     else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || rewinder.tape)) aimRewinder = true;
+    else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
@@ -3446,6 +3513,7 @@ function pickHover() {
       : rewinder.done ? `E — take out ${rewinder.tape.title} · rewound`
       : `Rewinding… ${Math.round(100 * rewinder.t / rewinder.dur)}% · E — take it out early`;
     else if (aimBell) tip.innerHTML = "E — ring for service";
+    else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
     else if (aimDesens) tip.innerHTML = held.desens ? `${held.title} · already desensitized` : `E — desensitize ${held.title}`;
     else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
     else { tip.style.display = "none"; return; }
@@ -3466,7 +3534,7 @@ canvas.addEventListener("mousedown", e => {
     else if (heldPopcorn && (heldPopcorn.kind === "kernel" || !heldPopcorn.used)) dropPopcorn();   // a used box only goes in the trash
     return;
   }
-  if (e.button !== 0) return;
+  if (e.button !== 0 || cutout.carried) return;   // arms full carrying the standee
   if (tvMenu) { const hit = tvScreenHit(); if (hit) { tvMenuClick(hit.x, hit.y); return; } }
   if (held && inspecting) { inspecting = false; peek = null; return; }  // tuck the held-up tape back in hand (it's yours now)
   if (aimSlot) { putBack(); return; }                      // slotted back into its own spot on the shelf
@@ -3851,6 +3919,7 @@ function onE() {
     seated = true; player.yaw = Math.PI; player.pitch = 0;   // facing the TV
     return;
   }
+  if (cutout.carried) { cutoutPutDown(); return; }   // stays in your arms if it won't fit there
   if (aimPOS) { openPOS(); return; }
   if (aimRewinder) { rewinderUse(); return; }
   if (aimBell) { dingBell(); return; }
@@ -4013,6 +4082,7 @@ function saveState() {
     rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
+    cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
     wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
@@ -4027,6 +4097,7 @@ function loadState(S) {
     S.doors?.forEach((open, i) => { if (doors[i] && open !== doors[i].open) toggleDoor(doors[i]); });
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
+    if (S.cutout) { Object.assign(cutout, S.cutout); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box); cutout.g?.position.set(cutout.x, 0, cutout.z); cutout.g?.rotation.set(0, cutout.ry, 0); }
     payLedger.push(...(S.payLedger || []));
     for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
     for (const k of S.desens || []) { const c = copyByKey(k); if (c) c.desens = true; }
@@ -4168,6 +4239,7 @@ renderer.setAnimationLoop(() => {
   }
   camera.rotation.y = player.yaw; camera.rotation.x = player.pitch;
   invSync();
+  cutoutCarryTick();
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
     handGroup.visible = !inspecting;        // 3D box only for the carried-at-your-side pose
@@ -4195,5 +4267,5 @@ window.__t = {
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
-  doors, toggleDoor, colliders,
+  doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
 };
