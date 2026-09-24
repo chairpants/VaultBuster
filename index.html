@@ -29,6 +29,10 @@
   #controlsHelp { color: #cfe0ff; font-size: 13px; line-height: 1.9; text-align: center;
     background: #0008; padding: 14px 22px; border-radius: 8px; }
   #controlsHelp b { color: var(--bb-yellow); }
+  #controlsHelp .keys { display: grid; grid-template-columns: auto auto auto auto; gap: 4px 12px; align-items: baseline; }
+  #controlsHelp .keys b { text-align: right; }
+  #controlsHelp .keys span { text-align: left; margin-right: 18px; }
+  #controlsHelp .more { margin-top: 8px; opacity: .8; font-size: 12px; }
   @keyframes blink { 50% { opacity: .25; } }
   #titleScreen.paused #enterHint { color: #fff; }
   /* resume screen (already played once) goes translucent so the still-running
@@ -106,10 +110,13 @@
   </div>
   <div id="enterHint">CLICK TO ENTER THE STORE</div>
   <div id="controlsHelp">
-    <b>W A S D</b> — walk &nbsp;·&nbsp; <b>MOUSE</b> — look &nbsp;·&nbsp; <b>CLICK</b> a tape — pick up &amp; hold it up · <b>CLICK</b> again — tuck in hand · <b>RIGHT-CLICK</b> — put back a tape you're still looking at · <b>CLICK</b> a snack in hand — eat / drink · <b>RIGHT-CLICK</b> the TV screen — picture menu<br>
-    <b>E</b> — insert tape into the store TV &nbsp;·&nbsp; <b>E</b> (hold) — pick up the standee, tap to set it down &nbsp;·&nbsp; <b>SPACE</b> — pause / play &nbsp;·&nbsp; <b>, .</b> — prev / next episode<br>
-    <b>ESC</b> — menu &nbsp;·&nbsp; <b>SHIFT</b> — hustle &nbsp;·&nbsp; <b>C</b> — crouch &nbsp;·&nbsp; <b>L</b> — lights out<br>
-    <b>H</b> — hide HUD &nbsp;·&nbsp; <b>F</b> — fullscreen &nbsp;·&nbsp; <b>MOUSE WHEEL</b> — zoom (seated, or a held-up cover), else switch items · <b>1-9</b> — inventory slot &nbsp;·&nbsp; 1600+ tapes on the shelves
+    <div class="keys">
+      <b>W A S D</b><span>move</span>      <b>MOUSE</b><span>look</span>
+      <b>CLICK</b><span>grab</span>         <b>RIGHT-CLICK</b><span>put back</span>
+      <b>E</b><span>interact</span>         <b>1–9 / WHEEL</b><span>switch items</span>
+      <b>SHIFT</b><span>hustle</span>       <b>L</b><span>lights</span>
+    </div>
+    <div class="more">Most things do something. Poke around. &nbsp;·&nbsp; <b>ESC</b> menu</div>
   </div>
 </div>
 
