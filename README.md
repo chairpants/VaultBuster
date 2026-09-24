@@ -6,7 +6,7 @@
 
 ![Walking into VaultBuster](screenshots/entrance.jpg)
 
-Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, and play it on the big-screen TV in the lounge. Every one of the 1,600+ tapes streams real episodes and movies from the Internet Archive. It's built in three.js with no build step and no dependencies, and it runs straight from a `file://` URL.
+It's a Friday night in the 90s. Walk the aisles under the fluorescent lights, pull a tape off the shelf, and see what you can get up to before closing.
 
 ---
 
@@ -27,47 +27,14 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 
 ## Features
 
-**The store**
-- 1,607 titles, one tape per movie or per TV season, grouped by genre.
-- **New Releases walls:** every movie from 1991 on lines the outer walls, face-out. The sections run from the register wall, around the back, and down the far wall, in order Comedy, Drama, Action & Adventure, Horror, Sci-Fi & Fantasy. Hits get extra copies, up to 12, based on TMDB vote counts, so the walls fill up with about 1,230 tapes.
-- **Kids section:** in the front corner by the windows, on low shelves over its own confetti carpet. It holds kids' movies, Kids & Educational, Holiday, and the kids' shows from Animation and Anime.
-- **Center:** low gondolas on either side of the walkway to the lounge. Pre-1991 classic movies are by genre on the register side, with a second copy of the most-voted ones. TV is on the other side.
-- **Staff Picks:** a low display at the end of the walkway, facing the entrance. It holds one copy each of hand-picked movies (Hackers, Gremlins 2, Blade Runner, Mac and Me, …) and TV (The Twilight Zone, Twin Peaks, The Whitest Kids U'Know, Quantum Leap, Dragon Ball Z).
-- Real TMDB poster art on every cover. TV tapes get their own season's poster when TMDB has one.
-- **MonsterVision:** TNT's late-night Joe Bob Briggs block, split into 75 films with their own TMDB posters and a MonsterVision sticker, on a four-row unit of its own. A life-size cardboard Dracula standee stands by the endcap. Hold **E** to pick it up and carry it anywhere in the store.
-- A drink cooler and popcorn cart, a candy aisle facing the register that you can grab from, and movie posters in blinking marquee frames.
-- Carry up to 9 things at once (tapes, snacks, drinks, popcorn) in an inventory bar.
-
-**The counter**
-- One L-shaped employee counter with a returns drop slot, a pass-through by the soda cooler, a service bell, a receipt printer, and a back cabinet.
-- **Register terminal:** log in at the register for a blue-screen, DOS-style POS system reached over telnet. It has title search, browsing by section, member lookup, overdue and rentals-out reports, the returns check-in queue, a daily summary, and lounge status. Everything is driven by the keyboard, and it's mirrored on the counter monitor.
-- **Security gates:** walk out through the gates carrying a tape that still has its security tag, and the alarm goes off, with red lights and a beeping tone. Silence it from the register, or disarm the gates entirely from the POS security menu.
-- **Desensitizer:** run a tape over the pad on the counter to deactivate its tag so it can leave the store. Putting it back on a shelf re-arms it.
-- **Rewinder:** every copy remembers how far it's wound. Drop one in the counter rewinder and it rewinds for as long as it needs to, based on how far in it was.
-
-**The TV lounge**
-- Put a tape in the big projection TV and every screen in the store plays it, including the ceiling CRTs over the aisles.
-- When nothing is playing, the screens run a bouncing **VAULTBUSTER** logo screensaver, DVD-logo style.
-- The lounge sits on the Overlook Hotel's hexagon carpet from *The Shining*.
-- A couch for sitting and watching, with mouse-wheel zoom to lean in toward the screen.
-
-**Lighting**
-- Tap **L** for lights out. The overhead fluorescents flicker back on when you turn them back on, and a few of them stutter before they settle.
-- In the dark, the TV lights up the room in whatever colors are on screen, and the ceiling CRTs light the shelves under them.
-- The screens, marquee bulbs, and lamps glow. Signs never do.
-
-**Back of house**
-- A wide opening in the back wall, on the TV Shows side under a **RESTROOMS** sign, leads to a back hallway with a break room and a restroom off it.
-- A locked door at the far end of the hall is there for whatever gets built next.
-
-**Outside**
-- The storefront is glass. Outside there's a sidewalk, a striped parking lot with three parked cars, a road, a bench under an iron park lamp, and a treeline.
-- The time of day follows the store lights. Lights on means blue sky, sun, and drifting clouds. Lights out means a moonlit midnight-blue night, with sodium street lights glowing orange over the lot.
-
-**Saved between visits**
-- The store remembers itself in your browser's local storage: where you're standing, the lights and lamps, doors, your inventory (with bites left and popcorn fill), the returns bin, which copies are out on rental, the tape in the VCR, and the last episode you watched of each title.
-- A tape that was playing starts its episode again on your first click into the store. archive.org streams can't seek, so it's the episode that resumes, not the exact minute.
-- To start fresh, type `SYSRESET` at the register terminal.
+- **1,600+ tapes** of real movies and TV, and every one of them plays. Episodes stream from the Internet Archive.
+- **Almost everything is interactive.** Pick things up, carry them around, eat the snacks, work the counter. Most of it you'll have to find for yourself.
+- **The lounge:** put a tape in the big-screen TV, sink into the couch, and every screen in the store plays along.
+- **A working register** running a 90s DOS-style point-of-sale system. Log in and poke around.
+- **Security gates** that do exactly what you'd expect if you walk out with a tape you didn't check out.
+- **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
+- **Lights out:** kill the lights and the TV glow takes over the room. Outside, day turns to night.
+- **The store remembers.** Leave and come back, and everything is where you left it.
 
 ---
 
@@ -103,7 +70,7 @@ Neither server has any dependencies.
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
 | **Right-click** the TV screen | Picture settings menu |
-| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) · put a tape in the counter rewinder / take it out · hold to pick up the Dracula standee, tap to set it down anywhere it fits (it faces you — walk around to angle it) |
+| **E** | Interact: the TV, the couch, lamps, doors, the register, and plenty more. Some things want E held down |
 | **Space** | Pause / play |
 | **, .** | Previous / next episode |
 | **L** (tap) | Store lights on/off, which also switches day and night |
