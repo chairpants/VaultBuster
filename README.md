@@ -22,20 +22,28 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 ## Features
 
 **The store**
-- 1,607 tapes on gondola shelving, one tape per movie or per TV season, grouped by genre. Movies are on the left, TV Shows on the right.
+- 1,607 titles, one tape per movie or per TV season, grouped by genre.
+- **New Releases walls:** every movie from 1991 on lines the outer walls, face-out. The sections run from the register wall, around the back, and down the far wall, in order Comedy, Drama, Action & Adventure, Horror, Sci-Fi & Fantasy. Hits get extra copies, up to 12, based on TMDB vote counts, so the walls fill up with about 1,230 tapes.
+- **Kids section:** in the front corner by the windows, on low shelves over its own confetti carpet. It holds kids' movies, Kids & Educational, Holiday, and the kids' shows from Animation and Anime.
+- **Center:** low gondolas on either side of the walkway to the lounge. Pre-1991 classic movies are by genre on the register side, with a second copy of the most-voted ones. TV is on the other side.
+- **Staff Picks:** a low display at the end of the walkway, facing the entrance. It holds one copy each of hand-picked movies (Hackers, Gremlins 2, Blade Runner, Mac and Me, …) and TV (The Twilight Zone, Twin Peaks, The Whitest Kids U'Know, Quantum Leap, Dragon Ball Z).
 - Real TMDB poster art on every cover. TV tapes get their own season's poster when TMDB has one.
-- Shelving is packed with no half-empty bays. Slim genres (Anime, Music, Broadcast Blocks, Holiday) share the leftover space at the end of a bigger genre, under their own shelf sign.
-- A checkout and returns counter, a snack rack you can grab from, a popcorn cart, and movie posters in blinking marquee frames.
+- A checkout and returns counter, a drink cooler and popcorn cart, a candy aisle facing the register that you can grab from, and movie posters in blinking marquee frames.
 
 **The TV lounge**
-- Put a tape in the big projection TV and every screen in the store plays it, including the ceiling CRTs over each aisle.
+- Put a tape in the big projection TV and every screen in the store plays it, including the ceiling CRTs over the aisles.
 - When nothing is playing, the screens run a bouncing **VAULTBUSTER** logo screensaver, DVD-logo style.
+- The lounge sits on the Overlook Hotel's hexagon carpet from *The Shining*.
 - A couch for sitting and watching, with mouse-wheel zoom to lean in toward the screen.
 
 **Lighting**
 - Tap **L** for lights out. The overhead fluorescents flicker back on when you turn them back on, and a few of them stutter before they settle.
 - In the dark, the TV lights up the room in whatever colors are on screen, and the ceiling CRTs light the shelves under them.
 - The screens, marquee bulbs, and lamps glow. Signs never do.
+
+**Back of house**
+- A wide opening in the back wall, on the TV Shows side under a **RESTROOMS** sign, leads to a back hallway with a break room and a restroom off it.
+- A locked door at the far end of the hall is there for whatever gets built next.
 
 **Outside**
 - The storefront is glass. Outside there's a sidewalk, a striped parking lot with three parked cars, a road, a bench under an iron park lamp, and a treeline.
@@ -71,7 +79,7 @@ Neither server has any dependencies.
 | **Click** a tape | Pick it up and hold it up to look at it |
 | **Click** again | Tuck it in your hand |
 | **Right-click** / **Esc** | Put it back |
-| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · use the returns counter |
+| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · use the returns counter · open or close a door |
 | **Space** | Pause / play |
 | **, .** | Previous / next episode |
 | **L** (tap) | Store lights on/off, which also switches day and night |
@@ -93,6 +101,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `couch.js` | The procedurally built parlor sofa |
 | `catalog.js` | Generated tape catalog (`window.VAULT_CATALOG`) |
 | `covers.js` | Generated TMDB cover art, embedded as data URIs (`window.VAULT_ART`) |
+| `meta.js` | Generated release year and TMDB vote count per title (`window.VAULT_META`), used to sort the New Releases walls |
 | `art.js` | The older embedded cover art. `fetch-covers.mjs` falls back to it for the few shows TMDB can't match |
 | `server.js`, `server.mjs` | Optional static servers, no dependencies |
 | `drive.mjs` | Headless Playwright smoke test that walks in, picks a tape, and plays it |
@@ -103,7 +112,7 @@ The catalog and covers are generated from a local VaultVision library, which the
 
 ```sh
 node build.mjs [path-to-VaultVision]                         # -> catalog.js
-TMDB_API_KEY=... node fetch-covers.mjs [path-to-VaultVision] # -> covers.js
+TMDB_API_KEY=... node fetch-covers.mjs [path-to-VaultVision] # -> covers.js, meta.js
 ```
 
 `fetch-covers.mjs` has an `OVERRIDES` table for fixing wrong TMDB matches. The raw source images in `art/` are gitignored. The game doesn't need them at runtime.
