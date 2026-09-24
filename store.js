@@ -11,17 +11,24 @@ const STORE = { x: 11, z: 28, h: 3.6 };            // interior half-width / dept
 const BAY = { len: 1.6, rows: 4, perRow: 11, depth: 0.55, top: 0.25, h: 2.0, boardY: [0.18, 0.63, 1.08, 1.53] };
 // gondola side profile is a blunted wedge: vertical back (shared with the
 // face behind), sloped front — depth at the floor, top at BAY.h
-const frontAt = y => BAY.depth - (BAY.depth - BAY.top) * y / BAY.h;
+const frontAt = (y, spec = BAY) => spec.depth - (spec.depth - spec.top) * y / spec.h;
 const LEAN = 10 * Math.PI / 180;                  // tapes tip back against each shelf's backing board
 const CAP = BAY.rows * BAY.perRow;                 // 44 tapes per bay face (face-out covers)
+const SHORT = { ...BAY, rows: 3, boardY: [0.18, 0.63, 1.08], h: 1.5 };   // center + kids gondolas: three rows, low enough to see across the store
 const SLOT_W = 0.13, TAPE = { w: 0.032, h: 0.192, d: 0.105 }; // slot = cover + ≤1/4-tape spread
-const AISLE = { z0: 6.1, segBays: 2, segBaysTV: 4, gap: 3.1, corridor: 3 };   // z0 leaves ~1.75m past the entry rail/gates; gap trimmed so the last band stays put (couch walkway) // split bands, center corridor; segBays caps Movies chains (compact 2x2 clusters — far fewer titles), segBaysTV caps TV Shows chains
 // Movies' side wall pulled in from the original symmetric ±STORE.x so its gap
 // to the nearest shelf endcap (-4.76) matches TV Shows' gap to its wall
 // (2.98, from its endcap at 8.02) — see the aisle-layout section for that math.
 // Right/back/front-right stay at the original STORE.x scale.
 const WALL_L = -7.74;
 const WALL_SHIFT = WALL_L + STORE.x;       // how far the movie-side wall (and everything anchored to it) moves in, ~3.26
+// back of house: a block built on behind the store's back wall at the TV Shows
+// end — a hallway along the back wall, a breakroom and a restroom off it, and a
+// (locked, for now) door at the hall's far end onto the space behind the lounge
+const BOH = { x0: 2, z1: 33, hallZ: 29.8, splitX: 8.3, h: 2.7 };   // west wall, rear wall, hall/rooms wall, breakroom|restroom wall, ceiling height
+const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the store's blue wall stripe
+const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9 };   // opening centers along their walls
+const BOH_OPENING_W = 1.8;                  // the store → hall opening: wide and doorless, just a cased opening
 // cooler stock, shelf by shelf (see the cooler): r/h in meters; glass = bottle
 // color + opacity, label = [background, text]. Grabbing one hands you that unit.
 const DRINK_PRODUCTS = [
@@ -218,13 +225,87 @@ const mat = {
 let panelMats = [];                        // ceiling panel groups — dimmed in lights-out, flicker independently on warm-up
 const allLights = [];                      // every light that lights-out kills (base intensity in userData.on)
 const aimables = [];                       // E targets: TV screen, couch, lamps, returns counter, snack stand
+const aimBlockers = [];                    // solid things you can't reach through: walls, the back of a snack rack
 const lampPools = [];                      // side-lamp floor pools — drowned out whenever the overhead lights are on
 const lamps = [];                          // the two side lamps — holding L toggles both together
+const colliders = [];                      // axis-aligned floor boxes the player can't walk into — walls included
+const doors = [];                          // hinged interior doors (see makeDoor) — E swings them
 
 // ---------------- store shell ----------------
 function box(w, h, d, m, x, y, z) {
   const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
   b.position.set(x, y, z); scene.add(b); return b;
+}
+function solid(w, h, d, m, x, y, z) { colliders.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 }); return box(w, h, d, m, x, y, z); }
+// a straight wall from a0 to a1 along x (alongX) or z, centered on `at`, with
+// DOOR_H-tall openings at each of `gaps` — a center (door-wide) or { c, w }. Walls are real colliders,
+// padded so the player stops 0.5 m from a wall's centerline
+const WALL_T = 0.2, WALL_PAD = 0.08;
+function wall(a0, a1, at, alongX, h, m, gaps = []) {
+  const seg = (b0, b1, y0, y1) => {
+    const len = b1 - b0, c = (b0 + b1) / 2, y = (y0 + y1) / 2;
+    aimBlockers.push(alongX ? box(len, y1 - y0, WALL_T, m, c, y, at) : box(WALL_T, y1 - y0, len, m, at, y, c));
+    if (y0 > 0) return;                       // headers over doors don't block the floor
+    const t = WALL_T / 2 + WALL_PAD;
+    colliders.push(alongX ? { x0: b0, x1: b1, z0: at - t, z1: at + t } : { x0: at - t, x1: at + t, z0: b0, z1: b1 });
+  };
+  let a = a0;
+  for (const { c, w } of gaps.map(g => typeof g === "number" ? { c: g, w: DOOR_W } : g).sort((p, q) => p.c - q.c)) {
+    seg(a, c - w / 2, 0, h);
+    seg(c - w / 2, c + w / 2, DOOR_H, h);
+    a = c + w / 2;
+  }
+  seg(a, a1, 0, h);
+}
+// jamb + head trim around a wall() opening of width W, both faces
+// Each piece reaches 5 mm into the opening, so none of its faces sits in the
+// same plane as the wall's own cut faces (coplanar faces flicker)
+function casing(at, c, alongX, W) {
+  const trim = (w, h, x, y) => { if (alongX) box(w, h, WALL_T + 0.04, mat.frame, c + x, y, at); else box(WALL_T + 0.04, h, w, mat.frame, at, y, c + x); };
+  const IN = 0.005;
+  trim(0.06 + IN, DOOR_H + 0.06, -W / 2 - 0.03 + IN / 2, (DOOR_H + 0.06) / 2);
+  trim(0.06 + IN, DOOR_H + 0.06, W / 2 + 0.03 - IN / 2, (DOOR_H + 0.06) / 2);
+  trim(W + 0.12, 0.06 + IN, 0, DOOR_H + 0.03 - IN / 2);
+}
+// A hinged door in a wall() opening. hinge: which end of the opening (-1/+1,
+// along the wall) it hangs from; swing: which side (world -1/+1 on the axis
+// across the wall) it opens toward; signs: [{ text, side }] plates, side = the
+// world side of the wall the plate faces. Closed, it blocks the opening;
+// open, it stands ~90° into the room and blocks just its own leaf
+function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [] }) {
+  const W = DOOR_W, base = alongX ? 0 : -Math.PI / 2;   // leaf is built along local x; local +z is world +z (alongX) or world -x
+  const toLocal = side => alongX ? side : -side;
+  const pivot = new THREE.Group();
+  if (alongX) pivot.position.set(c + hinge * W / 2, 0, at); else pivot.position.set(at, 0, c + hinge * W / 2);
+  pivot.rotation.y = base; scene.add(pivot);
+  const lx = -hinge * W / 2;                    // leaf center, pivot-local
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, DOOR_H - 0.02, 0.045), leafMat);
+  leaf.position.set(lx, DOOR_H / 2, 0); pivot.add(leaf);
+  const hx = -hinge * (W - 0.12);               // hardware sits at the latch edge
+  for (const f of [-1, 1]) {
+    const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 14), mat.aluminum);
+    rose.rotation.x = Math.PI / 2; rose.position.set(hx, 0.98, f * 0.028); pivot.add(rose);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.022), mat.aluminum);
+    lever.position.set(hx + hinge * 0.05, 0.98, f * 0.045); pivot.add(lever);
+  }
+  for (const { text, side } of signs) {
+    const sg = textPlane(text, 0.42, 0.12, "#fff", "#2a2e35", "Arial", 70);
+    sg.material = new THREE.MeshLambertMaterial({ map: sg.material.map });   // lit by the room like the other signs
+    const f = toLocal(side);
+    sg.position.set(lx, 1.52, f * 0.028); if (f < 0) sg.rotation.y = Math.PI; pivot.add(sg);   // 5 mm proud of the leaf face
+  }
+  casing(at, c, alongX, W);
+  const t = WALL_T / 2 + WALL_PAD, hp = c + hinge * W / 2, sw = swing * W;
+  const shut = alongX ? { x0: c - W / 2, x1: c + W / 2, z0: at - t, z1: at + t } : { x0: at - t, x1: at + t, z0: c - W / 2, z1: c + W / 2 };
+  const openBox = alongX ? { x0: hp - 0.03, x1: hp + 0.03, z0: Math.min(at, at + sw), z1: Math.max(at, at + sw) }
+                         : { x0: Math.min(at, at + sw), x1: Math.max(at, at + sw), z0: hp - 0.03, z1: hp + 0.03 };
+  // local z the leaf's free edge heads toward = toLocal(swing); rotating by a
+  // moves it to local z = hinge * sin(a) * W/2, so the sign of a follows
+  const d = { pivot, base, a: 0, openA: Math.PI / 2 * hinge * toLocal(swing), open: false, locked, rattle: 0, shut, openBox };
+  colliders.push(shut);
+  leaf.userData.door = d; aimables.push(leaf);
+  doors.push(d);
+  return d;
 }
 {
   // interior footprint is asymmetric: movies' side wall (XL) is pulled in from
@@ -249,9 +330,10 @@ function box(w, h, d, m, x, y, z) {
   storefront(XL - 1, -1.8, 0);                                              // front-left (overlaps 1m past XL, hidden)
   storefront(1.8, XR, 0);                                                   // front-right
   box(3.6, H - 2.6, T, mat.wall, 0, 2.6 + (H - 2.6) / 2, 0);                 // above doors
-  box(XW, H, T, mat.wall, XC, H / 2, Z);                                    // back
-  box(T, H, Z, mat.wall, XL, H / 2, Z / 2);                                 // left
-  box(T, H, Z, mat.wall, XR, H / 2, Z / 2);                                 // right
+  wall(XL - T / 2, XR + T / 2, Z, true, H, mat.wall, [{ c: BOH_DOORS.store, w: BOH_OPENING_W }]);   // back, with the open way through to the back hall
+  wall(0, Z, XL, false, H, mat.wall);                                       // left
+  wall(0, Z, XR, false, H, mat.wall);                                       // right
+  colliders.push({ x0: XL, x1: XR, z0: -T / 2, z1: T / 2 + WALL_PAD });     // front: glass + closed doors, all solid
   // blue stripe around the walls at eye height — back and sides only; the
   // front is glass now, and a stripe there ran straight across the windows
   [[XC, 2.25, Z - T / 2 - 0.012, XW, 0],
@@ -290,6 +372,52 @@ function box(w, h, d, m, x, y, z) {
     door(-0.9, 1); door(0.9, -1);
   }
 
+  // back of house: hallway along the back wall, breakroom + restroom off it.
+  // Lower drop ceiling than the sales floor, plain walls, no stripe
+  const BX0 = BOH.x0, BZ0 = Z, BZ1 = BOH.z1, BH = BOH.h, HZ = BOH.hallZ, SX = BOH.splitX;
+  wall(HZ, BZ1 + T / 2, BX0, false, BH, mat.wall);                          // west, rooms part
+  wall(BZ0, HZ, BX0, false, BH, mat.wall, [BOH_DOORS.future]);              // west, hall part: the future door
+  wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall);                          // east
+  wall(BX0, XR, BZ1, true, BH, mat.wall);                                   // rear
+  wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.breakroom, BOH_DOORS.restroom]);   // hall | rooms
+  wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // breakroom | restroom
+  const vctTex = makeTexture((ctx, W, H) => {   // speckled vinyl composition tile, 8 x 8 30 cm squares per repeat
+    const n = 8, s = W / n, cols = ["#d8d2c3", "#cec7b5", "#e1dccf", "#c9c3b4"];
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = cols[Math.floor(Math.random() * cols.length)]; ctx.fillRect(x * s, y * s, s, s); }
+    for (let i = 0; i < 2200; i++) { ctx.fillStyle = Math.random() < 0.5 ? "rgba(90,80,60,.35)" : "rgba(255,255,255,.4)"; ctx.fillRect(Math.random() * W, Math.random() * H, 2, 2); }
+    ctx.strokeStyle = "rgba(0,0,0,.12)"; ctx.lineWidth = 2;
+    for (let i = 0; i <= n; i++) { ctx.beginPath(); ctx.moveTo(i * s, 0); ctx.lineTo(i * s, H); ctx.moveTo(0, i * s); ctx.lineTo(W, i * s); ctx.stroke(); }
+  }, 512, 512);
+  const bathTex = makeTexture((ctx, W, H) => {  // small white square tile, grey grout, 16 x 16 5 cm tiles per repeat
+    const n = 16, s = W / n;
+    ctx.fillStyle = "#9ea3a8"; ctx.fillRect(0, 0, W, H);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = Math.random() < 0.06 ? "#e4e8ec" : "#f3f5f7"; ctx.fillRect(x * s + 2, y * s + 2, s - 4, s - 4); }
+  }, 512, 512);
+  const floorPatch = (tex, tileM, x0, x1, z0, z1) => {
+    const t = tex.clone(); t.needsUpdate = true; t.repeat.set((x1 - x0) / tileM, (z1 - z0) / tileM);
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshLambertMaterial({ map: t }));
+    f.rotation.x = -Math.PI / 2; f.position.set((x0 + x1) / 2, 0.002, (z0 + z1) / 2); scene.add(f);
+  };
+  floorPatch(vctTex, 2.4, BX0, XR, BZ0, HZ);                                // hall — starts right where the store's carpet ends, mid-opening
+  floorPatch(vctTex, 2.4, BX0, SX, HZ, BZ1);                                // breakroom
+  floorPatch(bathTex, 0.8, SX, XR, HZ, BZ1);                                // restroom
+  const bohCeilTex = ceilTex.clone(); bohCeilTex.needsUpdate = true; bohCeilTex.repeat.set((XR - BX0) / 1.2, (BZ1 - BZ0) / 1.2);
+  const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - BZ0), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
+  bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + BZ1) / 2); scene.add(bohCeil);
+
+  // the sales floor opens straight into the hall; the rooms get painted doors, the future door is steel
+  casing(Z, BOH_DOORS.store, true, BOH_OPENING_W);
+  const steel = new THREE.MeshLambertMaterial({ color: 0x8e959d });
+  const painted = new THREE.MeshLambertMaterial({ color: 0xd9d4c7 });
+  makeDoor({ at: HZ, c: BOH_DOORS.breakroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
+    signs: [{ text: "BREAK ROOM", side: -1 }] });
+  makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
+    signs: [{ text: "RESTROOM", side: -1 }] });
+  makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, locked: true, leafMat: steel });
+  const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over the store-side doorway, above the stripe
+  rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
+  rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y = Math.PI; scene.add(rr);
+
   // fluorescent ceiling panels (merged per group, emissive) — split into a
   // handful of independently-lit groups so warm-up flicker (see setLights)
   // can hit some panels and not others, like real fluorescents restriking
@@ -298,6 +426,10 @@ function box(w, h, d, m, x, y, z) {
   for (let x = -10; x <= 10; x += 2.7) for (let z = 3; z <= 27; z += 3.7) {
     if (x < XL + 1) continue;                // don't float panels past the pulled-in movie-side wall
     const p = new THREE.PlaneGeometry(1.2, 0.6); p.rotateX(Math.PI / 2); p.translate(x, STORE.h - 0.03, z);
+    panelBuckets[Math.floor(Math.random() * PANEL_GROUPS)].push(p);
+  }
+  for (const [x, z] of [[4, 28.9], [8, 28.9], [3.9, 31.4], [6.6, 31.4], [9.6, 31.4]]) {   // back of house: hall, breakroom, restroom
+    const p = new THREE.PlaneGeometry(1.2, 0.6); p.rotateX(Math.PI / 2); p.translate(x, BOH.h - 0.03, z);
     panelBuckets[Math.floor(Math.random() * PANEL_GROUPS)].push(p);
   }
   panelMats = panelBuckets.filter(b => b.length).map(bucket => {
@@ -595,8 +727,6 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 }
 
 // ---------------- lobby + back wall dressing ----------------
-const colliders = [];
-function solid(w, h, d, m, x, y, z) { colliders.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 }); return box(w, h, d, m, x, y, z); }
 let returnSlotMesh;                          // the E target for the returns counter, set below
 let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
 let flapPivot, flapCollider;                  // the register pass-through flap, set below
@@ -817,30 +947,58 @@ let trashFlap = null, trashFlapT = 0;
 
 // ---------------- lobby extras: tile entry, snacks, popcorn ----------------
 // real video stores tiled the entry/checkout zone and carpeted the aisles —
-// same trick here: a checkerboard plane laid right over the carpet up front.
+// same trick here: a terrazzo plane laid right over the carpet up
+// front, flecked in the store's blue and yellow, split into big panels by
+// brass divider strips, with a blue border band where it meets the carpet.
 {
+  const PANEL = 1.2;                           // meters per terrazzo panel (one texture repeat)
   const tileTex = makeTexture((ctx, W, H) => {
-    const n = 8;
-    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-      ctx.fillStyle = (x + y) % 2 ? "#c9ccd1" : "#eef0f3"; ctx.fillRect(x * W / n, y * H / n, W / n, H / n);
+    ctx.fillStyle = "#e6e0d2"; ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 9000; i++) {           // fine cement grain
+      ctx.fillStyle = Math.random() < 0.5 ? "rgba(120,110,95,.18)" : "rgba(255,255,255,.35)";
+      ctx.fillRect(Math.random() * W, Math.random() * H, 1.5, 1.5);
     }
-  }, 256, 256);
+    // aggregate chips: irregular little polygons, mostly neutral stone with brand-color confetti
+    const chips = [["#1d4296", 0.2], ["#00349c", 0.14], ["#ffd400", 0.12], ["#1a1a1c", 0.1], ["#8f887b", 0.2], ["#fbf8f0", 0.14], ["#b9b1a1", 0.1]];
+    const pickChip = () => { let r = Math.random(); for (const [c, w] of chips) if ((r -= w) < 0) return c; return chips[0][0]; };
+    for (let i = 0; i < 2600; i++) {
+      const cx = Math.random() * W, cy = Math.random() * H, r = 1.5 + Math.random() ** 2.2 * 9;
+      const n = 4 + Math.floor(Math.random() * 3), rot = Math.random() * Math.PI * 2;
+      ctx.fillStyle = pickChip(); ctx.beginPath();
+      for (let k = 0; k < n; k++) {
+        const a = rot + k / n * Math.PI * 2, rr = r * (0.6 + Math.random() * 0.4);
+        ctx[k ? "lineTo" : "moveTo"](cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      }
+      ctx.fill();
+    }
+    ctx.strokeStyle = "#b8923a"; ctx.lineWidth = 6;   // brass divider strips, split across the wrap so they tile seamlessly
+    ctx.strokeRect(0, 0, W, H);
+  }, 1024, 1024);
   // tile covers just the entry lane + counter area: it ends with the entry rail
   // (z 4.35, level with the checkout edge) and at the rail line (x 1.95) — carpet
   // past the rail and out to the glass on the east side
-  const TILE_Z = 4.35, TILE_X1 = 1.95;
+  const TILE_Z = 4.35, TILE_X1 = 1.95, BORDER = 0.14;
   const XC = (WALL_L + TILE_X1) / 2, XW = TILE_X1 - WALL_L;
-  tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping;
-  tileTex.repeat.set(11 * XW / (STORE.x - WALL_L), 3 * TILE_Z / 5.5);   // same square size as before (the tile was 5.5m deep)
-  const tile = new THREE.Mesh(new THREE.PlaneGeometry(XW, TILE_Z), new THREE.MeshLambertMaterial({ map: tileTex }));
+  tileTex.repeat.set(XW / PANEL, TILE_Z / PANEL);
+  tileTex.offset.set(-((XW / PANEL) % 1), 0);   // panel seams line up with the rail edge, not the side wall
+  // matte on purpose: a Phong sheen here pays per-pixel specular for every point
+  // light in the store (~40, mostly poster marquees) across a floor that fills
+  // the screen up close — it more than halved the frame rate in the lobby
+  const terrazzo = new THREE.MeshLambertMaterial({ map: tileTex });
+  const tile = new THREE.Mesh(new THREE.PlaneGeometry(XW, TILE_Z), terrazzo);
   tile.rotation.x = -Math.PI / 2; tile.position.set(XC, 0.003, TILE_Z / 2); scene.add(tile);
+  const band = new THREE.MeshLambertMaterial({ color: BLUE });
+  for (const [w, d, x, z] of [[XW, BORDER, XC, TILE_Z - BORDER / 2], [BORDER, TILE_Z - BORDER, TILE_X1 - BORDER / 2, (TILE_Z - BORDER) / 2]]) {
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(w, d), band);
+    b.rotation.x = -Math.PI / 2; b.position.set(x, 0.008, z); scene.add(b);   // 5 mm over the tile — 1 mm flickered at a distance
+  }
 }
-// ---------------- snack center: drink cooler, popcorn machine, snack rack ----------------
-// Three fixtures in a row against the movie-side wall, just past the register's
+// ---------------- snack center: drink cooler, popcorn machine ----------------
+// Two fixtures against the movie-side wall, just past the register's
 // customer edge (z 4.35), all facing the store. Each is modeled in its own local
 // frame — front faces +z, width along x, origin at floor center — then turned
 // to face +x. Local +x ends up pointing north (toward the register).
-const SNACK_ZONE = [4.5, 7.95];              // wall z-span the fixtures cover — side-wall posters skip it
+const SNACK_ZONE = [4.5, 7.4];               // wall z-span the fixtures cover — side-wall posters skip it
 // Branding slots: set window.VAULT_BRANDING = { "cooler-marquee": "data:image/…", … }
 // (data URIs — file:// can't feed local image files to WebGL) to swap in real
 // art; each slot otherwise draws a placeholder. Slot sizes (w x h, meters):
@@ -854,6 +1012,7 @@ function brandTex(slot, w, h, draw) {
 }
 let coolerDoor = null, coolerOpen = false, coolerThermo = null;
 let popcornKit = null;                       // cup geometry/material + popcorn texture, reused for the box in your hand
+let buildSnackRack = null;                   // (width, header) -> a stocked snack rack group; set in the snack center
 {
   const WX = WALL_L + 0.1;                    // movie-side wall's inner face
   const addTo = (parent, geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
@@ -866,7 +1025,7 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
 
   // ---- drink cooler: glass-door merchandiser, 0.78 wide, 2.1 tall with its marquee ----
   {
-    const W = 0.78, D = 0.74, H = 1.86, KICK = 0.1, T = 0.035, CZ = 5.0;
+    const W = 0.78, D = 0.74, H = 1.86, KICK = 0.1, T = 0.035, CZ = 5.25;
     const g = new THREE.Group();
     const shell = new THREE.MeshLambertMaterial({ color: 0x1b1d22 });
     const liner = new THREE.MeshLambertMaterial({ color: 0xe4ebf1, emissive: 0xa9bdd0, emissiveIntensity: 0.35 });   // lit interior — glows a bit in lights-out, like a real one
@@ -1014,7 +1173,7 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
 
   // ---- popcorn machine: red kettle machine on its cart, condiment shelf on the side ----
   {
-    const PZ = 6.08, CW = 0.62, CD = 0.46, SHELF = 0.3;
+    const PZ = 6.75, CW = 0.62, CD = 0.46, SHELF = 0.3;
     const g = new THREE.Group();
     const pop = (m, what) => { m.userData.popcorn = what; aimables.push(m); return m; };   // popcorn-sequence targets
     const red = new THREE.MeshLambertMaterial({ color: 0xc8102e });
@@ -1107,8 +1266,9 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
   }
 
   // ---- snack rack: 1.62 tall, sloped shelves, every product its own shape ----
-  {
-    const RZ = 7.45, RW = 1.0, RD = 0.42, RH = 1.62;
+  // (a function: the candy aisle out on the floor builds it — see the store layout)
+  const RD = 0.42, RH = 1.62;
+  buildSnackRack = (RW, header = "SNACKS") => {
     const g = new THREE.Group();
     const frame = new THREE.MeshLambertMaterial({ color: 0x1c1f26 });
     for (const sx of [-1, 1]) addTo(g, new THREE.BoxGeometry(0.03, RH, RD), frame, sx * (RW / 2 - 0.015), RH / 2, 0);
@@ -1116,12 +1276,12 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
       ctx.fillStyle = "#2a2e36"; ctx.fillRect(0, 0, w, h);
       ctx.fillStyle = "#15171b"; for (let y = 8; y < h; y += 16) for (let x = 8; x < w; x += 16) ctx.fillRect(x, y, 3, 3);
     }, 256, 512);
-    addTo(g, new THREE.BoxGeometry(RW - 0.06, RH - 0.02, 0.02), new THREE.MeshLambertMaterial({ map: peg }), 0, RH / 2, -RD / 2 + 0.01);
+    aimBlockers.push(addTo(g, new THREE.BoxGeometry(RW - 0.06, RH - 0.02, 0.02), new THREE.MeshLambertMaterial({ map: peg }), 0, RH / 2, -RD / 2 + 0.01));
     const headerTex = brandTex("snack-header", 0.96, 0.28, (ctx, w, h) => {
       ctx.fillStyle = "#00349c"; ctx.fillRect(0, 0, w, h);
       ctx.strokeStyle = "#ffd400"; ctx.lineWidth = h * 0.06; ctx.strokeRect(h * 0.05, h * 0.05, w - h * 0.1, h - h * 0.1);
       ctx.fillStyle = "#ffd400"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = `italic 900 ${h * 0.55}px Arial Black, Arial`; ctx.fillText("SNACKS", w / 2, h * 0.53);
+      ctx.font = `italic 900 ${h * 0.55}px Arial Black, Arial`; ctx.fillText(header, w / 2, h * 0.53);
       ctx.fillStyle = "#fff"; ctx.font = `${h * 0.3}px Arial`; ctx.fillText("★", w * 0.13, h * 0.53); ctx.fillText("★", w * 0.87, h * 0.53);
     });
     addTo(g, new THREE.BoxGeometry(RW, 0.3, 0.05), frame, 0, RH - 0.15, -RD / 2 + 0.06);
@@ -1172,12 +1332,14 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
     const layout = [[0, -1, 1], [0, 1, 1], [1, -1, 1], [1, 1, 1], [2, -1, 1], [2, 1, 1], [3, -1, 3], [3, 1, 4]];
     SNACK_PRODUCTS.forEach((p, pi) => {
       const [si, half, stack] = layout[pi];
-      const tex = labelTex(p);
-      const side = new THREE.MeshLambertMaterial({ color: p.color });
-      const face = new THREE.MeshLambertMaterial({ map: tex });
-      const m = p.shape === "box" || p.shape === "bar" || p.shape === "gum" ? [side, side, side, side, face, side] : face;
-      const geo = geoFor(p);
-      p.geo = geo; p.mat = m;                  // what you get in hand is this exact geometry + material
+      if (!p.geo) {                            // built once, shared by every rack
+        const tex = labelTex(p);
+        const side = new THREE.MeshLambertMaterial({ color: p.color });
+        const face = new THREE.MeshLambertMaterial({ map: tex });
+        p.mat = p.shape === "box" || p.shape === "bar" || p.shape === "gum" ? [side, side, side, side, face, side] : face;
+        p.geo = geoFor(p);                     // what you get in hand is this exact geometry + material
+      }
+      const geo = p.geo, m = p.mat;
       const across = Math.max(1, Math.floor((RW / 2 - 0.05) / (p.w + 0.015)));
       const x0 = half * (RW / 4) - (across - 1) * (p.w + 0.015) / 2;
       for (let row = 0; row < 2; row++) for (let a = 0; a < across; a++) for (let k = 0; k < stack; k++) {
@@ -1188,8 +1350,9 @@ let popcornKit = null;                       // cup geometry/material + popcorn 
         u.userData.snack = p; aimables.push(u);
       }
     });
-    place(g, RD, RW, RZ);
-  }
+    return g;                                  // local +z faces the shopper; the pegboard back is at z = -RD/2
+  };
+  buildSnackRack.depth = RD;
 }
 
 // ---------------- posters on the walls ----------------
@@ -1207,7 +1370,7 @@ const posterMats = [];                     // lamps-out mode: posters glow faint
     if (!tape) return;                       // fewer posters than wall spots: leave the spot bare
     loader.load(artUrl(tape.art), t => {
       t.colorSpace = THREE.SRGBColorSpace;
-      const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry;
+      const g = new THREE.Group(); g.position.set(x, overWallShelf(x, z) ? 2.85 : y, z); g.rotation.y = ry;   // lifted clear of any wall shelving below it
       const back = new THREE.Mesh(new THREE.BoxGeometry(0.97, 1.39, 0.04), mat.dark);
       back.position.z = -0.027; g.add(back);
       const pm = new THREE.MeshLambertMaterial({ map: t, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: t });
@@ -1232,7 +1395,7 @@ const posterMats = [];                     // lamps-out mode: posters glow faint
   const PW = 0.97, CORNER = 0.31;                   // poster frame width
   const spread = (a, b, n) => { const gap = (b - a - n * PW) / (n + 1); return Array.from({ length: n }, (_, k) => a + gap * (k + 1) + PW * (k + 0.5)); };
   const frontXs = [...spread(WALL_L + CORNER, -2.0, 2), ...spread(2.0, STORE.x - CORNER, 2)];
-  const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(3.2, STORE.x - CORNER, 2)];
+  const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(3.2, BOH_DOORS.store - BOH_OPENING_W / 2 - 0.3, 2)];   // right half stops short of the back-hall opening
   frontXs.forEach((x, i) => placePoster(picks[i], x, 2.1, 0.26, 0, i));
   backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.1, STORE.z - 0.26, Math.PI, 4 + i));
   for (let s = 0; s < 16; s++) {           // regular run down both bare side walls, mounted on the beam
@@ -1259,7 +1422,6 @@ ORDER.forEach((c, i) => catIdx[c] = i);
   }
 }
 const atlases = [];   // {canvas, ctx, material}
-const tapeByCell = []; // cell index -> tape
 function atlasFor(n) {
   while (atlases.length <= n) {
     const canvas = document.createElement("canvas"); canvas.width = canvas.height = 2048;
@@ -1326,7 +1488,7 @@ function drawCover(tape, cell) {
     ctx.fillText(L, x0 + CW / 2, line); line += fs + 4;
   }
   if (tape.label) { ctx.fillStyle = "#ffd400"; ctx.font = "bold 15px Arial"; ctx.fillText(tape.label.slice(0, 12), x0 + CW / 2, y0 + CH - 24); }
-  tapeByCell[cell] = tape; tape.cell = cell;
+  tape.cell = cell;
   // real cover art from art/, painted over the placeholder once it loads
   if (tape.art) artLoader.load(artUrl(tape.art), tex => {
     const img = tex.image;                    // TextureLoader hands back a Texture, not an <img>
@@ -1335,7 +1497,7 @@ function drawCover(tape, cell) {
     ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x0 + 2, y0 + 2, CW - 4, CH - 4);
     a.texture.needsUpdate = true;
     tape.sideMat = sideMatFor(img);
-    if (tape.bodyMesh) tape.bodyMesh.material = tape.sideMat;   // art usually lands after the shelves are built
+    for (const c of [tape, ...(tape.copies || [])]) paintBody(c);   // art usually lands after the shelves are built
   }, undefined, () => {});
 }
 catalog.forEach((tape, i) => drawCover(tape, i + 1));                          // cell 0 reserved
@@ -1349,7 +1511,57 @@ function cellUV(cell) {
 
 // ---------------- shelves ----------------
 // Face = one category chunk on one side of a band; a side = faces chained along x.
-const faceMeshes = [];
+// Everything on the shelves gets merged into a handful of big meshes once the
+// store is laid out (flushShelves): thousands of separate tape and board
+// meshes made per-object overhead the bottleneck (the bloom pass walks every
+// mesh twice a frame). Taking a tape off a shelf collapses its own vertices in
+// the merged mesh instead of hiding a mesh of its own.
+const shelfParts = new Map();                 // material -> [world-space geometry]
+const coverParts = new Map();                 // atlas index -> [{ geo, tape }]
+const bodyParts = [];                         // [{ geo, tape }]
+const coverMeshes = [];                       // merged covers, for picking: userData.tapes[i] owns vertices 4i..4i+3
+const COVER_V = 4, BODY_V = 24;               // vertices per cover plane / tape box
+const bodyColor = new THREE.Color(0x101318);  // plain black case until the cover art tells us its color
+let bodyMesh = null;
+function addShelfPart(material, geo) {
+  if (!shelfParts.has(material)) shelfParts.set(material, []);
+  shelfParts.get(material).push(geo.index ? geo.toNonIndexed() : geo);   // Extrude geometry isn't indexed; merging needs them all alike
+}
+function paintBody(tape) {                    // a copy's case takes its cover's dominant color (see sideMatFor)
+  if (!bodyMesh || !tape.slot) return;
+  const c = tape.sideMat ? tape.sideMat.color : bodyColor, col = bodyMesh.geometry.attributes.color;
+  for (let i = 0; i < BODY_V; i++) col.setXYZ(tape.slot.bv + i, c.r, c.g, c.b);
+  col.needsUpdate = true;
+}
+function setOnShelf(tape, on) {               // show/hide one copy in the merged shelf meshes
+  const sl = tape.slot;
+  if (!sl || tape.offShelf === !on) return;
+  for (const [mesh, v0, n] of [[sl.cover, sl.cv, COVER_V], [bodyMesh, sl.bv, BODY_V]]) {
+    const pos = mesh.geometry.attributes.position;
+    if (!on) { sl.saved.set(mesh, pos.array.slice(v0 * 3, (v0 + n) * 3)); for (let i = 0; i < n; i++) pos.setXYZ(v0 + i, 0, -10, 0); }   // collapse it under the floor
+    else pos.array.set(sl.saved.get(mesh), v0 * 3);
+    pos.needsUpdate = true;
+  }
+  tape.offShelf = !on;
+}
+function flushShelves() {
+  for (const [material, geos] of shelfParts) scene.add(new THREE.Mesh(mergeGeometries(geos), material));
+  for (const [a, parts] of coverParts) {
+    const m = new THREE.Mesh(mergeGeometries(parts.map(p => p.geo)), atlases[a].material);
+    m.userData.tapes = parts.map(p => p.tape);
+    parts.forEach((p, i) => { p.tape.slot = { cover: m, cv: i * COVER_V, bv: 0, saved: new Map() }; p.tape.offShelf = false; });   // own props on every copy
+    coverMeshes.push(m); scene.add(m);
+  }
+  bodyParts.forEach(({ geo, tape }, i) => {
+    const c = tape.sideMat ? tape.sideMat.color : bodyColor, col = new Float32Array(geo.attributes.position.count * 3);
+    for (let v = 0; v < col.length; v += 3) { col[v] = c.r; col[v + 1] = c.g; col[v + 2] = c.b; }
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    tape.slot.bv = i * BODY_V;
+  });
+  bodyMesh = new THREE.Mesh(mergeGeometries(bodyParts.map(p => p.geo)), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  scene.add(bodyMesh);
+  shelfParts.clear(); coverParts.clear(); bodyParts.length = 0;
+}
 const catStripMat = {};  // yellow header strip per category
 function stripTexture(cat) {
   const t = makeTexture((ctx, W, H) => {
@@ -1366,41 +1578,46 @@ function stripTexture(cat) {
 // tapes into the row below. Returns the padded (CAP-length, gaps as null)
 // tapes array for that single shared bay, the header descriptor for
 // buildFace, and whatever of next's tapes didn't fit (to shelve normally).
-function mergeIntoTail(tail, next, label) {
-  const rowsUsed = Math.ceil(tail.length / BAY.perRow);
-  const headerStart = rowsUsed * BAY.perRow;
-  const contentStart = headerStart + BAY.perRow;
-  const avail = Math.max(0, CAP - contentStart);
+function mergeIntoTail(tail, next, label, spec = BAY) {
+  const cap = spec.rows * spec.perRow;
+  const rowsUsed = Math.ceil(tail.length / spec.perRow);
+  const headerStart = rowsUsed * spec.perRow;
+  const contentStart = headerStart + spec.perRow;
+  const avail = Math.max(0, cap - contentStart);
   const headCount = tail.length ? Math.min(next.length, avail) : 0;   // no tail = no leftover row to share
-  const arr = new Array(CAP).fill(null);
+  const arr = new Array(cap).fill(null);
   tail.forEach((t, i) => arr[i] = t);
   for (let i = 0; i < headCount; i++) arr[contentStart + i] = next[i];
   return { arr, header: headCount ? { index: headerStart, label } : null, leftover: next.slice(headCount) };
 }
 // cover-face center of a tape leaning back LEAN on shelf row r, its top resting
 // on that row's backing (which stands where the next row's front edge is)
-function leanAt(r) {
-  const y0 = BAY.boardY[r] + 0.02, back = frontAt(BAY.boardY[r + 1] ?? BAY.h);
+function leanAt(r, spec = BAY) {
+  const y0 = spec.boardY[r] + 0.02, back = frontAt(spec.boardY[r + 1] ?? spec.h, spec);
   const sn = Math.sin(LEAN), cs = Math.cos(LEAN);
   const xb0 = back + TAPE.h * sn + 0.002;          // bottom-back corner, so the top-back corner just touches
   return { cx: xb0 - TAPE.h / 2 * sn + (TAPE.w + 0.001) * cs, cy: y0 + TAPE.h / 2 * cs + (TAPE.w + 0.001) * sn };
 }
-function buildFace(tapes, ax, az, s, m, headers = [], lead = true) {   // s: faces ±z, m: extends ±x along the band; headers: mid-run category signs on an otherwise-empty row; lead=false shares the previous face's end panel
-  const nBays = Math.max(1, Math.ceil(tapes.length / CAP));
-  // +m runs to the shopper's left on m>0 faces (either rotation), so mirror
-  // bay and slot order there — every face then reads left→right, top→bottom
+// ry: the face's rotation — its shelves face local +x turned by ry (so ry=0
+// faces +x, π faces -x, -π/2 faces +z, π/2 faces -z); m: which way along local z
+// the bays extend from the anchor. spec: the gondola (BAY, or SHORT)
+function buildFace(tapes, ax, az, ry, m, headers = [], lead = true, spec = BAY, label = null) {   // label: header-strip text, instead of the first tape's genre   // headers: mid-run category signs on an otherwise-empty row; lead=false shares the previous face's end panel
+  const cap = spec.rows * spec.perRow;
+  const nBays = Math.max(1, Math.ceil(tapes.length / cap));
+  // local +z runs to the shopper's left, so mirror bay and slot order on m>0
+  // faces — every face then reads left→right, top→bottom
   const flip = m > 0;
   const place = k => {
-    const rem = k % CAP, row = BAY.rows - 1 - Math.floor(rem / BAY.perRow); // fill top-down: partial faces keep tapes at eye level
-    let bay = Math.floor(k / CAP), slot = rem % BAY.perRow;
-    if (flip) { bay = nBays - 1 - bay; slot = BAY.perRow - 1 - slot; }
-    return { row, bay, lz: m * (bay * BAY.len + 0.08 + (slot + 0.5) * SLOT_W) };
+    const rem = k % cap, row = spec.rows - 1 - Math.floor(rem / spec.perRow); // fill top-down: partial faces keep tapes at eye level
+    let bay = Math.floor(k / cap), slot = rem % spec.perRow;
+    if (flip) { bay = nBays - 1 - bay; slot = spec.perRow - 1 - slot; }
+    return { row, bay, lz: m * (bay * spec.len + 0.08 + (slot + 0.5) * SLOT_W) };
   };
   const covers = [], bodies = [], boards = [], uprights = [], backings = [];
   tapes.forEach((tape, k) => {
     if (!tape) { covers.push(null); bodies.push(null); return; }   // reserved gap: header row or unused slot
     const { row, lz } = place(k);
-    const { cx, cy } = leanAt(row);
+    const { cx, cy } = leanAt(row, spec);
     const p = new THREE.PlaneGeometry(TAPE.d, TAPE.h);                          // face-out cover
     const [u0, v0, u1, v1] = cellUV(tape.cell);
     const uv = p.attributes.uv;
@@ -1414,229 +1631,384 @@ function buildFace(tapes, ax, az, s, m, headers = [], lead = true) {   // s: fac
   // stepped shelves: each board's front edge sits on the sloped face, and a
   // white backing rises from it to the next board's front edge — so the
   // backing a row leans on is exactly where the row above starts
-  const riseTo = r => BAY.boardY[r + 1] ?? BAY.h;
+  const riseTo = r => spec.boardY[r + 1] ?? spec.h;
   for (let bay = 0; bay < nBays; bay++) {
-    const zc = m * (bay * BAY.len + BAY.len / 2), zl = BAY.len - 0.05;
-    BAY.boardY.forEach((y, r) => {
-      const d = frontAt(y);
+    const zc = m * (bay * spec.len + spec.len / 2), zl = spec.len - 0.05;
+    spec.boardY.forEach((y, r) => {
+      const d = frontAt(y, spec);
       const g = new THREE.BoxGeometry(d, 0.04, zl); g.translate(d / 2, y, zc); boards.push(g);
       // spans top of this board → underside of the next board/cap (overlap z-fights)
-      const xb = frontAt(riseTo(r)), y0 = y + 0.02, y1 = riseTo(r) - (r < BAY.rows - 1 ? 0.02 : 0.04);
+      const xb = frontAt(riseTo(r), spec), y0 = y + 0.02, y1 = riseTo(r) - (r < spec.rows - 1 ? 0.02 : 0.04);
       const w = new THREE.BoxGeometry(0.015, y1 - y0, zl); w.translate(xb - 0.0075, (y0 + y1) / 2, zc); backings.push(w);
     });
-    const cap = new THREE.BoxGeometry(BAY.top, 0.04, zl); cap.translate(BAY.top / 2, BAY.h - 0.02, zc); uprights.push(cap);
-    const kick = new THREE.BoxGeometry(0.02, BAY.boardY[0], zl);                  // toe kick under the bottom shelf
-    kick.translate(frontAt(0) - 0.03, BAY.boardY[0] / 2, zc); uprights.push(kick);
+    const top = new THREE.BoxGeometry(spec.top, 0.04, zl); top.translate(spec.top / 2, spec.h - 0.02, zc); uprights.push(top);
+    const kick = new THREE.BoxGeometry(0.02, spec.boardY[0], zl);                  // toe kick under the bottom shelf
+    kick.translate(frontAt(0, spec) - 0.03, spec.boardY[0] / 2, zc); uprights.push(kick);
+    const back = new THREE.BoxGeometry(0.02, spec.h, spec.len); back.translate(0.005, spec.h / 2, zc); uprights.push(back);   // solid back: a run with nothing behind it shows a panel, not bare shelving. It sits 5 mm behind x=0, where the boards, caps and end panels all stop, so their back faces hide inside it instead of flickering against it
   }
-  const side = new THREE.Shape([[0, 0], [BAY.depth, 0], [BAY.top, BAY.h], [0, BAY.h]].map(([x, y]) => new THREE.Vector2(x, y)));
+  const side = new THREE.Shape([[0, 0], [spec.depth, 0], [spec.top, spec.h], [0, spec.h]].map(([x, y]) => new THREE.Vector2(x, y)));
   for (let b = lead ? 0 : 1; b <= nBays; b++) {   // blue wedge end panels at every bay boundary
-    const u = new THREE.ExtrudeGeometry(side, { depth: 0.05, bevelEnabled: false }); u.translate(0, 0, m * b * BAY.len - 0.025); uprights.push(u);
+    const u = new THREE.ExtrudeGeometry(side, { depth: 0.05, bevelEnabled: false }); u.translate(0, 0, m * b * spec.len - 0.025); uprights.push(u);
   }
 
   const group = new THREE.Group();
-  // s>0 face looks +z (front of store), s<0 looks -z; both span ax → ax±len along x
-  group.rotation.y = s > 0 ? -Math.PI / 2 : Math.PI / 2;
+  group.rotation.y = ry;
   group.position.set(ax, 0, az);
-  // covers can live in different atlases — merge per atlas, one mesh each
-  const bucket = new Map();
+  group.updateMatrixWorld(true);
+  const M = group.matrixWorld;                  // everything goes into the merged shelf meshes in world space (see flushShelves)
   tapes.forEach((tape, k) => {
     if (!tape) return;
     const a = Math.floor(tape.cell / CELLS);
-    if (!bucket.has(a)) bucket.set(a, []);
-    bucket.get(a).push(k);
+    if (!coverParts.has(a)) coverParts.set(a, []);
+    coverParts.get(a).push({ geo: covers[k].applyMatrix4(M), tape });   // this exact copy — duplicates share a cover cell, so the cell can't say which
+    bodyParts.push({ geo: bodies[k].applyMatrix4(M), tape });
   });
-  for (const [a, ks] of bucket) {
-    // ponytail: replaced mergeGeometries with individual meshes for file:// support
-    ks.forEach(k => {
-      const m = new THREE.Mesh(covers[k], atlases[a].material);
-      m.userData.face = { group, tapes, atlas: a };
-      tapes[k].coverMesh = m;
-      faceMeshes.push(m); group.add(m);
-    });
-  }
-  bodies.forEach((g, k) => {
-    if (!g) return;
-    const bm = new THREE.Mesh(g, tapes[k].sideMat || mat.tapeBody);
-    tapes[k].bodyMesh = bm;
-    group.add(bm);
-  });
-  boards.forEach(g => group.add(new THREE.Mesh(g, mat.board)));
-  backings.forEach(g => group.add(new THREE.Mesh(g, mat.backing)));
-  uprights.forEach(g => group.add(new THREE.Mesh(g, mat.upright)));
+  boards.forEach(g => addShelfPart(mat.board, g.applyMatrix4(M)));
+  backings.forEach(g => addShelfPart(mat.backing, g.applyMatrix4(M)));
+  uprights.forEach(g => addShelfPart(mat.upright, g.applyMatrix4(M)));
   // header strip on the top backing, above the top row of tapes; genre labels live on the endcaps
-  const cat = tapes.find(Boolean).category;
+  const cat = label || tapes.find(Boolean).category;
   if (!catStripMat[cat]) catStripMat[cat] = stripTexture(cat);
   for (let bay = 0; bay < nBays; bay++) {
-    const h = new THREE.Mesh(new THREE.PlaneGeometry(BAY.len - 0.1, 0.16), catStripMat[cat]);
-    h.position.set(BAY.top + 0.002, 1.85, m * (bay * BAY.len + BAY.len / 2));
-    h.rotation.y = Math.PI / 2; group.add(h);
+    const h = new THREE.PlaneGeometry(spec.len - 0.1, 0.16);
+    h.rotateY(Math.PI / 2); h.translate(spec.top + 0.006, spec.h - 0.15, m * (bay * spec.len + spec.len / 2));   // 6 mm off the backing: closer flickers at a distance
+    addShelfPart(catStripMat[cat], h.applyMatrix4(M));
   }
   // mid-run sign: a slim category riding the leftover shelf space gets its
   // own small placard on the empty row, right above where its tapes start
   headers.forEach(({ index, label }) => {
     if (!catStripMat[label]) catStripMat[label] = stripTexture(label);
     const { row, bay } = place(index);
-    const { cx, cy } = leanAt(row);
-    const lz = m * (bay * BAY.len + 0.08 + BAY.perRow * SLOT_W / 2);
-    const hp = new THREE.PlaneGeometry(BAY.perRow * SLOT_W - 0.1, TAPE.h);
+    const { cx, cy } = leanAt(row, spec);
+    const lz = m * (bay * spec.len + 0.08 + spec.perRow * SLOT_W / 2);
+    const hp = new THREE.PlaneGeometry(spec.perRow * SLOT_W - 0.1, TAPE.h);
     hp.rotateY(Math.PI / 2); hp.rotateZ(LEAN); hp.translate(cx, cy, lz);
-    group.add(new THREE.Mesh(hp, catStripMat[label]));
+    addShelfPart(catStripMat[label], hp.applyMatrix4(M));
   });
-  scene.add(group);
-  group.updateMatrixWorld(true);
   // world-space slot position per tape (for hover highlight)
   tapes.forEach((tape, k) => {
     if (!tape) return;
     const { row, lz } = place(k);
-    const { cx, cy } = leanAt(row);
+    const { cx, cy } = leanAt(row, spec);
     tape.pos = new THREE.Vector3(cx, cy, lz).applyMatrix4(group.matrixWorld);
+    tape.ry = ry;                                 // hover highlight turns to match the shelf
   });
-  const dx = (s > 0 ? -m : m) * nBays * BAY.len;
-  colliders.push({ x0: Math.min(ax, ax + dx), x1: Math.max(ax, ax + dx),
-                   z0: s > 0 ? az : az - BAY.depth, z1: s > 0 ? az + BAY.depth : az });
-  return nBays * BAY.len;
+  const len = nBays * spec.len;
+  const corners = [[0, 0], [spec.depth, 0], [0, m * len], [spec.depth, m * len]]   // footprint, local (x, z) → world
+    .map(([x, z]) => [ax + x * Math.cos(ry) + z * Math.sin(ry), az - x * Math.sin(ry) + z * Math.cos(ry)]);
+  colliders.push({ x0: Math.min(...corners.map(c => c[0])), x1: Math.max(...corners.map(c => c[0])),
+                   z0: Math.min(...corners.map(c => c[1])), z1: Math.max(...corners.map(c => c[1])) });
+  return len;
 }
 
-// ---------------- aisle layout ----------------
-// movies (single-episode tapes) west, shows east, split by a center corridor
+// ---------------- store layout ----------------
+// Three zones:
+//  - kids: the front corner by the windows on the TV Shows side — kids' movies,
+//    shows, cartoons, kids' anime and Holiday, on low shelving over its own carpet
+//  - the outer walls: movies from NEW_FROM on, in genre order sweeping from the
+//    register wall around the back to the far wall, face-out, with extra copies
+//    of the hits (more TMDB votes = more copies) so the walls fill up without
+//    using up titles
+//  - the center: low gondolas either side of the door→lounge corridor with
+//    everything else — the older movies by genre (west), then TV (east)
+const NEW_FROM = 1991;
+const WALL_GENRES = ["Comedy", "Drama", "Action & Adventure", "Horror", "Sci-Fi & Fantasy"];   // most titles first
+const MAX_COPIES = 12;
+// wall runs in sweep order: anchor = the run's end on the shopper's right, ry
+// faces it into the room, and bays extend to the shopper's left (m = +1)
+const WALL_RUNS = [
+  { x: WALL_L + 0.1, z: 8.1, ry: 0, bays: 12 },                     // register (Movies) wall, front → back, just past the snack center
+  { x: WALL_L + 0.1 + BAY.depth, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 2 },   // back wall, left of the lounge
+  { x: 3.89, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 3 },          // back wall, right of the lounge, up to the back-hall opening
+  { x: STORE.x - 0.1, z: 26.8, ry: Math.PI, bays: 11 },             // far wall, back → front, stopping short of the opening and the kids section
+];
+const CENTER = { corridor: 1.5, westBays: 2, eastBays: 4, z0: 8.6, gap: 2.0, bands: 4 };   // corridor = half-width of the door→lounge walkway; z0 = front band's door-side face
+const KIDS = { bandX: [4.75, 8.15], z0: 1.1, bays: 4, x0: 1.95, x1: STORE.x - 0.1, z1: 8.3 };   // bandX = each band's center plane; x0..x1/z0..z1 = the carpet
+// is this spot on a wall above one of the wall runs? (posters get lifted over them)
+function overWallShelf(x, z) {
+  return wallSpans.some(w => w.axis === "x" ? Math.abs(x - w.at) < 0.5 && z > w.a0 - 0.5 && z < w.a1 + 0.5
+                                            : Math.abs(z - w.at) < 0.5 && x > w.a0 - 0.5 && x < w.a1 + 0.5);
+}
+const crtSpots = [];                         // ceiling CRT clusters, filled in below: [x, z]
+const wallSpans = [];                        // what the wall runs cover, for lifting posters above them: { axis, at, a0, a1 }
 {
-  const chunk = ts => { const out = []; for (let i = 0; i < ts.length; i += CAP * 2) out.push({ tapes: ts.slice(i, i + CAP * 2), headers: [] }); return out; }; // ≤2 bays per face
-  const nbays = f => Math.max(1, Math.ceil(f.tapes.length / CAP));
-  // Group a tape list into per-category units (bay count + ≤2-bay chunk
-  // faces), in orderList sequence. Any [prev, next] pair in merges folds
-  // next's tapes into the leftover shelf space at the end of prev's last
-  // (partial) bay — see mergeIntoTail — instead of next getting its own faces.
-  const buildUnits = (list, orderList, merges) => {
-    const byCat = new Map();
-    for (const t of list) { if (!byCat.has(t.category)) byCat.set(t.category, []); byCat.get(t.category).push(t); }
-    const mergedAway = new Set(merges.map(([, next]) => next));
-    const order = [...orderList.filter(c => byCat.has(c)), ...[...byCat.keys()].filter(c => !orderList.includes(c) && !mergedAway.has(c))];
-    const units = [];
-    for (const c of order) {
-      if (mergedAway.has(c)) continue;                  // folded into its predecessor's tail, below
-      const ts = byCat.get(c);
-      const merge = merges.find(([prev]) => prev === c);
-      if (!merge || !byCat.has(merge[1])) { units.push({ bays: nbays({ tapes: ts }), faces: chunk(ts) }); continue; }
-      const tailCount = ts.length % CAP;
-      const main = ts.slice(0, ts.length - tailCount), tail = ts.slice(ts.length - tailCount);
-      const { arr, header, leftover } = mergeIntoTail(tail, byCat.get(merge[1]), merge[1]);
-      const faces = [...chunk(main), { tapes: arr, headers: header ? [header] : [] }, ...chunk(leftover)];
-      units.push({ bays: faces.reduce((a, f) => a + nbays(f), 0), faces });
-    }
-    return units;
-  };
-  // A category (or merge-pair) larger than one aisle's cap gets its own
-  // dedicated chain(s), filled front-to-back so it never has to resume in a
-  // later aisle; whatever's left in its last chain is offered up as slack.
-  // Smaller categories then best-fit into that slack (tightest gap first)
-  // before opening a fresh chain, so slim categories like Reality TV land in
-  // the room a bigger one left behind instead of needing shelving of their own.
-  const packTight = (units, hardCap) => {
-    const big = units.filter(u => u.bays > hardCap);
-    const small = units.filter(u => u.bays <= hardCap).sort((a, b) => b.bays - a.bays);
-    const chains = [];                      // [{ used, faces }]
-    const gaps = [];                        // [{ ci, room }] leftover room in a chain
-    for (const u of big) {
-      let rem = u.faces.slice();
-      while (rem.length) {
-        const c = { used: 0, faces: [] };
-        while (rem.length && c.used + nbays(rem[0]) <= hardCap) { const f = rem.shift(); c.used += nbays(f); c.faces.push(f); }
-        chains.push(c);
-        if (c.used < hardCap) gaps.push({ ci: chains.length - 1, room: hardCap - c.used });
-      }
-    }
-    for (const u of small) {
-      gaps.sort((a, b) => a.room - b.room);
-      const g = gaps.find(g => g.room >= u.bays);
-      if (g) {
-        chains[g.ci].faces.push(...u.faces); chains[g.ci].used += u.bays; g.room -= u.bays;
-        if (!g.room) gaps.splice(gaps.indexOf(g), 1);
-      } else {
-        const c = { used: u.bays, faces: u.faces.slice() };
-        chains.push(c);
-        if (c.used < hardCap) gaps.push({ ci: chains.length - 1, room: hardCap - c.used });
-      }
-    }
-    return chains.map(c => c.faces);
-  };
-  // movies west, shows east — but a genre with fewer movies than a full row
-  // joins its shows section instead of stranding across the store; two
-  // Stephen King TV-movie miniseries (multi-part, so not caught by the
-  // single-episode movie check) join the Movies shelf by name instead
+  const meta = window.VAULT_META || {};
+  const yearOf = t => meta[t.id]?.[0] ?? 0, votesOf = t => meta[t.id]?.[1] ?? 0;
+  // movies are single-episode tapes in a genre with at least a shelf row of them;
+  // two Stephen King TV-movie miniseries (multi-part) count as movies by name
   const TV_MOVIE_IDS = new Set(["TheShining1997", "Tommyknockers"]);
   const mvCount = new Map();
   for (const t of catalog) if (t.seasons[0].episodes.length === 1) mvCount.set(t.category, (mvCount.get(t.category) || 0) + 1);
-  const westList = [], eastList = [];
-  for (const t of catalog) {
-    const isMovie = t.seasons[0].episodes.length === 1 && mvCount.get(t.category) >= BAY.perRow;
-    (isMovie || TV_MOVIE_IDS.has(t.id) ? westList : eastList).push(t);
+  const isMovie = t => (t.seasons[0].episodes.length === 1 && mvCount.get(t.category) >= BAY.perRow) || TV_MOVIE_IDS.has(t.id);
+  // Animation and Anime each hold both kids' and grown-up shows — the grown-up
+  // ones stay in the center, everything else in those two goes to kids
+  const ADULT_TOON = /^(Aeon Flux|Beavis|Big Mouth|The Boondocks|the Brak|Common Side|Daria|Drawn Together|Duckman|Home Movies|Moral Orel|the Oblongs|The PJs|The Simpsons|Spawn|Undergrads|Bob and Margaret|The Ren & Stimpy)/i;
+  const KID_ANIME = /^(Digimon|Dragon Ball|Pok|Monster Rancher|Ultimate Muscle)/i;
+  const isKids = t => ["Family & Kids", "Kids & Educational", "Holiday"].includes(t.category)
+    || (t.category === "Animation" && !ADULT_TOON.test(t.title)) || (t.category === "Anime" && KID_ANIME.test(t.title));
+  const isWall = t => isMovie(t) && WALL_GENRES.includes(t.category) && yearOf(t) >= NEW_FROM;
+
+  // ---- shelving helpers ----
+  const capOf = spec => spec.rows * spec.perRow;
+  // Shelve a block of gondola runs as one continuous snake: runs are given in
+  // walking order (down one side of a band, around its endcap, back up the
+  // other side, across the aisle to the next band) and every genre fills the
+  // next stretch of whole bays — so each genre stays in one unbroken stretch,
+  // however many runs it turns the corner onto. Spare bays go to the most
+  // crowded genres (tapes spread evenly across a genre's bays), so no bay is
+  // left bare. ride: { host: guest } lets a genre too small for a bay of its
+  // own sit on its host's last bay, under its own placard.
+  const layBlock = (list, order, runs, spec, ride = {}, fill = null) => {   // fill(tapes, slots) → tapes: restock a genre once its bays are set
+    const cap = capOf(spec), byCat = new Map();
+    for (const t of list) { if (!byCat.has(t.category)) byCat.set(t.category, []); byCat.get(t.category).push(t); }
+    const cats = [...order.filter(c => byCat.has(c)), ...[...byCat.keys()].filter(c => !order.includes(c))];   // anything unlisted goes last
+    const rowsFor = n => Math.ceil(n / spec.perRow);
+    const units = [], riding = new Set();
+    for (const c of cats) {
+      if (riding.has(c)) continue;
+      const u = { cat: c, tapes: byCat.get(c) };
+      u.bays = Math.ceil(u.tapes.length / cap);
+      const g = ride[c], gt = g && byCat.get(g);
+      const lastBay = u.tapes.length - Math.floor(u.tapes.length / u.bays) * (u.bays - 1);   // roughly — even spread, the last bay holds the remainder
+      if (gt && rowsFor(lastBay) + 1 + rowsFor(gt.length) <= spec.rows) { u.guest = { cat: g, tapes: gt }; riding.add(g); }
+      units.push(u);
+    }
+    const total = runs.reduce((a, r) => a + r.bays, 0);
+    let spare = total - units.reduce((a, u) => a + u.bays, 0);
+    if (spare < 0) console.warn(`shelving short by ${-spare} bays for: ${cats.join(", ")}`);
+    while (spare-- > 0) units.reduce((a, u) => u.tapes.length / u.bays > a.tapes.length / a.bays ? u : a).bays++;
+    if (fill) for (const u of units) if (!u.guest) u.tapes = fill(u.tapes, u.bays * cap);
+    const bays = [];                                   // [{ cat, tapes (cap long, nulls = empty), headers }]
+    for (const u of units) {
+      for (let i = 0, from = 0; i < u.bays; i++) {
+        const n = Math.floor(u.tapes.length / u.bays) + (i < u.tapes.length % u.bays ? 1 : 0);   // spread evenly
+        const slice = u.tapes.slice(from, from + n); from += n;
+        if (u.guest && i === u.bays - 1) {
+          const { arr, header } = mergeIntoTail(slice, u.guest.tapes, u.guest.cat, spec);
+          bays.push({ cat: u.cat, tapes: arr, headers: header ? [header] : [] });
+        } else {                                       // a part-filled bay spreads its tapes evenly over its shelves, not a full top row and a straggler
+          const arr = Array(cap).fill(null);
+          for (let r = 0, k = 0; r < spec.rows; r++)
+            for (let i = 0, n = Math.floor(slice.length / spec.rows) + (r < slice.length % spec.rows ? 1 : 0); i < n; i++) arr[r * spec.perRow + i] = slice[k++];
+          bays.push({ cat: u.cat, tapes: arr, headers: [] });
+        }
+      }
+    }
+    let bi = 0;
+    for (const r of runs) {                            // each run takes its next stretch of bays; one face per genre within it
+      const mine = bays.slice(bi, bi + r.bays); bi += r.bays;
+      const faces = [];
+      mine.forEach(bay => {
+        const f = faces[faces.length - 1];
+        if (f && f.cat === bay.cat) { bay.headers.forEach(h => f.headers.push({ ...h, index: h.index + f.tapes.length })); f.tapes.push(...bay.tapes); }
+        else faces.push({ cat: bay.cat, tapes: [...bay.tapes], headers: [...bay.headers] });
+      });
+      buildRun(faces, r.x, r.z, r.ry, r.dx, r.dz, spec);
+    }
+    return Object.fromEntries(units.map(u => [u.cat + (u.guest ? " + " + u.guest.cat : ""), u.bays]));
+  };
+  // One double-sided gondola run: faces laid end to end from (x, z) along
+  // world direction (dx, dz), shelves facing ry, with the stacked genre list
+  // on the blue endcap at each end
+  const buildRun = (chain, x, z, ry, dx, dz, spec) => {
+    if (!chain.length) return;
+    const lx = Math.sin(ry), lz = Math.cos(ry);                     // the face's local +z, in world
+    const m = Math.sign(lx * dx + lz * dz);                         // bays extend toward (dx, dz)
+    // m>0 runs read toward the anchor, so lay their faces out last-first —
+    // then every run reads left→right, and consecutive runs join end-to-end:
+    // a genre snakes down one side of a band and back up the other
+    let at = 0;
+    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec); });
+    const cats = [...new Set(chain.flatMap(f => f.tapes.filter(Boolean).map(t => t.category)))];
+    const tag = tagPlane(cats, frontAt(1.1 + cats.length * 0.08, spec) - 0.04, 0.14);   // fits the wedge where its top edge is
+    const nx = Math.cos(ry), nz = -Math.sin(ry), off = frontAt(1.1, spec) / 2;        // out from the back plane, to mid-wedge
+    [[-0.033, Math.atan2(-dx, -dz)], [at + 0.033, Math.atan2(dx, dz)]].forEach(([d, rot], i) => {   // 8 mm off the 5 cm end panels
+      const t = i ? tag.clone() : tag;
+      t.position.set(x + dx * d + nx * off, 1.1, z + dz * d + nz * off); t.rotation.y = rot; scene.add(t);
+    });
+  };
+
+  // ---- the walls: newer movies, with copies of the hits ----
+  const wallBays = WALL_RUNS.reduce((a, r) => a + r.bays, 0);
+  const weight = t => Math.pow(votesOf(t) + 1, 0.3);
+  const byGenre = WALL_GENRES.map(g => catalog.filter(t => t.category === g && isWall(t)));   // catalog's already in shelf (alphabetical) order
+  // bays per genre by its share of the total pull (largest remainder), at least enough for one of each
+  const pull = byGenre.map(ts => ts.reduce((a, t) => a + weight(t), 0)), pullSum = pull.reduce((a, b) => a + b, 0);
+  const ideal = pull.map(p => p / pullSum * wallBays);
+  const bays = ideal.map((v, i) => Math.max(Math.ceil(byGenre[i].length / CAP), Math.floor(v)));
+  for (const i of ideal.map((v, i) => i).sort((a, b) => (ideal[b] % 1) - (ideal[a] % 1)))
+    if (bays.reduce((a, b) => a + b, 0) < wallBays) bays[i]++;
+  // copies per title fill its genre's bays exactly: ∝ weight, 1..MAX_COPIES
+  const copiesFor = (ts, slots) => {
+    const w = ts.map(weight), calc = s => w.map(x => Math.max(1, Math.min(MAX_COPIES, Math.round(s * x))));
+    let lo = 0, hi = 100;
+    for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; calc(mid).reduce((a, b) => a + b, 0) > slots ? hi = mid : lo = mid; }
+    const c = calc(lo), order = w.map((x, i) => i).sort((a, b) => w[b] - w[a]);
+    let left = slots - c.reduce((a, b) => a + b, 0);
+    for (let cap = MAX_COPIES; left > 0; cap++) for (const i of order) { if (left > 0 && c[i] < cap) { c[i]++; left--; } }
+    return c;
+  };
+  // the sweep runs right→left for someone facing the wall, but each face reads
+  // left→right: lay every genre in reverse along the sweep, and flip each run's
+  // slice back when it's shelved
+  const sweep = [];
+  byGenre.forEach((ts, gi) => {
+    const n = copiesFor(ts, bays[gi] * CAP), stock = [];
+    ts.forEach((t, i) => {
+      t.copies = [];
+      for (let k = 0; k < n[i]; k++) { const c = k ? Object.create(t) : t; if (k) t.copies.push(c); stock.push(c); }   // a copy is the same tape in every way but where it sits
+    });
+    sweep.push(...stock.reverse());
+  });
+  let si = 0;
+  for (const run of WALL_RUNS) {
+    const slice = sweep.slice(si, si + run.bays * CAP); si += run.bays * CAP;
+    const lx = Math.sin(run.ry), lz = Math.cos(run.ry);
+    let at = 0;
+    for (let i = 0; i < slice.length;) {                // one face per genre stretch within the run
+      let j = i; while (j < slice.length && slice[j].category === slice[i].category) j++;
+      at += buildFace(slice.slice(i, j).reverse(), run.x + lx * at, run.z + lz * at, run.ry, 1, [], at === 0);
+      i = j;
+    }
+    wallSpans.push(Math.abs(lx) > 0.5 ? { axis: "z", at: run.z, a0: Math.min(run.x, run.x + lx * at), a1: Math.max(run.x, run.x + lx * at) }
+                      : { axis: "x", at: run.x, a0: Math.min(run.z, run.z + lz * at), a1: Math.max(run.z, run.z + lz * at) });
   }
 
-  // east categories: three slim ones (Anime, Music, Broadcast Blocks) fold into
-  // the leftover shelf space at the end of the bigger category right before
-  // them — see mergeIntoTail — instead of each claiming a whole extra bay
-  const EAST_ORDER = ["Music", "Animation", "Anime", "Kids & Educational", "Sitcoms", "Classic Sitcoms",
-    "Drama & Adventure", "Horror & Anthology", "Sketch Comedy & Late Night", "Broadcast Blocks", "Reality TV"];
-  const eastUnits = buildUnits(eastList, EAST_ORDER,
-    [["Animation", "Anime"], ["Horror & Anthology", "Music"], ["Sketch Comedy & Late Night", "Broadcast Blocks"]]);
+  // ---- kids: low bands running back from the windows ----
+  const kidsList = catalog.filter(isKids);
+  // snake: each band's entrance-side (-x) face front→back, around the back endcap, its far (+x) face back→front, then the next band
+  const kidsRuns = KIDS.bandX.flatMap(bx => [Math.PI, 0].map(ry => ({ x: bx, z: KIDS.z0, ry, dx: 0, dz: 1, bays: KIDS.bays })));
+  const kidsBays = layBlock(kidsList, ["Family & Kids", "Holiday", "Kids & Educational", "Animation", "Anime"], kidsRuns, SHORT);
+  {                                                  // the kids' own carpet: arcade-style confetti on deep purple
+    const kidsTex = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#2a1660"; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 3000; i++) {                // carpet fleck
+        ctx.fillStyle = Math.random() < 0.5 ? "rgba(255,255,255,.07)" : "rgba(0,0,0,.18)";
+        ctx.fillRect(Math.random() * W, Math.random() * H, 3, 3);
+      }
+      const cols = ["#ffd400", "#ff4f7b", "#2fd3c7", "#7bea4a", "#ff8a1f", "#5aa9ff"];
+      const star = (r) => { ctx.beginPath(); for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, rr = k % 2 ? r * 0.45 : r; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); };
+      const shapes = [
+        r => star(r),
+        r => { ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2); ctx.fill(); },                               // dot
+        r => { ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2); ctx.lineWidth = r * 0.22; ctx.stroke(); },   // ring
+        r => { ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * 0.87, r * 0.5); ctx.lineTo(-r * 0.87, r * 0.5); ctx.closePath(); ctx.fill(); },   // triangle
+        r => { ctx.beginPath(); ctx.lineWidth = r * 0.22; ctx.lineCap = "round"; for (let k = 0; k <= 4; k++) ctx.lineTo(-r + k * r / 2, k % 2 ? r * 0.35 : -r * 0.35); ctx.stroke(); },   // zigzag
+        r => { ctx.beginPath(); ctx.lineWidth = r * 0.2; ctx.lineCap = "round"; ctx.moveTo(-r, 0); ctx.bezierCurveTo(-r * 0.4, -r, r * 0.4, r, r, 0); ctx.stroke(); },            // squiggle
+      ];
+      // scatter with wraparound so the pattern tiles seamlessly
+      for (let i = 0; i < 70; i++) {
+        const x = Math.random() * W, y = Math.random() * H, r = 18 + Math.random() * 26, rot = Math.random() * Math.PI * 2;
+        const draw = shapes[i % shapes.length], c = cols[Math.floor(Math.random() * cols.length)];
+        for (const ox of [-W, 0, W]) for (const oy of [-H, 0, H]) {
+          ctx.save(); ctx.translate(x + ox, y + oy); ctx.rotate(rot); ctx.fillStyle = ctx.strokeStyle = c; draw(r); ctx.restore();
+        }
+      }
+    }, 1024, 1024);
+    const TILE = 2.4, w = KIDS.x1 - KIDS.x0, d = KIDS.z1 - 0.1;
+    kidsTex.repeat.set(w / TILE, d / TILE);
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ map: kidsTex }));
+    rug.rotation.x = -Math.PI / 2; rug.position.set((KIDS.x0 + KIDS.x1) / 2, 0.003, 0.1 + d / 2); scene.add(rug);
+  }
 
-  // movies side: same leftover-shelf treatment for its two slim genres —
-  // Action & Adventure's overflow (past Comedy's last bay) and all of
-  // Holiday ride into Comedy's and Horror's leftover shelf space respectively
-  const WEST_ORDER = ["Comedy", "Action & Adventure", "Sci-Fi & Fantasy", "Horror", "Drama", "Family & Kids", "Holiday"];
-  const westUnits = buildUnits(westList, WEST_ORDER, [["Comedy", "Action & Adventure"], ["Horror", "Holiday"]]);
+  // ---- center: older movies west of the corridor, TV east ----
+  const centerList = catalog.filter(t => !isKids(t) && !isWall(t));
+  const classics = centerList.filter(isMovie), tv = centerList.filter(t => !isMovie(t));
+  const bandStep = 2 * SHORT.depth + CENTER.gap;
+  const bandZ = b => CENTER.z0 + b * bandStep + SHORT.depth;   // a band's back plane
+  // snake through a block's bands: door-side (-z) face first, around the endcap, then its back (+z) face
+  const blockRuns = (bands, x, dx, bays) => bands.flatMap(b => [Math.PI / 2, -Math.PI / 2].map(ry => ({ x, z: bandZ(b), ry, dx, dz: 0, bays })));
+  // TV east of the corridor, all four bands; grown-up Animation right next to Anime
+  const TV_ORDER = ["Sitcoms", "Classic Sitcoms", "Sketch Comedy & Late Night", "Broadcast Blocks", "Drama & Adventure",
+    "Horror & Anthology", "Animation", "Anime", "Reality TV"];
+  const tvBays = layBlock(tv, TV_ORDER, blockRuns([0, 1, 2, 3], CENTER.corridor, 1, CENTER.eastBays), SHORT, { "Broadcast Blocks": "Music" });
+  // classics west of the corridor, in its back two bands — the front band is
+  // the candy aisle, and the one behind it stays open floor by the register
+  const classicsFrom = 2;
+  // the classics are thin on their own: once each genre's bays are set, its
+  // most-voted titles get a second copy (side by side) until it's ~90% stocked
+  const secondCopies = (ts, slots) => {
+    const extra = new Set([...ts].sort((a, b) => votesOf(b) - votesOf(a)).slice(0, Math.max(0, Math.floor(slots * 0.9) - ts.length)));
+    return ts.flatMap(t => extra.has(t) ? [t, (() => { const c = Object.create(t); (t.copies ||= []).push(c); return c; })()] : [t]);
+  };
+  const classicsBays = layBlock(classics, WALL_GENRES, blockRuns([classicsFrom, classicsFrom + 1], -CENTER.corridor, -1, CENTER.westBays), SHORT, {}, secondCopies);
+  for (let b = 0; b < CENTER.bands - 1; b++) {           // a ceiling CRT cluster at each outer end of the aisle behind each band
+    const zMid = bandZ(b) + SHORT.depth + CENTER.gap / 2;
+    crtSpots.push([-CENTER.corridor - CENTER.westBays * BAY.len - 0.9, zMid], [CENTER.corridor + CENTER.eastBays * BAY.len + 0.9, zMid]);
+  }
 
-  const eastChains = packTight(eastUnits, AISLE.segBaysTV);
-  // movies have far fewer titles: pack them tight into 2-bay-deep double-sided
-  // clusters, and don't start until the 2nd aisle (an empty aisle 1 on the
-  // movies side, matching how sparse it is relative to TV Shows)
-  const westChains = [[], [], ...packTight(westUnits, AISLE.segBays)];
-  const maxLen = Math.max(eastChains.length, westChains.length);
-  const nCh = maxLen % 2 ? maxLen + 1 : maxLen;
-  while (eastChains.length < nCh) eastChains.push([]);   // pad so west/east bands stay aligned
-  while (westChains.length < nCh) westChains.push([]);
-  const west = westChains, east = eastChains;
-  const build = (chains, h) => chains.forEach((chain, ci) => {
-    if (!chain.length) return;
-    const az = AISLE.z0 + Math.floor(ci / 2) * (2 * BAY.depth + AISLE.gap) + BAY.depth; // band plane
-    const dir = ci % 2 ? 1 : -1;            // odd = south face (+z)
-    const m = -h * dir;                     // every run extends corridor → wall
-    let x = h * AISLE.corridor / 2;         // anchor flush against the center corridor
-    // m>0 runs read toward the corridor (same flip buildFace does within a face),
-    // so lay their faces out last-first — then every run reads left→right, and
-    // consecutive runs join end-to-end: a genre snakes down one side of an
-    // aisle and back up the other instead of jumping back to a run's start
-    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { x += h * buildFace(f.tapes, x, az, dir, m, f.headers, i === 0); }); // faces butt up and share one end panel
-    // stacked genre list on both blue endcaps of the run, facing down the aisle
-    const cats = [...new Set(chain.map(f => f.tapes.find(Boolean).category))]; // faces are per-genre chunks, in shelf order
-    const tag = tagPlane(cats, frontAt(1.4 + cats.length * 0.08) - 0.04, 0.16);   // fits the wedge where its top edge is
-    const far = x;                          // wall end of the run
-    [[h * AISLE.corridor / 2 - h * 0.028, -h * Math.PI / 2], [far + h * 0.028, h * Math.PI / 2]]
-      .forEach(([tx, ry], i) => {
-        const t = i ? tag.clone() : tag;
-        t.position.set(tx, 1.4, az + dir * frontAt(1.4) / 2); t.rotation.y = ry; scene.add(t);
-      });
+  // ---- Staff Picks: a low display across the far end of the walkway, facing the entrance ----
+  // Hand-picked, one copy of each: movies in the left section, TV in the
+  // right. Each list entry is one shelf row, top to bottom; a row's unused
+  // slots stay empty (reads as rented out).
+  const STAFF_ROWS = [
+    ["Hackers", "Masterminds (1997)", "Gremlins 2: The New Batch", "IT", "Jaws", "Mac and Me", "Blade Runner", "Over the Edge",
+      "The Rocky Horror Picture Show", "Phantasm", "Dazed and Confused"],
+    ["The Lost Boys", "WarGames", "Escape from New York", "Labyrinth", "Clue", "Spaceballs", "Bill & Ted's Excellent Adventure", "The Rocketeer",
+      "SLC Punk!", "Detroit Rock City", "Pink Floyd: The Wall"],
+    ["Flight of the Navigator", "Pee-wee's Big Adventure", "Hellraiser", "Creepshow", "American Werewolf In London", "Chopping Mall", "Trancers", "Hell Comes to Frogtown",
+      "Starman", "Maniac Cop", "Kin-Dza-Dza"],
+    ["The Twilight Zone (1959)", "Twin Peaks", "The Whitest Kids U'Know"],
+    ["Quantum Leap"],
+    ["Dragon Ball Z"],
+  ];                                                       // a show's name brings all its season tapes; "Show#a-b" = just seasons a..b
+  const lastBandEnd = CENTER.z0 + (CENTER.bands - 1) * bandStep + 2 * SHORT.depth;
+  const pickZ = lastBandEnd + 1.1 + SHORT.depth;           // display's back plane: a walkway's clearance behind the last band
+  const pickW = 2;                                         // bays wide — wider than the walkway
+  const tapesNamed = spec => {                             // "Title" → all its tapes; "Title#a-b" → season tapes a..b (1-based)
+    const [title, range] = spec.split("#"), all = catalog.filter(t => t.title === title);
+    if (!all.length) console.warn(`staff pick not in the catalog: ${title}`);
+    if (!range) return all;
+    const [a, b = a] = range.split("-").map(Number);
+    return all.slice(a - 1, b);
+  };
+  const slots = STAFF_ROWS.flatMap(row => {                // one copy each, padded out to a full shelf row
+    const ts = row.flatMap(tapesNamed).slice(0, SHORT.perRow).map(t => { const c = Object.create(t); (t.copies ||= []).push(c); return c; });
+    return [...ts, ...Array(SHORT.perRow - ts.length).fill(null)];
   });
-  build(west, -1);                          // movies
-  build(east, +1);                          // shows
-  // just a couple of ceiling signs for the major sections — two back-to-back
-  // panels (not one double-sided plane, which mirrors the text on the far
-  // side) so both faces read correctly, hung from a pair of thin cables
-  // rather than just floating, and lit by the room instead of glowing
-  for (const [x, txt] of [[-2.7, "MOVIES"], [2.7, "TV SHOWS"]]) {
-    const signZ = AISLE.z0 + BAY.depth;
-    const tex = textPlane(txt, 2.6, 0.6).material.map;
+  const px0 = -pickW * BAY.len / 2;
+  buildFace(slots, -px0, pickZ, Math.PI / 2, -1, [], true, SHORT, "STAFF PICKS");   // faces the entrance, runs +x → -x
+  {                                                        // a topper sign, facing the entrance
+    const sg = textPlane("STAFF PICKS", 2.4, 0.42);
+    sg.material = new THREE.MeshLambertMaterial({ map: sg.material.map });
+    box(2.5, 0.5, 0.06, mat.upright, 0, SHORT.h + 0.25, pickZ - 0.03);
+    sg.position.set(0, SHORT.h + 0.25, pickZ - 0.066); sg.rotation.y = Math.PI; scene.add(sg);   // 6 mm off the board
+  }
+
+  // ---- candy aisle: the front band on the register side, next to the snack center ----
+  // one wide snack rack facing the register and the doors, where a checkout line would stand
+  {
+    const w = CENTER.westBays * BAY.len, cx = -CENTER.corridor - w / 2, cz = CENTER.z0 + SHORT.depth, d = buildSnackRack.depth;
+    const g = buildSnackRack(w, "CANDY");
+    g.rotation.y = Math.PI; g.position.set(cx, 0, cz - d / 2); scene.add(g);
+    colliders.push({ x0: cx - w / 2, x1: cx + w / 2, z0: cz - d, z1: cz });
+  }
+
+  // hanging section signs — two back-to-back panels (not one double-sided
+  // plane, which mirrors the text on the far side) so both faces read
+  // correctly, hung from a pair of thin cables, lit by the room
+  const westEnd = -CENTER.corridor - CENTER.westBays * BAY.len, eastEnd = CENTER.corridor + CENTER.eastBays * BAY.len;
+  for (const [txt, x, z, w] of [
+    ["KIDS", (KIDS.bandX[0] + KIDS.bandX[1]) / 2, KIDS.z0 - 0.4, 2.2],
+    ["NEW RELEASES", (WALL_L + 0.1 + BAY.depth + westEnd) / 2, CENTER.z0 - 0.5, 2.3],
+    ["NEW RELEASES", (STORE.x - 0.1 - BAY.depth + eastEnd) / 2, CENTER.z0 - 0.5, 2.3],
+    ["CLASSICS", (westEnd - CENTER.corridor) / 2, CENTER.z0 + classicsFrom * bandStep - 0.5, 2.6],
+    ["TV SHOWS", (eastEnd + CENTER.corridor) / 2, CENTER.z0 - 0.5, 2.6],
+  ]) {
+    const tex = textPlane(txt, w, 0.6).material.map;
     const signMat = new THREE.MeshLambertMaterial({ map: tex });
-    const front = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.6), signMat);
-    front.position.set(x, 2.95, signZ); front.rotation.y = Math.PI; scene.add(front); // faces the door
-    const back = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.6), signMat);
-    back.position.set(x, 2.95, signZ); scene.add(back);                              // faces into the store
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.6), signMat);
+    front.position.set(x, 2.95, z); front.rotation.y = Math.PI; scene.add(front); // faces the door
+    const back = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.6), signMat);
+    back.position.set(x, 2.95, z); scene.add(back);                              // faces into the store
     const cableLen = STORE.h - 3.25;
-    for (const cx of [x - 1.0, x + 1.0]) {
+    for (const cx of [x - w * 0.38, x + w * 0.38]) {
       const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, cableLen), mat.dark);
-      cable.position.set(cx, 3.25 + cableLen / 2, signZ); scene.add(cable);
+      cable.position.set(cx, 3.25 + cableLen / 2, z); scene.add(cable);
     }
   }
+  flushShelves();
+  window.__layout = { wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
 }
 
 // ---------------- TV lounge (living room, center of the back half) ----------------
@@ -1923,8 +2295,47 @@ let screenMesh, videoMat, videoTex, miniScreens;
 const crtGlows = [];                       // one real light per ceiling CRT cluster — bloom alone doesn't light the shelves under it
 {
   // the preview living room: rug, coffee table, couch facing the TV
-  const rug = new THREE.Mesh(new THREE.PlaneGeometry(7, 9), new THREE.MeshLambertMaterial({ color: 0x23124f }));
-  rug.rotation.x = -Math.PI / 2; rug.position.set(0, 0.01, TV.z - 1.7); scene.add(rug);
+  const rugZ0 = TV.z - 6.2, rugZ1 = STORE.z - 0.1;   // runs up to the back wall and stops — the back-of-house hall is behind it
+  // the Overlook Hotel carpet from The Shining — a straight port of
+  // IceCreamDrip/render_motif_ref.py (the ground truth for that project's
+  // 09_overlook.glsl): per tile (7 x 10 stroke widths), red hexes with a black
+  // outline drawn inward (PIL's polygon outline), big black hex rings (centred
+  // stroke) and black descender bars. Tiles overlap their neighbours and later
+  // tiles draw over earlier ones, so — like the script — a grid of tiles is
+  // drawn in order and one interior tile is cropped out as the seamless repeat.
+  const SW = 0.045;                                                             // world m per stroke width
+  const overlookTex = makeTexture((ctx, W, H) => {
+    const sw = W / 7, w = W, h = H, COLS = 5, ROWS = 4;
+    const ORANGE = "rgb(223,95,24)", RED = "rgb(152,31,36)", BLACK = "#000";
+    const grid = document.createElement("canvas"); grid.width = COLS * w; grid.height = ROWS * h;
+    const g = grid.getContext("2d");
+    const hexPts = (cx, cy, r) => [0, 60, 120, 180, 240, 300].map(deg => { const a = deg * Math.PI / 180; return [cx + r * Math.sin(a), cy + r * Math.cos(a)]; });
+    const poly = pts => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); };
+    const line = (x0, y0, x1, y1, width) => { g.lineWidth = width; g.lineCap = "butt"; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); };
+    g.fillStyle = ORANGE; g.fillRect(0, 0, grid.width, grid.height);
+    g.strokeStyle = BLACK; g.lineJoin = "round";
+    for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
+      const ox = i * w, oy = j * h;
+      for (const [cx, cy] of [[w / 2, h / 2], [0, h - sw], [w, h - sw], [0, -sw], [w, -sw]]) {
+        poly(hexPts(cx + ox, cy + oy, sw * 2)); g.fillStyle = BLACK; g.fill();                        // outline, drawn inward...
+        poly(hexPts(cx + ox, cy + oy, sw * 2 - sw / 0.8660254)); g.fillStyle = RED; g.fill();        // ...around the red fill
+      }
+      for (const [cx, cy] of [[0, -sw], [w, -sw]]) { poly(hexPts(cx + ox, cy + oy, sw * 4)); g.lineWidth = sw; g.stroke(); }   // big rings
+      line(w / 2 + ox, h - sw * 3 + oy, w / 2 + ox, h + oy, sw * 1.1);                               // descenders
+      line(ox, h - sw * 7 + oy, ox, h - sw * 3 + oy, sw);
+      line(w + ox, h - sw * 7 + oy, w + ox, h - sw * 3 + oy, sw);
+    }
+    // interior tile; flipped so the motif's top points away from the couch, toward the TV
+    ctx.save(); ctx.translate(0, H); ctx.scale(1, -1);
+    ctx.drawImage(grid, 2 * w, 2 * h, w, h, 0, 0, w, h);
+    ctx.restore();
+    const img = ctx.getImageData(0, 0, W, H), d = img.data;                                           // a little pile texture
+    for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 14; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+    ctx.putImageData(img, 0, 0);
+  }, 7 * 48, 10 * 48);
+  overlookTex.repeat.set(7 / (7 * SW), (rugZ1 - rugZ0) / (10 * SW));
+  const rug = new THREE.Mesh(new THREE.PlaneGeometry(7, rugZ1 - rugZ0), new THREE.MeshLambertMaterial({ map: overlookTex }));
+  rug.rotation.x = -Math.PI / 2; rug.position.set(0, 0.01, (rugZ0 + rugZ1) / 2); scene.add(rug);
   // vintage coffee table, 0.78 m clear of the couch front (room — player is 0.64
   // wide — to reach the middle seat). Same 1.0 x 0.5 x 0.35 block as before, so
   // the tape case on top and tvTableShadow still line up; the TV-facing side
@@ -2062,7 +2473,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   videoTex.colorSpace = THREE.SRGBColorSpace;
   videoMat = new THREE.MeshBasicMaterial({ map: videoTex, color: 0xd9d9d9 }); // -15%, blown-out whites were blinding
   miniScreens = [screenMesh];
-  // ceiling CRT clusters at the wall end of each aisle, pairs side by side
+  // ceiling CRT clusters at the outer ends of the center aisles, pairs side by side
   // (along z), fanned ~45° apart, screens facing the center of the store
   const crtBody = new THREE.MeshLambertMaterial({ color: 0x2a2d33 });
   const crt = base => {                    // front box + tube bulge + screen
@@ -2076,11 +2487,8 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     m.position.z = 0.154; g.add(m); miniScreens.push(m);
     return g;
   };
-  const bandStep = 2 * BAY.depth + AISLE.gap;
-  for (let k = 1; ; k++) {                 // one cluster per aisle, at its wall end
-    const z = AISLE.z0 + k * bandStep - AISLE.gap / 2;   // mid-aisle z
-    if (z > TV.z - 5) break;               // stop at the lounge
-    for (const x of [WALL_L + 0.9, STORE.x - 0.9]) {        // hugging the side walls (movie side pulled in)
+  for (const [x, z] of crtSpots) {          // one cluster over each outer end of the center aisles (see the store layout)
+    {
       const g = new THREE.Group(); g.position.set(x, 2.75, z);
       const base = x < 0 ? Math.PI / 2 : -Math.PI / 2;   // face the store center
       for (const o of [-0.45, 0.45]) {      // side by side along the aisle, fanned to its ends
@@ -2208,8 +2616,6 @@ function move(dt) {
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
   if (!blocked(player.x + dx, player.z)) player.x += dx;
   if (!blocked(player.x, player.z + dz)) player.z += dz;
-  player.x = Math.max(WALL_L + 0.5, Math.min(STORE.x - 0.5, player.x));
-  player.z = Math.max(0.45, Math.min(STORE.z - 0.45, player.z));
 }
 
 // ---------------- picking / inspecting ----------------
@@ -2223,9 +2629,9 @@ function tvScreenHit() {                     // crosshair on the main TV screen 
 const highlight = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(TAPE.w, TAPE.h, TAPE.d)),
   new THREE.LineBasicMaterial({ color: YELLOW }));
-highlight.visible = false; highlight.rotation.y = Math.PI / 2; // tapes lie rotated on the bands
+highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 let flapOpen = false;
 function toggleFlap() {
@@ -2238,28 +2644,33 @@ function toggleFlap() {
   if (flapOpen && i >= 0) colliders.splice(i, 1);   // swung up — walk through
   else if (!flapOpen && i < 0) colliders.push(flapCollider);   // back down — flush with the counters again
 }
+function playerIn(c) { return player.x > c.x0 - player.r && player.x < c.x1 + player.r && player.z > c.z0 - player.r && player.z < c.z1 + player.r; }
+function toggleDoor(d) {
+  if (d.locked) { d.rattle = 0.35; return; }   // just jiggles in its frame
+  const next = d.open ? d.shut : d.openBox;
+  if (playerIn(next)) return;                // you're standing where it would swing to
+  colliders.splice(colliders.indexOf(d.open ? d.openBox : d.shut), 1);
+  colliders.push(next);
+  d.open = !d.open;
+}
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-  const hit = raycaster.intersectObjects(faceMeshes, false)
-    .find(h => h.distance < 3.4 && h.uv);
-  if (hit) {
-    const a = hit.object.userData.face.atlas;
-    const cell = a * CELLS + Math.floor((1 - hit.uv.y) * 2048 / CH) * COLS + Math.floor(hit.uv.x * 2048 / CW);
-    const t = tapeByCell[cell] ?? null;
-    hovered = (t && t.coverMesh && !t.coverMesh.visible) ? null : t;   // slot's empty — already checked out
-  }
+  const hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
+  if (hit) hovered = hit.object.userData.tapes[Math.floor(hit.face.a / COVER_V)];
   if (hovered) {
-    highlight.visible = true; highlight.position.copy(hovered.pos);
+    highlight.visible = true; highlight.position.copy(hovered.pos); highlight.rotation.y = hovered.ry;
     const tip = $("hoverTip");
     const season = hovered.seasons?.[0]?.label;             // "Season 1", "Episodes", or "" for a movie
     tip.innerHTML = `${hovered.title}<div class="cat">${hovered.category}${season ? " · " + season : ""}</div>`;
     tip.style.display = "block";
   } else {
     highlight.visible = false;
-    const aim = raycaster.intersectObjects(aimables, false)[0];
+    let aim = raycaster.intersectObjects(aimables, false)[0];
+    const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
+    if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
     if (aim?.object === screenMesh && aim.distance < 4.5) aimTV = true;         // TV/couch hints show in tvHint
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; }
@@ -2270,6 +2681,7 @@ function pickHover() {
     else if (aim?.object.userData.popcorn && aim.distance < 2.4) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
     else if (aim?.object.userData.flap && aim.distance < 2.6) aimFlap = aim.object.userData.flap;
+    else if (aim?.object.userData.door && aim.distance < 2.4) aimDoor = aim.object.userData.door;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && held) tip.innerHTML = "E — drop tape in Returns";
@@ -2279,6 +2691,7 @@ function pickHover() {
     else if (aimSnack && !held && !heldSnack && !heldPopcorn) tip.innerHTML = `CLICK — grab ${aimSnack.userData.snack.name}${aimSnack.userData.snack.kind ? ` <div class="cat">${aimSnack.userData.snack.kind}</div>` : ""}`;
     else if (aimCooler) tip.innerHTML = `E — ${coolerOpen ? "close" : "open"} the cooler`;
     else if (aimFlap) tip.innerHTML = `E — ${flapOpen ? "close" : "open"} the counter pass-through`;
+    else if (aimDoor) tip.innerHTML = aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`;
     else { tip.style.display = "none"; return; }
     tip.style.display = "block";
   }
@@ -2457,8 +2870,7 @@ function releaseFromHand() {                 // clears the hand WITHOUT touching
 }
 function pickup(tape) {                      // from a shelf slot OR out of the returns bin — either way, into your hand
   held = tape; inspecting = true;
-  if (tape.coverMesh) tape.coverMesh.visible = false;   // gone from the shelf while it's in your hand
-  if (tape.bodyMesh) tape.bodyMesh.visible = false;
+  setOnShelf(tape, false);                   // gone from the shelf while it's in your hand
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tape.title;
   // embedded shelf art shows instantly; the full-res TMDB version swaps in once
   // it loads (a plain <img> can load cross-origin even from file://). Offline
@@ -2475,10 +2887,7 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
   handGroup.visible = true;
 }
 function putBack() {                         // manual reshelve — always goes home, never to the returns bin
-  if (held) {
-    if (held.coverMesh) held.coverMesh.visible = true;
-    if (held.bodyMesh) held.bodyMesh.visible = true;
-  }
+  if (held) setOnShelf(held, true);
   releaseFromHand();
 }
 
@@ -2586,6 +2995,7 @@ function onE() {
   }
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
+  if (aimDoor) { toggleDoor(aimDoor); return; }
   if (aimCooler) { coolerOpen = !coolerOpen; return; }
   if (aimTrash) {
     if (heldSnack) dropSnack(true); else if (heldPopcorn) dropPopcorn(); else return;
@@ -2724,6 +3134,11 @@ renderer.setAnimationLoop(() => {
   flapPivot.rotation.x += ((flapOpen ? -Math.PI / 2 : 0) - flapPivot.rotation.x) * Math.min(1, dt * 6);   // eases open/closed
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
   coolerThermo.tick(dt);
+  for (const d of doors) {                   // doors ease open/closed; a locked one rattles briefly when tried
+    d.a += ((d.open ? d.openA : 0) - d.a) * Math.min(1, dt * 5);
+    d.rattle = Math.max(0, d.rattle - dt);
+    d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
+  }
   move(dt);
   if (seated) camera.position.set(seatAt.x, seatAt.y, seatAt.z);
   else {
@@ -2764,4 +3179,5 @@ window.__t = {
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
+  doors, toggleDoor, colliders,
 };
