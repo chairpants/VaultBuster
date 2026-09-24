@@ -169,16 +169,16 @@ const catalog = window.VAULT_CATALOG || [];
 // the saved store from last visit (see "save / restore" near the end) — read
 // up front because the shelves need it while they're being stocked
 const SAVE_KEY = "vaultbuster-save";
-const SAVE_V = 2;                            // v1 keyed tapes by id, which every season of a show shares
+const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
-// a copy's stable id across reloads: "<catalog index>:<n>", n = its place in
-// [tape, ...tape.copies]. Not the tape's id — every season of a show shares
-// that. The catalog's sorted and shelving is deterministic, so both hold every load
+// a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
+// [tape, ...tape.copies] (shelving is deterministic, so n holds every load).
+// id + season is unique per tape; the id alone isn't (every season of a show shares it)
 const titleOfCopy = c => Object.hasOwn(c, "copies") || Object.getPrototypeOf(c) === Object.prototype ? c : Object.getPrototypeOf(c);
-let catIndex = null;                         // tape -> catalog index, built on first use
-const tapeIndex = t => (catIndex ||= new Map(catalog.map((t, i) => [t, i]))).get(titleOfCopy(t));
-const copyKey = c => { const t = titleOfCopy(c); return `${tapeIndex(t)}:${[t, ...(t.copies || [])].indexOf(c)}`; };
-const copyByKey = k => { const [i, n] = k.split(":").map(Number), t = catalog[i]; return t && [t, ...(t.copies || [])][n]; };
+const tapeKey = t => `${t.id}#${t.season ?? ""}`;
+let byTapeKey = null;                        // tape key -> tape, built on first use
+const copyKey = c => { const t = titleOfCopy(c); return `${tapeKey(t)}:${[t, ...(t.copies || [])].indexOf(c)}`; };
+const copyByKey = k => { const i = k.lastIndexOf(":"), t = (byTapeKey ||= new Map(catalog.map(t => [tapeKey(t), t]))).get(k.slice(0, i)); return t && [t, ...(t.copies || [])][+k.slice(i + 1)]; };
 // ---- be kind, rewind ----
 // Every physical copy remembers where its tape is wound to: copy.tapePos =
 // { ep, t } (episode index, seconds in), updated while it plays and kept
@@ -203,17 +203,102 @@ function shelveCheck(c) {                    // called as a tape goes back on it
   c.tapePos = null;                          // instantly rewound
   toast(`Not rewound: ${c.title}${REWIND_FINE ? ` · -$${REWIND_FINE.toFixed(2)} pay` : ""} · be kind, rewind!`);
 }
+// set a tape's wind to a fraction of the whole tape (the inverse of windFrac)
+function setWindFrac(c, f) {
+  const n = c.seasons[0].episodes.length, d = c.tapePos?.d || (n > 1 ? 1500 : 6000);
+  if (f <= 0) { c.tapePos = null; return; }
+  const x = Math.min(1, f) * n, ep = Math.min(n - 1, Math.floor(x));
+  c.tapePos = { ep, t: (x - ep) * d, d: c.tapePos?.d };
+}
+// the counter rewinder: E puts the tape in hand in; it winds back over up to
+// REWIND_SECS (scaled by how far it's wound) with a motor whir, clunks when
+// done, and E takes it out — early, it comes out only partly rewound
+const REWIND_SECS = 10;
+function rewinderLoad(tape) {
+  Object.assign(rewinder, { tape, f0: windFrac(tape), t: 0, done: false });
+  rewinder.dur = Math.max(1, rewinder.f0 * REWIND_SECS);
+  rewinder.tapeMesh.material = tape.sideMat || mat.tapeBody; rewinder.tapeMesh.visible = true;
+  if (rewinder.f0 > 0) rewinderSound(true); else rewinderFinish(false);
+}
+function rewinderFinish(clunk = true) {
+  rewinder.done = true; rewinderSound(false); rewinder.led.material.color.set(0x2bff6a);
+  if (clunk) try {                            // the eject thunk
+    const ac = rewinder.ac ||= new AudioContext(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    o.type = "square"; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.09);
+    g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.13);
+  } catch {}
+}
+function rewinderSound(on) {
+  if (!on) { rewinder.snd?.(); rewinder.snd = null; return; }
+  rewinder.led.material.color.set(0xff3b1f);
+  try {                                       // motor whir: a low buzz plus a rising whine as the reel speeds up
+    const ac = rewinder.ac ||= new AudioContext(); ac.resume();
+    const buzz = ac.createOscillator(), whine = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    buzz.type = "sawtooth"; buzz.frequency.value = 75; whine.type = "triangle";
+    whine.frequency.setValueAtTime(500, t); whine.frequency.linearRampToValueAtTime(1300, t + rewinder.dur);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.025, t + 0.15);
+    buzz.connect(g); whine.connect(g); g.connect(ac.destination); buzz.start(); whine.start();
+    rewinder.snd = () => { buzz.stop(); whine.stop(); g.disconnect(); };
+  } catch {}
+}
+function rewinderTick(dt) {
+  if (!rewinder.tape || rewinder.done) return;
+  rewinder.t += dt;
+  const p = Math.min(1, rewinder.t / rewinder.dur);
+  setWindFrac(rewinder.tape, rewinder.f0 * (1 - p));
+  if (p >= 1) rewinderFinish();
+}
+function rewinderUse() {                      // E on the rewinder
+  if (rewinder.tape) {                        // take it out (done, or early)
+    if (!invMakeRoom()) { toast("Hands full"); return; }
+    const t = rewinder.tape;
+    rewinderSound(false); rewinder.tape = null; rewinder.tapeMesh.visible = false; rewinder.led.material.color.set(0x222222);
+    showTape(t);
+  } else if (held) { const t = held; releaseFromHand(); rewinderLoad(t); }
+}
+// the counter's service bell: a bright struck-metal ding (a few inharmonic partials, fast attack, long ring)
+let bellAc = null;
+function dingBell() {
+  try {
+    const ac = bellAc ||= new AudioContext(), t = ac.currentTime, out = ac.createGain();
+    out.gain.value = 0.12; out.connect(ac.destination);
+    for (const [f, a, d] of [[2210, 1, 1.6], [5980, 0.35, 0.7], [3470, 0.25, 1.1]]) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.value = f; g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      o.connect(g).connect(out); o.start(t); o.stop(t + d);
+    }
+  } catch {}
+}
+// security tags: every copy's is live until run across the counter's
+// desensitizer (copy.desens = true), and live again once it's reshelved.
+// The gates only alarm on a live tag.
+let desensAc = null, desensFlash = 0;
+function desensitize(c) {
+  if (c.desens) { toast(`${c.title} is already desensitized`); return; }
+  c.desens = true; desensFlash = 0.6;
+  toast(`Desensitized: ${c.title}`, true);
+  try {                                        // the pad's confirm beep-beep
+    const ac = desensAc ||= new AudioContext(), t = ac.currentTime;
+    for (const [dt, f] of [[0, 1760], [0.11, 2350]]) {
+      const o = ac.createOscillator(), g = ac.createGain(); o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.04, t + dt); g.gain.setValueAtTime(0, t + dt + 0.08); o.connect(g).connect(ac.destination); o.start(t + dt); o.stop(t + dt + 0.09);
+    }
+  } catch {}
+}
 let toastTimer = 0;
-function toast(text) {
+function toast(text, good = false) {          // red = a problem; good = the store's blue, for confirmations
   const el = document.getElementById("toast"); if (!el) return;
-  el.textContent = text; el.style.display = "block";
+  el.textContent = text; el.style.display = "block"; el.style.background = good ? "var(--bb-blue)" : "";
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.style.display = "none"; }, 3500);
 }
 // video-store shelving: alphabetical ignoring a leading The/A/An, then seasons
 // 1,2,3… with specials (season 0) and uncoded "Episodes" (-1) after the last
 const shelfKey = t => t.title.replace(/^(the|an?)\s+/i, "");
 const seasonRank = t => (t.season ?? 0) > 0 ? t.season : 1000 - (t.season ?? 0);
+window.VAULT_MV?.split(catalog);             // MonsterVision: one broadcast-block tape -> a tape per film (monstervision.js)
 // covers.js (fetch-covers.mjs): this season's TMDB poster, else the show's, else the old VaultVision art
+// (mv-covers.js adds the MonsterVision films' posters the same way)
 for (const t of catalog) {
   const A = window.VAULT_ART || {}, sk = `tmdb/${t.id}-s${t.season}.jpg`, k = `tmdb/${t.id}.jpg`;
   t.art = A[sk] ? sk : A[k] ? k : t.art;
@@ -1031,23 +1116,105 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 // ---------------- lobby + back wall dressing ----------------
 let returnSlotMesh;                          // the E target for the returns counter, set below
 let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
-let flapPivot, flapCollider;                  // the register pass-through flap, set below
+let flapPivot, flapGate, flapCollider;        // the counter pass-through: lift-up leaf + swinging half gate, set below
 let posScreen;                                // the register monitor's glass (pos.js mirrors its terminal onto it)
+// the counter's VHS rewinder (model built with the register, logic near the
+// rewind policy): tape = the copy inside, f0/dur/t = rewind progress
+const rewinder = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null };
 let gateLed;                                  // the security gates' status LED material
+let desensLed;                                // the desensitizer pad's LED (flashes green when a tag is killed)
 const GATE_Z = 4.0;                           // security gate line across the entry lane (|x| < 2)
 {
-  // checkout cluster: its west end keeps its ~0.4m clearance from the (pulled-in)
-  // movie-side wall; it runs east to RX, where the returns + front counters turn
-  // the corner — their east face at -1.9 sits just shy of the door path (±1.8),
-  // so the counters line the entry lane
-  const RX = -2.25;                            // returns/front counter centerline
-  const CX0 = -9 + WALL_SHIFT - 1.6, CX1 = RX + 0.35, CX = (CX0 + CX1) / 2;
-  solid(CX1 - CX0, 1.0, 0.7, mat.counter, CX, 0.5, 4);                       // checkout counter
-  solid(CX1 - CX0, 0.08, 0.78, mat.counterTop, CX, 1.04, 4);
+  // ---- the employee counter: one L around the register nook ----
+  // North run (the checkout) faces the store along z 3.65-4.35; the east run
+  // faces the entry lane along x -2.6..-1.9 and runs solid all the way to the
+  // front wall — no way in from the doors. The way in is a lift-up pass-through
+  // at the west end, by the soda cooler (see the flap below).
+  // Both runs share one builder, in a local frame: the run goes along +x from
+  // 0..len, the customer face is +z, the employee face -z, the worktop's top
+  // at y 1.08 (the register and rewinder sit on it). Customer side: recessed
+  // toe kick, blue panels with chrome bands + dividers, a raised transaction
+  // ledge. Employee side: cabinet doors, or an open cubby where asked.
+  const RX = -2.25;                            // east run centerline
+  const CD = 0.7, TOP = 1.08, KICK = 0.1;      // counter depth, worktop height, toe kick
+  const FLAP_X0 = WALL_L + 0.1, FLAP_X1 = -6.0; // pass-through gap (wall to the checkout's west end) — wide enough to get round the cooler
+  const chromeC = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
+  const blueDk = new THREE.MeshLambertMaterial({ color: 0x1d3a8a }), cubbyMat = new THREE.MeshLambertMaterial({ color: 0x0e1426 });
+  // corner pieces meet on a 45° miter: a run whose end turns the corner
+  // (miterEnd: turning at len; miterStart: coming off another run at 0) has
+  // its worktop / ledge ends cut along the diagonal through the two runs'
+  // shared outer corner, so the matching piece on the other run meets it edge
+  // to edge. A piece's plan is a prism between z_in..z_out whose end x
+  // follows that diagonal: end(z) = len + (z - CD/2), start(z) = -CD - (z - CD/2)
+  function prism(pts, y0, y1, m) {             // pts: plan outline [[x, z], ...]; extruded y0..y1
+    const sh = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
+    const geo = new THREE.ExtrudeGeometry(sh, { depth: y1 - y0, bevelEnabled: false });
+    geo.rotateX(Math.PI / 2); geo.translate(0, y1, 0);   // shape y -> world z, extrusion -> down from y1
+    return new THREE.Mesh(geo, m);
+  }
+  function counterRun(len, { cubbies = [], miterStart = false, miterEnd = false, endTrim = false, logo = null, drawer = null } = {}) {   // drawer: [x0, x1] a drawer front sits over
+    const g = new THREE.Group(); scene.add(g);
+    const add = (w, h, d, m, x, y, z) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); g.add(o); return o; };
+    const BH = TOP - 0.04 - KICK, by = KICK + BH / 2;                         // body height / center
+    add(len, KICK, CD - 0.12, mat.dark, len / 2, KICK / 2, 0);               // toe kick, recessed both sides
+    // body: solid except where a cubby opens on the employee side
+    let x = 0;
+    for (const c of [...cubbies].sort((a, b) => a.x0 - b.x0).concat([{ x0: len, x1: len }])) {
+      if (c.x0 > x) add(c.x0 - x, BH, CD - 0.02, mat.counter, (x + c.x0) / 2, by, 0);
+      if (c.x1 > c.x0) {                                                      // the cubby: customer-side wall, slab above, floor, dark inside
+        const w = c.x1 - c.x0, cx = (c.x0 + c.x1) / 2, back = 0.2;
+        add(w, BH, back, mat.counter, cx, by, CD / 2 - 0.01 - back / 2);
+        add(w, TOP - 0.04 - c.y1, CD - 0.02, mat.counter, cx, (c.y1 + TOP - 0.04) / 2, 0);
+        add(w, c.y0 - KICK, CD - 0.02, mat.counter, cx, (KICK + c.y0) / 2, 0);
+        add(w, c.y1 - c.y0, 0.01, cubbyMat, cx, (c.y0 + c.y1) / 2, CD / 2 - 0.01 - back - 0.005);
+      }
+      x = c.x1;
+    }
+    const x0 = z => miterStart ? -CD - (z - CD / 2) : -0.02, x1 = z => miterEnd ? len + (z - CD / 2) : len + 0.02;
+    const slab = (zIn, zOut, y0, y1, m) => g.add(prism([[x0(zIn), zIn], [x1(zIn), zIn], [x1(zOut), zOut], [x0(zOut), zOut]], y0, y1, m));
+    slab(-CD / 2 - 0.03, CD / 2 + 0.03, TOP - 0.04, TOP, mat.counterTop);                    // worktop
+    slab(CD / 2 + 0.03, CD / 2 + 0.042, TOP - 0.0375, TOP - 0.0025, chromeC);                // chrome nosing
+    // raised transaction ledge along the customer edge: riser, top, chrome nosing
+    slab(CD / 2 - 0.15, CD / 2 - 0.11, TOP, TOP + 0.14, mat.counter);
+    slab(CD / 2 - 0.14, CD / 2 + 0.08, TOP + 0.14, TOP + 0.17, mat.counterTop);
+    slab(CD / 2 + 0.08, CD / 2 + 0.09, TOP + 0.14, TOP + 0.17, chromeC);
+    // customer face: chrome bands and a yellow pinstripe
+    const fz = CD / 2 - 0.004;
+    for (const y of [KICK + 0.12, TOP - 0.16]) add(len, 0.02, 0.012, chromeC, len / 2, y, fz + 0.006);
+    add(len, 0.025, 0.008, mat.counterTop, len / 2, TOP - 0.2, fz + 0.004);
+    if (endTrim) {                                                            // customer-facing end at len (the lane corner)
+      for (const y of [KICK + 0.12, TOP - 0.16]) add(0.012, 0.02, CD, chromeC, len + 0.006, y, 0);
+      add(0.03, TOP - 0.045 - KICK, 0.03, chromeC, len, (KICK + TOP - 0.045) / 2, CD / 2);   // corner guard, stops just under the worktop
+    }
+    if (logo) {
+      const t = textPlane(logo, Math.min(2.6, len * 0.6), 0.34, "#ffd400", "#00349c");
+      t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(len / 2, 0.52, fz + 0.012); g.add(t);
+    }
+    // employee side: cabinet doors (skipping cubbies), chrome pulls
+    const doorsAt = [];
+    for (let d = 0.05; d + 0.5 <= len - 0.05; d += 0.52) if (!cubbies.some(c => d + 0.5 > c.x0 && d < c.x1)) doorsAt.push(d);
+    for (const d of doorsAt) {                 // doors under a drawer stop short of it
+      const under = drawer && d + 0.5 > drawer[0] && d < drawer[1], top = under ? TOP - 0.23 : by + 0.02 + (BH - 0.12) / 2, bot = by + 0.02 - (BH - 0.12) / 2;
+      add(0.49, top - bot, 0.015, blueDk, d + 0.25, (top + bot) / 2, -CD / 2 + 0.002);
+      add(0.012, 0.12, 0.02, chromeC, d + 0.43, top - 0.14, -CD / 2 - 0.01);
+    }
+    return g;
+  }
+  // north run: flap edge -> the lane corner (the corner block belongs to it)
+  const nLen = (RX + CD / 2) - FLAP_X1;
+  const north = counterRun(nLen, { endTrim: true, miterEnd: true, logo: "VAULTBUSTER VIDEO", drawer: [-5.45 - 0.23 - FLAP_X1, -5.45 + 0.23 - FLAP_X1] });   // the cash drawer under the register   // mitered into the east run at the lane corner
+  north.position.set(FLAP_X1, 0, 4);
+  colliders.push({ x0: FLAP_X1, x1: RX + CD / 2, z0: 4 - CD / 2, z1: 4 + CD / 2 + 0.08, y1: TOP + 0.17 });
+  // east run: from the corner down to the front wall, customer face to the lane;
+  // a cubby near the corner holds the returns tote (the drop slot's on the lane face)
+  const FRONT = 0.1, eLen = (4 - CD / 2) - FRONT, RET = 1.05;               // RET: slot/tote position along the run
+  const east = counterRun(eLen, { cubbies: [{ x0: RET - 0.42, x1: RET + 0.42, y0: 0.14, y1: 0.66 }], miterStart: true });
+  east.position.set(RX, 0, 4 - CD / 2); east.rotation.y = Math.PI / 2;      // local +x runs south (world -z), customer face east
+  colliders.push({ x0: RX - CD / 2, x1: RX + CD / 2 + 0.08, z0: FRONT, z1: 4 - CD / 2, y1: TOP + 0.17 });
   // register: a beige CRT point-of-sale terminal with keyboard + mouse, where
   // the old black box stood — facing the employee side (toward the doors' wall)
   {
-    const pos = new THREE.Group(); pos.position.set(-9 + WALL_SHIFT, 1.08, 4); pos.rotation.y = Math.PI; scene.add(pos);   // local +z = employee side
+    const pos = new THREE.Group(); pos.position.set(-5.45, 1.08, 4); pos.rotation.y = Math.PI; scene.add(pos);   // local +z = employee side
     const beige = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), beigeDk = new THREE.MeshLambertMaterial({ color: 0xbdb49e });
     const add = (geo, m, x, y, z, parent = pos) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
     // monitor: swivel base, neck, bezel box, tapered CRT back, recessed screen
@@ -1091,65 +1258,154 @@ const GATE_Z = 4.0;                           // security gate line across the e
     cord.rotation.y = 0.55;
     pos.traverse(o => { if (o.isMesh) { o.userData.pos = true; aimables.push(o); } });   // E anywhere on it logs in
   }
+  // tape rewinder: the classic little sports-car shaped one. Faces the
+  // employee side like the register; a loaded tape rides in its open roof
+  {
+    const g = new THREE.Group(); g.position.set(-4.5, 1.08, 3.95); g.rotation.y = Math.PI; scene.add(g);
+    const red = new THREE.MeshPhongMaterial({ color: 0xc41e1e, specular: 0xffffff, shininess: 80 });
+    const blackP = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
+    const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
+    add(new THREE.BoxGeometry(0.34, 0.06, 0.15), red, 0, 0.04, 0);                          // body
+    const nose = add(new THREE.BoxGeometry(0.1, 0.04, 0.15), red, 0.19, 0.03, 0); nose.rotation.z = -0.35;   // sloped hood
+    add(new THREE.BoxGeometry(0.22, 0.035, 0.14), blackP, -0.02, 0.085, 0);                 // tinted "cabin" = the lid, open at the roof
+    for (const x of [-0.11, 0.12]) for (const z of [-0.075, 0.075]) {
+      const w = add(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16), blackP, x, 0.03, z); w.rotation.x = Math.PI / 2;
+    }
+    for (const z of [-0.045, 0.045]) add(new THREE.BoxGeometry(0.01, 0.015, 0.03), new THREE.MeshBasicMaterial({ color: 0xfff6c8 }), 0.235, 0.045, z);   // headlights
+    rewinder.led = add(new THREE.BoxGeometry(0.012, 0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x222222 }), -0.02, 0.06, 0.077);   // status LED on the side
+    glow(rewinder.led);
+    rewinder.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.1 + TAPE.w / 2, 0);   // lies flat in the roof
+    rewinder.tapeMesh.rotation.y = Math.PI / 2; rewinder.tapeMesh.visible = false;
+    g.traverse(o => { if (o.isMesh) { o.userData.rewinder = true; aimables.push(o); } });
+  }
 
-  // returns counter — rotated 90° off the checkout's line so it turns the
-  // corner instead of extending it, tucked flush behind checkout's east edge
-  // (not jutting out over the shop floor) and running south from that same
-  // corner — toward the door — instead of north, so it sits close to the
-  // entrance rather than deep in the register nook
-  const RZ0 = 3.65, RLEN = 1.3;                // RZ0 = checkout's south (customer) edge
-  const RCZ = RZ0 - RLEN / 2;                  // returns' own center z — its north end touches RZ0, it runs south from there
-  // hollow: front (slot side), ends and base, open on the employee (west) side
-  // onto a shelf the returned tapes land on — staff grab them from back there
-  colliders.push({ x0: RX - 0.35, x1: RX + 0.35, z0: RCZ - RLEN / 2, z1: RCZ + RLEN / 2 });
-  const binMat = new THREE.MeshLambertMaterial({ color: 0x1a2440 });
-  box(0.04, 1.0, RLEN, mat.counter, RX + 0.33, 0.5, RCZ);                           // customer-side front
-  for (const dz of [-1, 1]) box(0.7, 1.0, 0.04, mat.counter, RX, 0.5, RCZ + dz * (RLEN / 2 - 0.02));   // ends
-  box(0.7, 0.12, RLEN, mat.counter, RX, 0.06, RCZ);                                 // base
-  box(0.66, 0.02, RLEN - 0.08, binMat, RX - 0.01, 0.5, RCZ);                        // shelf the tapes land on
-  box(0.01, 0.84, RLEN - 0.08, binMat, RX + 0.305, 0.54, RCZ);                      // dark inside of the front
-  const grab = new THREE.Mesh(new THREE.PlaneGeometry(RLEN - 0.08, 0.84),           // the open side: E target from behind the counter
+  // ---- returns: a stainless drop slot on the lane face, into a tote in the cubby behind ----
+  const RZ = 4 - CD / 2 - RET;                 // world z of the slot / tote
+  const steelC = new THREE.MeshPhongMaterial({ color: 0xaab2ba, specular: 0xffffff, shininess: 70 });
+  box(0.012, 0.3, 0.5, steelC, RX + CD / 2 + 0.006, 0.82, RZ);                                   // drop plate
+  box(0.008, 0.05, 0.38, mat.dark, RX + CD / 2 + 0.014, 0.86, RZ);                                // the slot
+  returnSlotMesh = box(0.02, 0.07, 0.4, chromeC, RX + CD / 2 + 0.02, 0.9, RZ);                     // its hinged lip — the E target from the lane
+  returnSlotMesh.userData.returns = true; aimables.push(returnSlotMesh);
+  const drop = textPlane("DROP TAPES HERE", 0.44, 0.07, "#1a1d22", "#e8ecf0", "Arial", 64);
+  drop.material = new THREE.MeshLambertMaterial({ map: drop.material.map });
+  drop.position.set(RX + CD / 2 + 0.013, 0.73, RZ); drop.rotation.y = Math.PI / 2; scene.add(drop);
+  const rb = textPlane("RETURNS", 0.84, 0.24, "#001f5c", "#ffd400");                             // on the blue face, under the slot
+  rb.material = new THREE.MeshLambertMaterial({ map: rb.material.map }); rb.position.set(RX + CD / 2 + 0.012, 0.42, RZ); rb.rotation.y = Math.PI / 2;
+  scene.add(rb);
+  // the tote in the cubby (open on the employee side, x = RX - CD/2)
+  const toteMat = new THREE.MeshLambertMaterial({ color: 0x2456b8 });
+  const TW = 0.74, TD = 0.38, TH = 0.3, tx = RX - 0.1, ty = 0.15;   // x RX-0.29..RX+0.09: clear of the cubby's back wall
+  box(TD, 0.02, TW, toteMat, tx, ty + 0.01, RZ);
+  for (const s of [-1, 1]) box(TD, TH, 0.02, toteMat, tx, ty + TH / 2, RZ + s * (TW / 2 - 0.01));
+  for (const s of [-1, 1]) box(0.02, TH, TW, toteMat, tx + s * (TD / 2 - 0.01), ty + TH / 2, RZ);
+  const grab = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 0.52),                               // the cubby's open side: click target from behind the counter
     new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-  grab.position.set(RX - 0.34, 0.54, RCZ); grab.rotation.y = -Math.PI / 2; scene.add(grab);
+  grab.position.set(RX - CD / 2 - 0.005, 0.4, RZ); grab.rotation.y = -Math.PI / 2; scene.add(grab);
   grab.userData.returns = true; aimables.push(grab);
-  // returned tapes, lying flat in a loose stack on the shelf (redrawn when the bin changes — see refreshReturnsBin)
   const binGroup = new THREE.Group(); scene.add(binGroup);
-  refreshReturnsBin = () => {
+  refreshReturnsBin = () => {                  // returned tapes lying in the tote, loose piles
     binGroup.clear();
-    returnBin.slice(-10).forEach((t, i) => {
+    returnBin.slice(-12).forEach((t, i) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), t.sideMat || mat.tapeBody);
-      const pile = i % 3, level = Math.floor(i / 3);   // three piles along the shelf, each tape resting on the one below it
-      m.position.set(RX - 0.05 + (level % 2) * 0.03, 0.51 + TAPE.w / 2 + level * TAPE.w, RCZ - 0.25 + pile * 0.25);
-      m.rotation.y = (i * 0.37) % 0.5 - 0.25; binGroup.add(m);
+      const pile = i % 3, level = Math.floor(i / 3);
+      m.position.set(tx + (level % 2) * 0.03 - 0.015, ty + 0.02 + TAPE.w / 2 + level * TAPE.w, RZ - 0.22 + pile * 0.22);
+      m.rotation.y = Math.PI / 2 + ((i * 0.37) % 0.5 - 0.25); binGroup.add(m);
     });
   };
-  solid(0.78, 0.08, RLEN, mat.counterTop, RX, 1.04, RCZ);
-  returnSlotMesh = box(0.1, 0.03, 0.7, mat.dark, RX + 0.3, 1.085, RCZ);   // east face, facing the shop floor
-  returnSlotMesh.userData.returns = true; aimables.push(returnSlotMesh);
-  // mounted right on the counter's own blue face, not floating on a riser above it
-  const rb = textPlane("RETURNS", 1.1, 0.32, "#001f5c", "#ffd400"); rb.position.set(RX + 0.36, 0.55, RCZ); rb.rotation.y = Math.PI / 2;
-  rb.material = new THREE.MeshLambertMaterial({ map: rb.material.map }); // lit by the room, no unlit glow in the dark
-  scene.add(rb);
+  const hours = textPlane("OPEN 10A-12A DAILY", 0.9, 0.22, "#001f5c", "#fff");  // tented placard, first thing you see coming in
+  hours.position.set(RX - 0.05, TOP + 0.11, FRONT + 0.3); hours.rotation.x = -0.3; hours.rotation.y = Math.PI; scene.add(hours);
 
-  // second counter, touching the front (door) wall, in line with returns —
-  // the gap between the two (now much shorter, since returns moved toward
-  // the wall) is the register's only way in, gated by a hinged pass-through
-  // flap rather than an open doorway
-  const FRONT = 0.1;                           // front wall's inner face
-  const GAP = 0.9;                             // walkway + flap width
-  const returnsSouthZ = RZ0 - RLEN;            // returns' own south edge, where the flap picks up
-  solid(0.7, 1.0, returnsSouthZ - GAP - FRONT, mat.counter, RX, 0.5, FRONT + (returnsSouthZ - GAP - FRONT) / 2);
-  solid(0.78, 0.08, returnsSouthZ - GAP - FRONT, mat.counterTop, RX, 1.04, FRONT + (returnsSouthZ - GAP - FRONT) / 2);
-  const hours = textPlane("OPEN 10A-12A DAILY", 0.9, 0.22, "#001f5c", "#fff");  // little tented countertop placard
-  hours.position.set(RX, 1.22, FRONT + 0.25); hours.rotation.x = -0.3; hours.rotation.y = Math.PI; scene.add(hours);  // faces the doors, first thing you see coming in
-  const flapZ0 = returnsSouthZ - GAP;          // hinge line — the flap swings up from here
-  flapPivot = new THREE.Group(); flapPivot.position.set(RX, 1.04, flapZ0); scene.add(flapPivot);
-  const flapMesh = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, GAP), mat.counterTop);
-  flapMesh.position.set(0, 0, GAP / 2);        // closed: lies flush, flush with the counters on either side
-  flapPivot.add(flapMesh);
-  flapMesh.userData.flap = flapPivot; aimables.push(flapMesh);
-  flapCollider = { x0: RX - 0.35, x1: RX + 0.35, z0: flapZ0, z1: returnsSouthZ };
+  // ---- the pass-through, by the soda cooler: a lift-up countertop leaf
+  // hinged at the wall plus a swinging half gate under it, both animated
+  // together (see the main loop). Closed = flush with the counter.
+  const FW = FLAP_X1 - FLAP_X0;
+  flapPivot = new THREE.Group(); flapPivot.position.set(FLAP_X0, TOP - 0.04, 4); scene.add(flapPivot);
+  const flapMesh = new THREE.Mesh(new THREE.BoxGeometry(FW - 0.01, 0.04, CD + 0.06), mat.counterTop);
+  flapMesh.position.set(FW / 2, 0.02, 0); flapPivot.add(flapMesh);
+  const flapEdge = new THREE.Mesh(new THREE.BoxGeometry(FW - 0.01, 0.035, 0.012), chromeC);
+  flapEdge.position.set(FW / 2, 0.02, CD / 2 + 0.036); flapPivot.add(flapEdge);
+  for (const hz of [-0.25, 0.25]) { const h = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.08, 10), chromeC); h.rotation.x = Math.PI / 2; h.position.set(0.01, 0.0, hz); flapPivot.add(h); }   // hinge knuckles
+  flapGate = new THREE.Group(); flapGate.position.set(FLAP_X0 + 0.02, 0, 4); scene.add(flapGate);
+  const gw = FW - 0.06;
+  const gate = new THREE.Mesh(new THREE.BoxGeometry(gw, TOP - 0.1 - KICK, 0.04), mat.counter); gate.position.set(gw / 2, KICK + (TOP - 0.1 - KICK) / 2, 0); flapGate.add(gate);
+  const gRail = new THREE.Mesh(new THREE.BoxGeometry(gw, 0.03, 0.05), mat.counterTop); gRail.position.set(gw / 2, TOP - 0.1, 0); flapGate.add(gRail);
+  for (const y of [KICK + 0.12, TOP - 0.2]) { const b = new THREE.Mesh(new THREE.BoxGeometry(gw, 0.02, 0.05), chromeC); b.position.set(gw / 2, y, 0); flapGate.add(b); }
+  const kickPlate = new THREE.Mesh(new THREE.BoxGeometry(gw, 0.16, 0.046), steelC); kickPlate.position.set(gw / 2, KICK + 0.08, 0); flapGate.add(kickPlate);
+  const pull = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.07), chromeC); pull.position.set(gw - 0.08, TOP - 0.34, 0); flapGate.add(pull);
+  for (const m of [flapMesh, flapEdge, gate, gRail, pull]) { m.userData.flap = flapPivot; aimables.push(m); }
+  flapCollider = { x0: FLAP_X0, x1: FLAP_X1, z0: 4 - CD / 2, z1: 4 + CD / 2 };
   colliders.push(flapCollider);                // starts closed/blocked; toggleFlap() adds/removes this
+
+  // ---- on the counter ----
+  const put = (geo, m, x, y, z, parent = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+  const beigeP = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), blackC = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
+  // receipt printer beside the register, paper curling out the top
+  put(new THREE.BoxGeometry(0.16, 0.12, 0.2), beigeP, -5.0, TOP + 0.06, 3.98);
+  put(new THREE.BoxGeometry(0.1, 0.006, 0.05), blackC, -5.0, TOP + 0.123, 3.93);
+  const paper = put(new THREE.CylinderGeometry(0.05, 0.05, 0.075, 16, 1, true, 0, Math.PI * 0.8), new THREE.MeshLambertMaterial({ color: 0xfbfbf6, side: THREE.DoubleSide }), -5.0, TOP + 0.15, 3.9);
+  paper.rotation.z = Math.PI / 2;
+  // security-tag deactivator pad (the "desensitizer"): tapes run across it before they leave
+  const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, -3.95, TOP + 0.0125, 3.92);
+  desensLed = glow(put(new THREE.BoxGeometry(0.012, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xff3020 }), -3.83, TOP + 0.028, 3.84));
+  padMesh.userData.desens = true; aimables.push(padMesh);
+  const deac = textPlane("DESENSITIZE", 0.2, 0.04, "#ddd", "#151515", "Arial", 60);
+  deac.material = new THREE.MeshLambertMaterial({ map: deac.material.map }); deac.position.set(-3.97, TOP + 0.026, 3.92); deac.rotation.x = -Math.PI / 2; deac.rotation.z = Math.PI; scene.add(deac);
+  // cash drawer under the register, on the employee face
+  box(0.46, 0.13, 0.02, beigeP, -5.45, TOP - 0.13, 4 - CD / 2 - 0.01);
+  box(0.12, 0.015, 0.02, chromeC, -5.45, TOP - 0.13, 4 - CD / 2 - 0.022);
+  // service bell on the ledge — E / click to ding it
+  const LEDGE_Y = TOP + 0.17, LZ = 4 + CD / 2 - 0.03;
+  const bell = new THREE.Group(); bell.position.set(-3.1, LEDGE_Y, LZ); scene.add(bell);
+  put(new THREE.CylinderGeometry(0.045, 0.05, 0.02, 20), blackC, 0, 0.01, 0, bell);
+  put(new THREE.SphereGeometry(0.042, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), chromeC, 0, 0.02, 0, bell);
+  put(new THREE.CylinderGeometry(0.004, 0.004, 0.025, 8), chromeC, 0, 0.07, 0, bell);
+  put(new THREE.SphereGeometry(0.009, 10, 8), chromeC, 0, 0.083, 0, bell);
+  bell.traverse(o => { if (o.isMesh) { o.userData.bell = true; aimables.push(o); } });
+  // pen cup + "become a member" forms in an acrylic holder
+  put(new THREE.CylinderGeometry(0.03, 0.028, 0.09, 14), new THREE.MeshLambertMaterial({ color: 0x1f3f86 }), -3.7, LEDGE_Y + 0.045, LZ);
+  [[-0.012, 0.2, 0xc41e1e], [0.01, -0.15, 0x111111], [0, 0.05, 0x1f55c4]].forEach(([dx, tilt, c]) => {
+    const pen = put(new THREE.CylinderGeometry(0.004, 0.004, 0.14, 6), new THREE.MeshLambertMaterial({ color: c }), -3.7 + dx, LEDGE_Y + 0.1, LZ); pen.rotation.z = tilt;
+  });
+  const forms = makeTexture((ctx, W, H) => {
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#00349c"; ctx.fillRect(0, 0, W, 60);
+    ctx.fillStyle = "#ffd400"; ctx.font = "bold 30px Arial Black, Arial"; ctx.textAlign = "center"; ctx.fillText("BECOME A MEMBER", W / 2, 42);
+    ctx.fillStyle = "#333"; ctx.font = "18px Arial"; ctx.textAlign = "left";
+    ["NAME ________________", "ADDRESS _____________", "PHONE _______________", "DRIVER LIC # ________", "", "FREE RENTAL WITH SIGNUP!"].forEach((l, i) => ctx.fillText(l, 20, 100 + i * 34));
+  }, 320, 320);
+  const holder = new THREE.Group(); holder.position.set(-4.0, LEDGE_Y, LZ); holder.rotation.y = 0; scene.add(holder);
+  const acrylicC = new THREE.MeshPhongMaterial({ color: 0xdbe8f0, specular: 0xffffff, shininess: 90, transparent: true, opacity: 0.35, depthWrite: false });
+  put(new THREE.BoxGeometry(0.2, 0.2, 0.004), acrylicC, 0, 0.1, 0.04, holder).rotation.x = -0.25;
+  const form = put(new THREE.PlaneGeometry(0.17, 0.17), new THREE.MeshLambertMaterial({ map: forms }), 0, 0.1, 0.035, holder); form.rotation.x = -0.25;
+  // hanging CHECKOUT sign over the checkout run, two panels back to back on cables
+  {
+    const sx = -4.2, sy = 2.75, tex = textPlane("CHECKOUT", 1.6, 0.4).material.map, m = new THREE.MeshLambertMaterial({ map: tex });
+    const f = put(new THREE.PlaneGeometry(1.6, 0.4), m, sx, sy, 4.005); const b = put(new THREE.PlaneGeometry(1.6, 0.4), m, sx, sy, 3.995); b.rotation.y = Math.PI;
+    for (const cx of [sx - 0.6, sx + 0.6]) put(new THREE.CylinderGeometry(0.006, 0.006, STORE.h - sy - 0.2), mat.dark, cx, (STORE.h + sy + 0.2) / 2, 4);
+  }
+
+  // ---- back cabinet under the front window: phone, paper bags, reserved holds ----
+  {
+    const bx0 = -6.9, bx1 = -3.4, bz = FRONT + 0.25, BHt = 0.82;
+    box(bx1 - bx0, BHt - 0.03, 0.46, mat.counter, (bx0 + bx1) / 2, (BHt - 0.03) / 2, bz);
+    box(bx1 - bx0 + 0.02, 0.03, 0.5, mat.counterTop, (bx0 + bx1) / 2, BHt - 0.015, bz);
+    for (let d = bx0 + 0.05; d + 0.5 <= bx1; d += 0.52) {
+      box(0.49, BHt - 0.14, 0.015, blueDk, d + 0.25, (BHt - 0.03) / 2 + 0.02, bz + 0.232);
+      box(0.012, 0.12, 0.02, chromeC, d + 0.43, BHt - 0.2, bz + 0.245);
+    }
+    colliders.push({ x0: bx0, x1: bx1, z0: FRONT, z1: bz + 0.25, y1: BHt });
+    // multi-line desk phone
+    const ph = new THREE.Group(); ph.position.set(-6.4, BHt, bz); ph.rotation.y = Math.PI; scene.add(ph);
+    const base = put(new THREE.BoxGeometry(0.22, 0.06, 0.2), beigeP, 0, 0.03, 0, ph); base.rotation.x = -0.15;
+    put(new THREE.BoxGeometry(0.22, 0.04, 0.06), beigeP, 0, 0.085, -0.06, ph);                 // handset
+    for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.018, 0.006, 0.014), i < 2 ? new THREE.MeshBasicMaterial({ color: 0xff4020 }) : blackC, -0.06 + (i % 3) * 0.03, 0.065, 0.04 + Math.floor(i / 3) * 0.025, ph);
+    // stack of brown paper bags
+    const kraft = new THREE.MeshLambertMaterial({ color: 0xa8804f });
+    for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.3, 0.008, 0.2), kraft, -5.6 + (i % 2) * 0.01, BHt + 0.004 + i * 0.008, bz);
+    // reserved holds: a few tapes rubber-banded with a slip on top
+    const slip = new THREE.MeshLambertMaterial({ color: 0xfff59a });
+    [0x8c2a1e, 0x1f3f86, 0x2f6b3a, 0xd8c9a0, 0x3a3a3a].forEach((c, i) => put(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), new THREE.MeshLambertMaterial({ color: c }), -4.4 + (i % 2) * 0.01, BHt + TAPE.w / 2 + i * TAPE.w, bz));
+    put(new THREE.BoxGeometry(0.1, 0.002, 0.07), slip, -4.4, BHt + 5 * TAPE.w + 0.001, bz);
+  }
 
   const kind = textPlane("BE KIND, REWIND", 1.6, 0.55); kind.position.set(0, 3.1, 0.16);
   kind.material = new THREE.MeshLambertMaterial({ map: kind.material.map }); // lit by the room, no unlit glow in the dark
@@ -1771,6 +2027,30 @@ function sideMatFor(img) {
     color: new THREE.Color().setRGB(top.r / top.n / 255, top.g / top.n / 255, top.b / top.n / 255, THREE.SRGBColorSpace) }));
   return sideMats.get(top.k);
 }
+// the MonsterVision sticker: a round black-and-green badge slapped on the
+// top-right corner of every MonsterVision cover (shelf covers + the held-up view)
+function drawMVSticker(ctx, x, y, r) {        // x, y = badge center
+  ctx.save(); ctx.translate(x, y); ctx.rotate(0.22);
+  ctx.fillStyle = "#0b0b0b"; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = r * 0.12; ctx.strokeStyle = "#7dff3a"; ctx.stroke();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = `900 ${r * 0.34}px "Arial Black", Arial`;
+  ctx.fillStyle = "#7dff3a"; ctx.fillText("MONSTER", 0, -r * 0.2);
+  ctx.fillStyle = "#fff"; ctx.fillText("VISION", 0, r * 0.24);
+  ctx.restore();
+}
+// a cover image with the sticker composited on (for the held-up <img>); falls back to the plain image
+function stickerize(src, done) {
+  const img = new Image(); img.crossOrigin = "anonymous";
+  img.onload = () => {
+    try {
+      const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0);
+      drawMVSticker(ctx, c.width * 0.8, c.width * 0.2, c.width * 0.16);
+      done(c.toDataURL("image/jpeg", 0.92));
+    } catch { done(src); }                    // tainted (no CORS): plain poster
+  };
+  img.onerror = () => done(src); img.src = src;
+}
 function drawCover(tape, cell) {
   const a = atlasFor(Math.floor(cell / CELLS)), ctx = a.ctx;
   const x0 = (cell % CELLS) % COLS * CW, y0 = Math.floor((cell % CELLS) / COLS) * CH;
@@ -1794,6 +2074,8 @@ function drawCover(tape, cell) {
     ctx.fillText(L, x0 + CW / 2, line); line += fs + 4;
   }
   if (tape.label) { ctx.fillStyle = "#ffd400"; ctx.font = "bold 15px Arial"; ctx.fillText(tape.label.slice(0, 12), x0 + CW / 2, y0 + CH - 24); }
+  const mv = tape.category === "MonsterVision";
+  if (mv) drawMVSticker(ctx, x0 + CW - 30, y0 + 30, 25);
   tape.cell = cell;
   // real cover art from art/, painted over the placeholder once it loads
   if (tape.art) artLoader.load(artUrl(tape.art), tex => {
@@ -1801,6 +2083,7 @@ function drawCover(tape, cell) {
     const s = Math.max((CW - 4) / img.width, (CH - 4) / img.height);
     const sw = (CW - 4) / s, sh = (CH - 4) / s;
     ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x0 + 2, y0 + 2, CW - 4, CH - 4);
+    if (mv) drawMVSticker(ctx, x0 + CW - 30, y0 + 30, 25);
     a.texture.needsUpdate = true;
     tape.sideMat = sideMatFor(img);
     for (const c of [tape, ...(tape.copies || [])]) paintBody(c);   // art usually lands after the shelves are built
@@ -1975,7 +2258,7 @@ function buildFace(tapes, ax, az, ry, m, headers = [], lead = true, spec = BAY, 
   // header strip on the top backing, above the top row of tapes; genre labels live on the endcaps
   const cat = label || tapes.find(Boolean).category;
   if (!catStripMat[cat]) catStripMat[cat] = stripTexture(cat);
-  for (let bay = 0; bay < nBays; bay++) {
+  if (cat !== "MonsterVision") for (let bay = 0; bay < nBays; bay++) {   // (MonsterVision has its own topper sign instead)
     const h = new THREE.PlaneGeometry(spec.len - 0.1, 0.16);
     h.rotateY(Math.PI / 2); h.translate(spec.top + 0.006, spec.h - 0.15, m * (bay * spec.len + spec.len / 2));   // 6 mm off the backing: closer flickers at a distance
     addShelfPart(catStripMat[cat], h.applyMatrix4(M));
@@ -2220,7 +2503,8 @@ const wallSpans = [];                        // what the wall runs cover, for li
   }
 
   // ---- center: older movies west of the corridor, TV east ----
-  const centerList = catalog.filter(t => !isKids(t) && !isWall(t));
+  const isMV = t => t.category === "MonsterVision";
+  const centerList = catalog.filter(t => !isKids(t) && !isWall(t) && !isMV(t));
   const classics = centerList.filter(isMovie), tv = centerList.filter(t => !isMovie(t));
   const bandStep = 2 * SHORT.depth + CENTER.gap;
   const bandZ = b => CENTER.z0 + b * bandStep + SHORT.depth;   // a band's back plane
@@ -2283,10 +2567,65 @@ const wallSpans = [];                        // what the wall runs cover, for li
     sg.position.set(0, SHORT.h + 0.25, pickZ - 0.066); sg.rotation.y = Math.PI; scene.add(sg);   // 6 mm off the board
   }
 
-  // ---- candy aisle: the front band on the register side, next to the snack center ----
+  // ---- MonsterVision: band 1's back face (register side), facing into the
+  // store — the first thing before the Classics, one standard aisle from
+  // Comedy, back to back with the candy rack. 75 films, so this one unit is
+  // four rows high (same 1.5 m gondola) to hold them in two bays ----
+  const MV_SPEC = { ...SHORT, rows: 4, boardY: [0.12, 0.45, 0.78, 1.11] };
+  const mvBays = layBlock(catalog.filter(isMV), ["MonsterVision"],
+    [{ x: -CENTER.corridor, z: bandZ(1), ry: -Math.PI / 2, dx: -1, dz: 0, bays: CENTER.westBays }], MV_SPEC);
+  {                                                        // topper: MONSTERVISION in green on black, facing into the store
+    const cx = -CENTER.corridor - CENTER.westBays * BAY.len / 2, z = bandZ(1);
+    box(2.5, 0.5, 0.06, mat.dark, cx, SHORT.h + 0.25, z + 0.03);
+    const sg = textPlane("MONSTERVISION", 2.4, 0.42, "#7dff3a", "#0b0b0b");
+    sg.material = new THREE.MeshLambertMaterial({ map: sg.material.map });
+    sg.position.set(cx, SHORT.h + 0.25, z + 0.066); scene.add(sg);
+  }
+
+  // ---- cardboard standee (cutout.js): life-size Dracula at the walkway end of
+  // the MonsterVision aisle, facing the same way as the covers (into the store). Shaped exactly like the PNG
+  // (alpha-tested), printed on the front, plain cardboard on the back, a few
+  // cardboard layers between for a visible edge, and an easel strut folded
+  // out behind to hold it up ----
+  if (window.VAULT_CUTOUT) {
+    const img = new Image();
+    img.onload = () => {
+      const H = 1.85, W = H * img.width / img.height, T = 0.005;              // life-size; 5 mm board
+      const layer = fill => {                                                  // the PNG's silhouette, recolored (null = the print itself)
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        const ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0);
+        if (fill) { ctx.globalCompositeOperation = "source-in"; fill(ctx, c.width, c.height); }
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+      };
+      const kraft = (ctx, w, h) => {                                           // cardboard: tan with faint fibres
+        ctx.fillStyle = "#b98c5a"; ctx.fillRect(0, 0, w, h);
+        for (let i = 0; i < 900; i++) { ctx.fillStyle = Math.random() < 0.5 ? "rgba(90,60,30,.18)" : "rgba(255,240,210,.15)"; ctx.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 6, 1); }
+      };
+      const g = new THREE.Group(); g.position.set(-1.3, 0, bandZ(1) + 0.9); g.rotation.y = -Math.PI / 4; scene.add(g);   // faces into the aisle at 45°, tucked by the endcap
+      const face = (tex, z, ry = 0) => {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5, side: ry ? THREE.FrontSide : THREE.DoubleSide }));
+        m.position.set(0, H / 2, z); m.rotation.y = ry; g.add(m); return m;
+      };
+      face(layer(null), T / 2);                                                // printed front
+      face(layer(kraft), -T / 2, Math.PI);                                     // cardboard back
+      const edge = layer((ctx, w, h) => { ctx.fillStyle = "#8f6a42"; ctx.fillRect(0, 0, w, h); });
+      for (let i = 1; i < 4; i++) face(edge, T / 2 - i * T / 4);                // the board's thickness, seen edge-on
+      // easel strut: a tapered cardboard leg hinged a bit over halfway up the back, foot on the floor behind
+      const top = 1.05, reach = 0.45, len = Math.hypot(top, reach);
+      const strut = new THREE.Shape([[-0.07, 0], [0.07, 0], [0.12, -len], [-0.12, -len]].map(([x, y]) => new THREE.Vector2(x, y)));
+      const leg = new THREE.Mesh(new THREE.ShapeGeometry(strut), new THREE.MeshLambertMaterial({ color: 0xb98c5a, side: THREE.DoubleSide }));
+      leg.position.set(0, top, -T); leg.rotation.x = Math.atan2(reach, top); g.add(leg);   // swings the foot back (-z), behind the board
+      const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.004), new THREE.MeshLambertMaterial({ color: 0x8f6a42 }));
+      hinge.position.set(0, top - 0.02, -T - 0.002); g.add(hinge);             // the glued tab the strut folds out from
+    };
+    img.src = window.VAULT_CUTOUT;
+    colliders.push({ x0: -1.3 - 0.45, x1: -1.3 + 0.45, z0: bandZ(1) + 0.45, z1: bandZ(1) + 1.35, y1: 1.85 });   // board (on the diagonal) + strut footprint
+  }
+
+  // ---- candy aisle: band 1's door-side face on the register side, back to back with MonsterVision ----
   // one wide snack rack facing the register and the doors, where a checkout line would stand
   {
-    const w = CENTER.westBays * BAY.len, cx = -CENTER.corridor - w / 2, cz = CENTER.z0 + SHORT.depth, d = buildSnackRack.depth;
+    const w = CENTER.westBays * BAY.len, cx = -CENTER.corridor - w / 2, cz = bandZ(1), d = buildSnackRack.depth;
     const g = buildSnackRack(w, "CANDY");
     g.rotation.y = Math.PI; g.position.set(cx, 0, cz - d / 2); scene.add(g);
     colliders.push({ x0: cx - w / 2, x1: cx + w / 2, z0: cz - d, z1: cz });
@@ -2327,7 +2666,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     const out = Math.floor(Math.random() * n * 0.45);
     t.copies.slice(t.copies.length - out).forEach(c => { setOnShelf(c, false); rentedCopies.push(c); });   // the POS checks each out to a member
   }
-  window.__layout ={ wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
+  window.__layout = { mvBays, wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
 }
 
 // ---------------- TV lounge (living room, center of the back half) ----------------
@@ -2479,12 +2818,16 @@ function pictureFilter(tape, withSharpen = true) {
 const scanFx = document.createElement("canvas"); scanFx.width = 480; scanFx.height = 320;   // scanlines + glass vignette, drawn once
 {
   const c = scanFx.getContext("2d");
-  c.fillStyle = "rgba(0,0,0,.2)"; for (let y = 2; y < 320; y += 3) c.fillRect(0, y, 480, 1);
+  // every other row dimmed, with a faint cool tint (like the gap between phosphor lines), the lit rows a hair brighter
+  for (let y = 0; y < 320; y += 2) { c.fillStyle = "rgba(4,8,20,.34)"; c.fillRect(0, y + 1, 480, 1); c.fillStyle = "rgba(255,255,255,.035)"; c.fillRect(0, y, 480, 1); }
   const g = c.createRadialGradient(240, 160, 110, 240, 160, 300); g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,.45)");
   c.fillStyle = g; c.fillRect(0, 0, 480, 320);
 }
 function drawTvMenu(ctx) {
-  ctx.fillStyle = "rgba(0,8,30,.82)"; ctx.fillRect(20, 12, 440, 296);
+  // OVERLAY checked: no panel, just the text (drop-shadowed to stay readable)
+  // over the picture, so you can see the changes behind it. Unchecked: the dark panel
+  if (!tvSet.overlay) { ctx.fillStyle = "rgba(0,8,30,.82)"; ctx.fillRect(20, 12, 440, 296); }
+  ctx.shadowColor = tvSet.overlay ? "rgba(0,0,0,.9)" : "transparent"; ctx.shadowBlur = 3; ctx.shadowOffsetX = ctx.shadowOffsetY = 1;
   ctx.strokeStyle = "#7dff9a"; ctx.lineWidth = 2; ctx.strokeRect(20, 12, 440, 296);
   ctx.fillStyle = "#7dff9a"; ctx.textBaseline = "middle"; ctx.textAlign = "center";
   ctx.font = "bold 22px 'Courier New', monospace"; ctx.fillText("SETTINGS", 240, 34);
@@ -2509,6 +2852,7 @@ function drawTvMenu(ctx) {
     ctx.strokeStyle = "#7dff9a"; ctx.lineWidth = 2; ctx.strokeRect(b.x, TVM.btnY, b.w, TVM.btnH);
     ctx.fillStyle = "#7dff9a"; ctx.fillText(b.label, b.x + b.w / 2, TVM.btnY + TVM.btnH / 2 + 1);
   }
+  ctx.shadowColor = "transparent"; ctx.shadowBlur = ctx.shadowOffsetX = ctx.shadowOffsetY = 0;
 }
 // what's under screen-canvas point (x, y): a row index, "reset"/"close", or null
 function tvMenuHit(x, y) {
@@ -2600,6 +2944,7 @@ function updateScreensaver(dt) {
   screensaverTex.needsUpdate = true;
 }
 let screenMesh, videoMat, videoTex, miniScreens;
+let tvPowerLed, vcrDisplay;                  // the TV console's power LED + the VCR's VFD clock (built with the TV)
 const crtGlows = [];                       // one real light per ceiling CRT cluster — bloom alone doesn't light the shelves under it
 {
   // the preview living room: rug, coffee table, couch facing the TV
@@ -2690,11 +3035,81 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   ps.position.set(0, sg.y * cs, couch.position.z + sg.z * cs); ps.rotation.set(sg.tilt, Math.PI, 0);
   ps.material = new THREE.MeshLambertMaterial({ map: ps.material.map }); // lit by the room, no unlit glow in the dark
   scene.add(ps);
-  // classic floor-standing big-screen projection TV
-  const bezelMat = new THREE.MeshLambertMaterial({ color: 0x2a2e35 });
-  solid(2.4, 1.55, 0.95, mat.dark, 0, 0.775, TV.z);                       // cabinet on the floor
-  box(2.05, 1.35, 0.08, bezelMat, 0, 0.95, TV.z - 0.515);                  // protruding bezel
-  box(0.55, 0.1, 0.35, mat.dark, 0.8, 1.6, TV.z - 0.1);                   // VCR on top
+  // classic 90s floor-standing rear-projection TV: glossy black console,
+  // bullnosed top, stepped charcoal frame round the (recessed) screen, fabric
+  // speaker columns either side, a full-width bottom grille with the model
+  // plate, a chrome brand badge up top, a control strip with a power LED, the
+  // sloped projector housing out the back — and a VCR with a blinking 12:00.
+  // Built round the screen (1.8 x 1.2, centred y 0.95, front at TV.z - 0.558),
+  // which the TV light / picture menu / shadow bake all key off.
+  {
+    const g = new THREE.Group(); g.position.set(TV.x, 0, TV.z); scene.add(g);  // local -z = front (toward the couch)
+    const gloss = new THREE.MeshPhongMaterial({ color: 0x141518, specular: 0x3a3a3a, shininess: 45 });
+    const satin = new THREE.MeshPhongMaterial({ color: 0x0d0e10, specular: 0x222222, shininess: 20 });
+    const frameM = new THREE.MeshPhongMaterial({ color: 0x2a2d33, specular: 0x555555, shininess: 60 });
+    const silver = new THREE.MeshPhongMaterial({ color: 0xa9aeb5, specular: 0xffffff, shininess: 90 });
+    const add = (geo, m, x, y, z, parent = g) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+    const bx = (w, h, d, m, x, y, z, parent) => add(new THREE.BoxGeometry(w, h, d), m, x, y, z, parent);
+    const W = 2.3, ZF = -0.545, TOPY = 1.78;                                  // cabinet width, front face, top
+    const grilleTex = (w, h, reps) => {                                         // black speaker cloth: a fine weave
+      const t = makeTexture((ctx, cw, ch) => {
+        ctx.fillStyle = "#1c1e22"; ctx.fillRect(0, 0, cw, ch);
+        ctx.fillStyle = "#2c2f34"; for (let x = 0; x < cw; x += 4) ctx.fillRect(x, 0, 1, ch);
+        ctx.fillStyle = "#0a0b0c"; for (let y = 0; y < ch; y += 4) ctx.fillRect(0, y, cw, 1);
+      }, 128, 128);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(w * reps, h * reps); return t;
+    };
+    const grille = (w, h, x, y) => add(new THREE.PlaneGeometry(w, h), new THREE.MeshLambertMaterial({ map: grilleTex(w, h, 8) }), x, y, ZF - 0.003).rotation.y = Math.PI;
+    // body: plinth, lower band, the screen section, the bullnosed top
+    bx(W - 0.08, 0.06, 0.56, satin, 0, 0.03, -0.24);                                        // recessed plinth
+    bx(W, 0.3, 0.6, gloss, 0, 0.21, ZF + 0.3);                                               // lower band (0.06-0.36)
+    bx(W, 1.2, 0.6, gloss, 0, 0.96, ZF + 0.3);                                               // screen section (0.36-1.56)
+    bx(W, 0.12, 0.6, gloss, 0, 1.62, ZF + 0.3);                                              // top band (1.56-1.68)
+    bx(W, 0.1, 0.55, gloss, 0, TOPY - 0.05, ZF + 0.325);                                     // behind the bullnose
+    const nose = add(new THREE.CylinderGeometry(0.05, 0.05, W, 20), gloss, 0, TOPY - 0.05, ZF + 0.05); nose.rotation.z = Math.PI / 2;
+    // sloped rear housing: the projector + mirror box, tall at the cabinet, raking down to the back
+    const prof = new THREE.Shape([[0.055, 0.06], [0.055, TOPY - 0.02], [0.3, 1.52], [0.6, 0.95], [0.6, 0.06]].map(([z, y]) => new THREE.Vector2(z, y)));
+    const rear = new THREE.ExtrudeGeometry(prof, { depth: 2.0, bevelEnabled: false }); rear.rotateY(-Math.PI / 2); rear.translate(1.0, 0, 0);
+    add(rear, satin, 0, 0, 0);
+    // stepped frame round the screen, with a silver pinline at its inner edge
+    const SY = 0.95, SW = 1.8, SH = 1.2, FW = 0.05;
+    for (const [w, h, x, y] of [[SW + 2 * FW, FW, 0, SY + SH / 2 + FW / 2], [SW + 2 * FW, FW, 0, SY - SH / 2 - FW / 2], [FW, SH, SW / 2 + FW / 2, SY], [FW, SH, -SW / 2 - FW / 2, SY]]) {
+      bx(w, h, 0.05, frameM, x, y, ZF - 0.02);
+      bx(w + (w > h ? 0.04 : 0.02), h + (h > w ? 0.04 : 0.02), 0.02, gloss, x, y, ZF - 0.005);   // the step out to the cabinet face
+    }
+    for (const [w, h, x, y] of [[SW, 0.006, 0, SY + SH / 2 + 0.003], [SW, 0.006, 0, SY - SH / 2 - 0.003], [0.006, SH, SW / 2 + 0.003, SY], [0.006, SH, -SW / 2 - 0.003, SY]])
+      bx(w, h, 0.006, silver, x, y, ZF - 0.047);
+    // speaker columns either side of the screen, and the full-width grille below
+    for (const s of [-1, 1]) grille(0.14, 1.12, s * (W / 2 - 0.09), SY);
+    grille(1.72, 0.2, -0.13, 0.2);
+    const plate = textPlane("PROJECTION 60", 0.34, 0.05, "#1a1c20", "#b8bdc4", "Arial", 64);
+    plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map });
+    plate.position.set(-0.13, 0.2, ZF - 0.006); plate.rotation.y = Math.PI; g.add(plate);
+    // brand badge on the top band
+    const badge = textPlane("VIDEOTRONIC", 0.4, 0.05, "#d8dce2", "#141518", "Arial Black", 72);
+    badge.material = new THREE.MeshPhongMaterial({ map: badge.material.map, specular: 0x888888, shininess: 70 });
+    badge.position.set(0, 1.655, ZF - 0.004); badge.rotation.y = Math.PI; g.add(badge);
+    // control strip, lower right: a row of little buttons and the power LED
+    bx(0.3, 0.07, 0.012, satin, 0.93, 0.2, ZF - 0.006);
+    for (let i = 0; i < 4; i++) bx(0.03, 0.018, 0.012, frameM, 0.84 + i * 0.045, 0.2, ZF - 0.014);
+    tvPowerLed = glow(add(new THREE.SphereGeometry(0.008, 10, 8), new THREE.MeshBasicMaterial({ color: 0x551008 }), 1.05, 0.2, ZF - 0.012));
+    // feet
+    for (const x of [-1, 1]) for (const z of [-0.45, 0.45]) add(new THREE.CylinderGeometry(0.03, 0.035, 0.02, 12), satin, x * (W / 2 - 0.12), 0.01, z + 0.05);
+    colliders.push({ x0: TV.x - W / 2, x1: TV.x + W / 2, z0: TV.z + ZF, z1: TV.z + 0.6, y1: TOPY });   // starts behind the screen: the TV light's shadow bake treats colliders as blockers
+
+    // the VCR on top: black, a VHS door, buttons, and a green VFD clock
+    const vcr = new THREE.Group(); vcr.position.set(0.55, TOPY, -0.2); g.add(vcr);
+    bx(0.43, 0.09, 0.3, gloss, 0, 0.045, 0, vcr);
+    bx(0.43, 0.012, 0.3, frameM, 0, 0.006, 0, vcr);                                         // silver-grey base trim
+    bx(0.2, 0.035, 0.006, satin, -0.07, 0.05, -0.152, vcr);                                  // tape door
+    const vhs = textPlane("VHS", 0.04, 0.014, "#c9cdd2", "#0d0e10", "Arial Black", 60);
+    vhs.material = new THREE.MeshLambertMaterial({ map: vhs.material.map }); vhs.position.set(-0.07, 0.023, -0.156); vhs.rotation.y = Math.PI; vcr.add(vhs);
+    for (let i = 0; i < 5; i++) bx(0.016, 0.008, 0.006, frameM, 0.07 + i * 0.022, 0.028, -0.152, vcr);
+    const vfd = document.createElement("canvas"); vfd.width = 128; vfd.height = 40;
+    vcrDisplay = { ctx: vfd.getContext("2d"), tex: new THREE.CanvasTexture(vfd), shown: "" };
+    vcrDisplay.tex.colorSpace = THREE.SRGBColorSpace;
+    glow(add(new THREE.PlaneGeometry(0.1, 0.03), new THREE.MeshBasicMaterial({ map: vcrDisplay.tex }), 0.12, 0.06, -0.1535, vcr)).rotation.y = Math.PI;
+  }
   screenMesh = new THREE.Mesh(screenGeo, screensaverMat);
   screenMesh.position.set(0, 0.95, TV.z - 0.558);
   screenMesh.rotation.y = Math.PI;                 // faces the couch
@@ -2860,6 +3275,10 @@ const HOLD_MS = 450;                       // tap L = overhead lights, hold L = 
 let lHoldTimer = null, lHeld = false;
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
+  if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
+    if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    return;
+  }
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat) onE();   // one press, one action — holding E doesn't machine-gun bites, doors, the flap
@@ -2876,7 +3295,7 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => {
   keys.delete(e.code);
-  if (posTerm?.isOpen()) return;
+  if (posTerm?.isOpen() || document.pointerLockElement !== canvas) return;   // no light toggles from the pause menu either
   if (e.code === "KeyL") {
     clearTimeout(lHoldTimer);
     if (!lHeld) setLights(!lightsOut);       // released before the hold threshold: a plain tap
@@ -2939,7 +3358,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -2967,7 +3386,7 @@ function toggleDoor(d) {
   d.open = !d.open;
 }
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
@@ -3010,6 +3429,9 @@ function pickHover() {
     else if (aim?.object.userData.flap && aim.distance < 2.6) aimFlap = aim.object.userData.flap;
     else if (aim?.object.userData.door && aim.distance < 2.4) aimDoor = aim.object.userData.door;
     else if (aim?.object.userData.pos && aim.distance < 2.4) aimPOS = true;
+    else if (aim?.object.userData.bell && aim.distance < 2.4) aimBell = true;
+    else if (aim?.object.userData.desens && aim.distance < 2.4 && held) aimDesens = true;
+    else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || rewinder.tape)) aimRewinder = true;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
@@ -3020,6 +3442,11 @@ function pickHover() {
     else if (aimCooler) tip.innerHTML = `E — ${coolerOpen ? "close" : "open"} the cooler`;
     else if (aimFlap) tip.innerHTML = `E — ${flapOpen ? "close" : "open"} the counter pass-through`;
     else if (aimDoor) tip.innerHTML = aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`;
+    else if (aimRewinder) tip.innerHTML = !rewinder.tape ? `E — rewind ${held.title}${isRewound(held) ? " (already rewound)" : ""}`
+      : rewinder.done ? `E — take out ${rewinder.tape.title} · rewound`
+      : `Rewinding… ${Math.round(100 * rewinder.t / rewinder.dur)}% · E — take it out early`;
+    else if (aimBell) tip.innerHTML = "E — ring for service";
+    else if (aimDesens) tip.innerHTML = held.desens ? `${held.title} · already desensitized` : `E — desensitize ${held.title}`;
     else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
     else { tip.style.display = "none"; return; }
     tip.style.display = "block";
@@ -3306,10 +3733,12 @@ function showTape(tape) {                    // the tape in your hand (fresh pic
   // it loads (a plain <img> can load cross-origin even from file://). Offline
   // it just stays on the embedded one.
   const art = $("inspectArt"), hiPath = window.VAULT_ART_HI?.[tape.art];
-  art.src = artUrl(tape.art); coverZoom = 1; art.style.transform = "";
+  const mv = tape.category === "MonsterVision";
+  const show = src => mv ? stickerize(src, s => { if (held === tape) art.src = s; }) : art.src = src;
+  art.src = artUrl(tape.art); show(artUrl(tape.art)); coverZoom = 1; art.style.transform = "";
   if (hiPath) {
-    const hi = new Image();
-    hi.onload = () => { if (held === tape) art.src = hi.src; };
+    const hi = new Image(); hi.crossOrigin = "anonymous";
+    hi.onload = () => { if (held === tape) show(hi.src); };
     hi.src = "https://image.tmdb.org/t/p/w780" + hiPath;
   }
   handBody.material = tape.sideMat || mat.tapeBody;
@@ -3317,7 +3746,7 @@ function showTape(tape) {                    // the tape in your hand (fresh pic
   handGroup.visible = true;
 }
 function putBack() {                         // back into its own shelf slot (aimed at it, or a just-looked-at tape via right-click)
-  if (held) { shelveCheck(held); setOnShelf(held, true); }
+  if (held) { shelveCheck(held); held.desens = false; setOnShelf(held, true); }   // back on the shelf: tag re-armed
   releaseFromHand();
 }
 
@@ -3423,6 +3852,9 @@ function onE() {
     return;
   }
   if (aimPOS) { openPOS(); return; }
+  if (aimRewinder) { rewinderUse(); return; }
+  if (aimBell) { dingBell(); return; }
+  if (aimDesens) { desensitize(held); return; }
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
   if (aimDoor) { toggleDoor(aimDoor); return; }
@@ -3577,7 +4009,8 @@ function saveState() {
   const data = {
     v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
     lightsOut, gatesArmed: gateAlarm.armed, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
-    rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey),
+    desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
+    rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
@@ -3594,10 +4027,13 @@ function loadState(S) {
     S.doors?.forEach((open, i) => { if (doors[i] && open !== doors[i].open) toggleDoor(doors[i]); });
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
-    for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
     payLedger.push(...(S.payLedger || []));
+    for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
+    for (const k of S.desens || []) { const c = copyByKey(k); if (c) c.desens = true; }
     for (const c of (S.returns || []).map(copyByKey).filter(Boolean)) { setOnShelf(c, false); returnBin.push(c); }
     refreshReturnsBin();
+    const rw = S.rewinder && copyByKey(S.rewinder);
+    if (rw) { setOnShelf(rw, false); rewinderLoad(rw); }   // picks up rewinding from wherever it had got to
     const units = snackUnits();
     for (const it of S.inv || []) {          // re-pick each item up in order, exactly as if you'd grabbed it
       const c = it.kind === "tape" && copyByKey(it.key), u = it.kind === "snack" && units[it.i];
@@ -3651,6 +4087,18 @@ renderer.setAnimationLoop(() => {
   }
   if (!playing) updateScreensaver(dt);
   if (playing || tvMenu) updateVideoFrame();
+  rewinderTick(dt);
+  tvPowerLed.material.color.set(tvLight.base ? 0x3dff6a : 0x551008);   // green while a tape plays, dim red standby
+  {                                            // VCR clock: blinking 12:00 (nobody ever set it), PLAY while a tape runs
+    const txt = playing ? (video.paused ? "PAUSE" : "PLAY") : (Math.floor(clockT * 1.6) % 2 ? "12:00" : "");
+    if (txt !== vcrDisplay.shown) {
+      const c = vcrDisplay.ctx; vcrDisplay.shown = txt;
+      c.fillStyle = "#050807"; c.fillRect(0, 0, 128, 40);
+      c.fillStyle = "#6dffb0"; c.font = "bold 28px 'Courier New', monospace"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(txt, 64, 21);
+      vcrDisplay.tex.needsUpdate = true;
+    }
+  }
+  if (desensFlash > 0) { desensFlash -= dt; desensLed.material.color.set(desensFlash > 0 ? 0x2bff6a : 0xff3020); }
   if (playing && video.currentTime > 0 && !video.paused)   // the tape winds on
     playing.tape.tapePos = { ep: playing.idx, t: video.currentTime, d: isFinite(video.duration) ? video.duration : undefined };
   if (!playing) screenMesh.material = tvMenu ? videoMat : screensaverMat;   // menu over a blank screen when no tape's in
@@ -3694,7 +4142,8 @@ renderer.setAnimationLoop(() => {
     if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
   }
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
-  flapPivot.rotation.x += ((flapOpen ? -Math.PI / 2 : 0) - flapPivot.rotation.x) * Math.min(1, dt * 6);   // eases open/closed
+  flapPivot.rotation.z += ((flapOpen ? Math.PI / 2 * 0.97 : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
+  flapGate.rotation.y += ((flapOpen ? Math.PI / 2 : 0) - flapGate.rotation.y) * Math.min(1, dt * 5);          // gate swings in behind the counter
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
   coolerThermo.tick(dt);
   for (const d of doors) {                   // doors ease open/closed; a locked one rattles briefly when tried
@@ -3703,7 +4152,7 @@ renderer.setAnimationLoop(() => {
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
   move(dt);
-  if (inv.some(e => e.kind === "tape") && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
+  if (inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
   if (seated) camera.position.set(seatAt.x, seatAt.y, seatAt.z);

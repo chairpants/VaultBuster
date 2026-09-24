@@ -86,7 +86,7 @@ Neither server has any dependencies.
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
 | **Right-click** the TV screen | Picture settings menu |
-| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) |
+| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) · put a tape in the counter rewinder / take it out |
 | **Space** | Pause / play |
 | **, .** | Previous / next episode |
 | **L** (tap) | Store lights on/off, which also switches day and night |
@@ -107,6 +107,9 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `index.html` | The page, the HUD, and the three.js bootstrap |
 | `store.js` | The whole game: the building, shelving and packing, the lounge, lighting, the exterior, and playback |
 | `couch.js` | The procedurally built parlor sofa |
+| `pos.js` | The register's DOS-style POS terminal |
+| `monstervision.js` | Splits the single MonsterVision broadcast tape into one tape per film, with each airing mapped to its real title and year |
+| `mv-covers.js` | Generated TMDB posters for the MonsterVision films (kept out of `covers.js`, which is near GitHub's 50 MB warning) |
 | `catalog.js` | Generated tape catalog (`window.VAULT_CATALOG`) |
 | `covers.js` | Generated TMDB cover art, embedded as data URIs (`window.VAULT_ART`) |
 | `meta.js` | Generated release year and TMDB vote count per title (`window.VAULT_META`), used to sort the New Releases walls |
@@ -121,6 +124,7 @@ The catalog and covers are generated from a local VaultVision library, which the
 ```sh
 node build.mjs [path-to-VaultVision]                         # -> catalog.js
 TMDB_API_KEY=... node fetch-covers.mjs [path-to-VaultVision] # -> covers.js, meta.js
+TMDB_API_KEY=... node fetch-mv-covers.mjs                    # -> mv-covers.js
 ```
 
 `fetch-covers.mjs` has an `OVERRIDES` table for fixing wrong TMDB matches. The raw source images in `art/` are gitignored. The game doesn't need them at runtime.
