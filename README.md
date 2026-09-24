@@ -2,6 +2,8 @@
 
 **A first-person 90s video store you can actually rent from.**
 
+**▶ [Play it in your browser](https://chairpants.github.io/VaultBuster/)**
+
 ![Walking into VaultBuster](screenshots/entrance.jpg)
 
 Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, and play it on the big-screen TV in the lounge. Every one of the 1,600+ tapes streams real episodes and movies from the Internet Archive. It's built in three.js with no build step and no dependencies, and it runs straight from a `file://` URL.
@@ -10,12 +12,16 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 
 ## Screenshots
 
+| | |
+|---|---|
+| ![The checkout counter](screenshots/counter.jpg) | ![Behind the counter: register, rewinder and receipt printer](screenshots/behind-counter.jpg) |
+| ![The POS terminal's main menu](screenshots/pos.jpg) | ![The POS after a tape sets off the security gates](screenshots/alarm.jpg) |
+| ![The MonsterVision section and its Dracula standee](screenshots/monstervision.jpg) | ![A New Releases wall](screenshots/aisle.jpg) |
+
 | Lights on | Lights out |
 |---|---|
 | ![The TV lounge](screenshots/lounge.jpg) | ![The TV lounge after dark](screenshots/lounge-night.jpg) |
 | ![Looking out the front doors by day](screenshots/outside-day.jpg) | ![The lot at night under the sodium lights](screenshots/outside-night.jpg) |
-
-![Down a TV Shows aisle](screenshots/aisle.jpg)
 
 ---
 
@@ -28,7 +34,16 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 - **Center:** low gondolas on either side of the walkway to the lounge. Pre-1991 classic movies are by genre on the register side, with a second copy of the most-voted ones. TV is on the other side.
 - **Staff Picks:** a low display at the end of the walkway, facing the entrance. It holds one copy each of hand-picked movies (Hackers, Gremlins 2, Blade Runner, Mac and Me, …) and TV (The Twilight Zone, Twin Peaks, The Whitest Kids U'Know, Quantum Leap, Dragon Ball Z).
 - Real TMDB poster art on every cover. TV tapes get their own season's poster when TMDB has one.
-- A checkout and returns counter, a drink cooler and popcorn cart, a candy aisle facing the register that you can grab from, and movie posters in blinking marquee frames.
+- **MonsterVision:** TNT's late-night Joe Bob Briggs block, split into 75 films with their own TMDB posters and a MonsterVision sticker, on a four-row unit of its own. A life-size cardboard Dracula standee stands by the endcap. Hold **E** to pick it up and carry it anywhere in the store.
+- A drink cooler and popcorn cart, a candy aisle facing the register that you can grab from, and movie posters in blinking marquee frames.
+- Carry up to 9 things at once (tapes, snacks, drinks, popcorn) in an inventory bar.
+
+**The counter**
+- One L-shaped employee counter with a returns drop slot, a pass-through by the soda cooler, a service bell, a receipt printer, and a back cabinet.
+- **Register terminal:** log in at the register for a blue-screen, DOS-style POS system reached over telnet. It has title search, browsing by section, member lookup, overdue and rentals-out reports, the returns check-in queue, a daily summary, and lounge status. Everything is driven by the keyboard, and it's mirrored on the counter monitor.
+- **Security gates:** walk out through the gates carrying a tape that still has its security tag, and the alarm goes off, with red lights and a beeping tone. Silence it from the register, or disarm the gates entirely from the POS security menu.
+- **Desensitizer:** run a tape over the pad on the counter to deactivate its tag so it can leave the store. Putting it back on a shelf re-arms it.
+- **Rewinder:** every copy remembers how far it's wound. Drop one in the counter rewinder and it rewinds for as long as it needs to, based on how far in it was.
 
 **The TV lounge**
 - Put a tape in the big projection TV and every screen in the store plays it, including the ceiling CRTs over the aisles.
@@ -60,7 +75,9 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 
 You need an internet connection. three.js loads from a CDN, and the tapes stream from archive.org.
 
-**Easiest:** open `index.html` in a browser. It works from `file://` with no server needed.
+**Easiest:** play the hosted version at **https://chairpants.github.io/VaultBuster/**.
+
+**Locally:** open `index.html` in a browser. It works from `file://` with no server needed.
 
 **Or serve it locally:**
 
