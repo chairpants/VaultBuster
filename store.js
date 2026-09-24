@@ -68,11 +68,58 @@ camera.rotation.order = "YXZ";
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
 let setExteriorDay;                        // (isDay) => ... — swaps the exterior's own day/night rig; wired up below, called from setLights
+let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
 const exteriorClouds = [];                 // drifted a little each frame, see the main loop
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
+
+// ---------------- TV light (shader side) ----------------
+// The big screen lights the room as a 3x3 grid of colored patches (one per
+// region of the picture), each with real cosine falloff at the screen and at
+// the surface — so it reaches every wall and the ceiling, fading with
+// distance, instead of a point light's few-feet bubble. Shadows come from a
+// visibility volume baked once at startup against box proxies (see
+// bakeTvVis): per voxel, how much of the screen's left/center/right third it
+// can see. Patched into every Lambert/Phong material; the uniform objects
+// are shared by reference, so one write per frame feeds every material.
+const TVU = {
+  uTvGain: { value: 0 }, uTvAmb: { value: new THREE.Color(0) }, uTvCell: { value: 0 },
+  uTvZoneP: { value: new Float32Array(27) }, uTvZoneC: { value: new Float32Array(27) },
+  uTvVis: { value: null }, uTvVolMin: { value: new THREE.Vector3() }, uTvVolSize: { value: new THREE.Vector3(1, 1, 1) },
+  uTvRoom: { value: new THREE.Vector4() },   // room x0, x1, ceiling, screen-plane z (front wall is z 0)
+};
+const TV_FRAG = `
+if (uTvGain > 0.0 && vTvPos.x > uTvRoom.x && vTvPos.x < uTvRoom.y && vTvPos.y < uTvRoom.z && vTvPos.z > 0.0 && vTvPos.z < uTvRoom.w) {
+  vec3 tvN = inverseTransformDirection(normal, viewMatrix);
+  vec3 tvUvw = (vTvPos + tvN * uTvCell - uTvVolMin) / uTvVolSize;   // nudged off the surface so it doesn't read its own voxel
+  vec3 tvV = all(greaterThan(tvUvw, vec3(0.0))) && all(lessThan(tvUvw, vec3(1.0))) ? texture(uTvVis, tvUvw).rgb : vec3(1.0);
+  vec3 tvE = vec3(0.0);
+  for (int k = 0; k < 9; k++) {
+    vec3 L = uTvZoneP[k] - vTvPos; float d2 = dot(L, L); L *= inversesqrt(d2);
+    // screen faces -z, so L.z is the emitter-side cosine; +0.1 softens the patch up close
+    tvE += uTvZoneC[k] * (tvV[k % 3] * max(L.z, 0.0) * max(dot(tvN, L), 0.0) / (d2 + 0.1));
+  }
+  vec3 tvC = vTvPos - uTvZoneP[4];   // fake bounce: a dim screen-tinted fill so shadows aren't pitch black
+  reflectedLight.directDiffuse += (uTvGain * tvE + uTvAmb / (1.0 + 0.04 * dot(tvC, tvC))) * BRDF_Lambert(diffuseColor.rgb);
+}`;
+for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototype.onBeforeCompile = shader => {
+  Object.assign(shader.uniforms, TVU);
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", "#include <common>\nvarying vec3 vTvPos;")
+    .replace("#include <project_vertex>", `#include <project_vertex>
+      vec4 tvWp = vec4(transformed, 1.0);
+      #ifdef USE_INSTANCING
+        tvWp = instanceMatrix * tvWp;
+      #endif
+      vTvPos = (modelMatrix * tvWp).xyz;`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", `#include <common>
+      uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
+      uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;`)
+    .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + TV_FRAG);
+};
 
 const canvas = renderer.domElement;
 const $ = id => document.getElementById(id);
@@ -119,6 +166,49 @@ function renderWithBloom() {
 }
 
 const catalog = window.VAULT_CATALOG || [];
+// the saved store from last visit (see "save / restore" near the end) — read
+// up front because the shelves need it while they're being stocked
+const SAVE_KEY = "vaultbuster-save";
+const SAVE_V = 2;                            // v1 keyed tapes by id, which every season of a show shares
+const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
+// a copy's stable id across reloads: "<catalog index>:<n>", n = its place in
+// [tape, ...tape.copies]. Not the tape's id — every season of a show shares
+// that. The catalog's sorted and shelving is deterministic, so both hold every load
+const titleOfCopy = c => Object.hasOwn(c, "copies") || Object.getPrototypeOf(c) === Object.prototype ? c : Object.getPrototypeOf(c);
+let catIndex = null;                         // tape -> catalog index, built on first use
+const tapeIndex = t => (catIndex ||= new Map(catalog.map((t, i) => [t, i]))).get(titleOfCopy(t));
+const copyKey = c => { const t = titleOfCopy(c); return `${tapeIndex(t)}:${[t, ...(t.copies || [])].indexOf(c)}`; };
+const copyByKey = k => { const [i, n] = k.split(":").map(Number), t = catalog[i]; return t && [t, ...(t.copies || [])][n]; };
+// ---- be kind, rewind ----
+// Every physical copy remembers where its tape is wound to: copy.tapePos =
+// { ep, t } (episode index, seconds in), updated while it plays and kept
+// through eject / inventory / returns / reloads. It goes back in the VCR at
+// that episode. Shelving a tape that isn't rewound docks your pay
+// (REWIND_FINE, set once pay exists) and the tape snaps back to the start.
+const REWIND_FINE = 0;                       // $ docked per unrewound tape shelved — ponytail: 0 until pay is wired up
+const payLedger = [];                        // { what, title, fine, at, ep, t } — penalties so far (saved)
+const isRewound = c => !c.tapePos || (c.tapePos.ep === 0 && c.tapePos.t < 1);
+// how far through the whole tape it's wound, 0..1: episodes played + the part
+// of the current one (d = its length, recorded while it played; a movie-ish
+// guess if it never got that far). Drives the inventory wind bar, and later
+// how long a rewind takes / how big the pay dock is
+function windFrac(c) {
+  const p = c.tapePos; if (!p || isRewound(c)) return 0;
+  const n = c.seasons[0].episodes.length, d = p.d || (n > 1 ? 1500 : 6000);
+  return Math.min(1, (p.ep + Math.min(1, p.t / d)) / n);
+}
+function shelveCheck(c) {                    // called as a tape goes back on its shelf
+  if (isRewound(c)) return;
+  payLedger.push({ what: "unrewound", title: c.title, fine: REWIND_FINE, at: Date.now(), ...c.tapePos });
+  c.tapePos = null;                          // instantly rewound
+  toast(`Not rewound: ${c.title}${REWIND_FINE ? ` · -$${REWIND_FINE.toFixed(2)} pay` : ""} · be kind, rewind!`);
+}
+let toastTimer = 0;
+function toast(text) {
+  const el = document.getElementById("toast"); if (!el) return;
+  el.textContent = text; el.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.style.display = "none"; }, 3500);
+}
 // video-store shelving: alphabetical ignoring a leading The/A/An, then seasons
 // 1,2,3… with specials (season 0) and uncoded "Episodes" (-1) after the last
 const shelfKey = t => t.title.replace(/^(the|an?)\s+/i, "");
@@ -183,12 +273,32 @@ const carpetTex = makeTexture((ctx, W, H) => {
   }
 }, 512, 512);
 carpetTex.repeat.set(11, 14);
+// drop ceiling: 1.8 x 0.9 m tiles (long side along x — the same size as
+// the light fixtures) acoustic tiles, pinhole-dotted, in a solid T-bar grid.
+// One canvas = 3.6 m square = 2 x 4 tiles (so the dots don't repeat every
+// tile); frames sit on the canvas edges and between tiles, so repeats join into one grid.
+// Callers align it to world coordinates (ceilGrid) so light panels can drop
+// into real grid slots
+const CEIL_TILE = { x: 1.8, z: 0.9 }, CEIL_REP = 3.6;   // tile size, canvas period (both axes)
 const ceilTex = makeTexture((ctx, W, H) => {
-  ctx.fillStyle = "#cdd3da"; ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = "#aab2bd"; ctx.lineWidth = 6;
-  ctx.strokeRect(0, 0, W, H); ctx.strokeRect(W / 2, 0, W / 2, H);
-}, 256, 256);
-ceilTex.repeat.set(22, 28);
+  const f = 10;                                      // T-bar width, px
+  ctx.fillStyle = "#dcd9d0"; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 10400; i++) {                  // pinholes/fissures, a few bigger than others
+    ctx.fillStyle = Math.random() < 0.5 ? "#b3afa4" : "#c4c0b6";
+    const r = Math.random() < 0.85 ? 1.2 : 2;
+    ctx.beginPath(); ctx.arc(Math.random() * W, Math.random() * H, r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = "#f2f3f4";                          // T-bars: half on each canvas edge, full through the middle
+  for (let i = 0; i <= 2; i++) ctx.fillRect(i * W / 2 - f / 2, 0, f, H);   // tile ends every 1.8 m
+  for (let i = 0; i <= 4; i++) ctx.fillRect(0, i * H / 4 - f / 2, W, f);   // tile sides every 0.9 m
+}, 1024, 1024);
+// a ceiling plane spanning x0..x1, z0..z1 (rotated +90° about x, so u runs +x
+// and v runs +z): offset so grid lines land on multiples of the tile size
+function ceilGrid(tex, x0, x1, z0, z1) {
+  tex.repeat.set((x1 - x0) / CEIL_REP, (z1 - z0) / CEIL_REP);
+  tex.offset.set(x0 / CEIL_REP, z0 / CEIL_REP);
+  return tex;
+}
 
 const mat = {
   carpet: new THREE.MeshLambertMaterial({ map: carpetTex }),
@@ -236,7 +346,7 @@ function box(w, h, d, m, x, y, z) {
   const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
   b.position.set(x, y, z); scene.add(b); return b;
 }
-function solid(w, h, d, m, x, y, z) { colliders.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 }); return box(w, h, d, m, x, y, z); }
+function solid(w, h, d, m, x, y, z) { colliders.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y0: y - h / 2, y1: y + h / 2 }); return box(w, h, d, m, x, y, z); }
 // a straight wall from a0 to a1 along x (alongX) or z, centered on `at`, with
 // DOOR_H-tall openings at each of `gaps` — a center (door-wide) or { c, w }. Walls are real colliders,
 // padded so the player stops 0.5 m from a wall's centerline
@@ -247,7 +357,7 @@ function wall(a0, a1, at, alongX, h, m, gaps = []) {
     aimBlockers.push(alongX ? box(len, y1 - y0, WALL_T, m, c, y, at) : box(WALL_T, y1 - y0, len, m, at, y, c));
     if (y0 > 0) return;                       // headers over doors don't block the floor
     const t = WALL_T / 2 + WALL_PAD;
-    colliders.push(alongX ? { x0: b0, x1: b1, z0: at - t, z1: at + t } : { x0: at - t, x1: at + t, z0: b0, z1: b1 });
+    colliders.push(alongX ? { x0: b0, x1: b1, z0: at - t, z1: at + t, y1: h } : { x0: at - t, x1: at + t, z0: b0, z1: b1, y1: h });
   };
   let a = a0;
   for (const { c, w } of gaps.map(g => typeof g === "number" ? { c: g, w: DOOR_W } : g).sort((p, q) => p.c - q.c)) {
@@ -313,6 +423,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   const XL = WALL_L, XR = STORE.x, XC = (XL + XR) / 2, XW = XR - XL;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(XW, STORE.z), mat.carpet);
   floor.rotation.x = -Math.PI / 2; floor.position.set(XC, 0, STORE.z / 2); scene.add(floor);
+  ceilGrid(ceilTex, XL, XR, 0, STORE.z);
   const ceil = new THREE.Mesh(new THREE.PlaneGeometry(XW, STORE.z), mat.ceil);
   ceil.rotation.x = Math.PI / 2; ceil.position.set(XC, STORE.h, STORE.z / 2); scene.add(ceil);
 
@@ -401,7 +512,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   floorPatch(vctTex, 2.4, BX0, XR, BZ0, HZ);                                // hall — starts right where the store's carpet ends, mid-opening
   floorPatch(vctTex, 2.4, BX0, SX, HZ, BZ1);                                // breakroom
   floorPatch(bathTex, 0.8, SX, XR, HZ, BZ1);                                // restroom
-  const bohCeilTex = ceilTex.clone(); bohCeilTex.needsUpdate = true; bohCeilTex.repeat.set((XR - BX0) / 1.2, (BZ1 - BZ0) / 1.2);
+  const bohCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, BZ0, BZ1); bohCeilTex.needsUpdate = true;
   const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - BZ0), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
   bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + BZ1) / 2); scene.add(bohCeil);
 
@@ -418,29 +529,195 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
   rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y = Math.PI; scene.add(rr);
 
-  // fluorescent ceiling panels (merged per group, emissive) — split into a
-  // handful of independently-lit groups so warm-up flicker (see setLights)
-  // can hit some panels and not others, like real fluorescents restriking
+  // ---- break room (interior x BX0+0.1..SX-0.1, z HZ+0.1..BZ1-0.1) ----
+  // lockers on the west wall, a table + chairs mid-room, a kitchenette along
+  // the back wall with the fridge in the corner. The door swings in over
+  // x 4.45-5.55 up to ~z 30.9, so that strip stays clear.
+  {
+    const x0 = BX0 + 0.1, x1 = SX - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
+    const put = (geo, m, x, y, z, ry = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; scene.add(o); return o; };
+    const bx = (w, h, d, m, x, y, z) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z);
+    const lockerMat = new THREE.MeshLambertMaterial({ color: 0x5f7fa3 }), lockerDk = new THREE.MeshLambertMaterial({ color: 0x3c526b });
+    const white = new THREE.MeshLambertMaterial({ color: 0xeeeeea }), laminate = new THREE.MeshLambertMaterial({ color: 0xd9cfb4 });
+    const cabinet = new THREE.MeshLambertMaterial({ color: 0x8a6a45 }), chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
+    const blackP = new THREE.MeshPhongMaterial({ color: 0x1b1b1d, specular: 0x444444, shininess: 40 });
+
+    // lockers: four tall steel lockers facing +x, door seams, vents, handles
+    const LD = 0.45, LW = 0.38, LH = 1.8, lz0 = z0 + 0.35;
+    for (let i = 0; i < 4; i++) {
+      const z = lz0 + LW / 2 + i * LW;
+      bx(LD, LH, LW - 0.01, lockerMat, x0 + LD / 2, LH / 2, z);
+      bx(0.005, LH - 0.08, 0.004, lockerDk, x0 + LD + 0.002, LH / 2, z + LW / 2 - 0.02);          // door seam
+      for (let v = 0; v < 3; v++) bx(0.004, 0.012, LW * 0.55, lockerDk, x0 + LD + 0.002, LH - 0.2 - v * 0.03, z);   // vents
+      bx(0.02, 0.1, 0.025, chrome, x0 + LD + 0.01, 1.0, z + LW / 2 - 0.07);                        // latch handle
+    }
+    colliders.push({ x0, x1: x0 + LD, z0: lz0, z1: lz0 + 4 * LW, y1: LH });
+
+    // table (laminate top, chrome legs) and four molded chairs
+    const tx = 3.9, tz = 31.75, TW = 1.2, TD = 0.8, TH = 0.74;
+    bx(TW, 0.03, TD, laminate, tx, TH - 0.015, tz);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) put(new THREE.CylinderGeometry(0.018, 0.018, TH - 0.03, 8), chrome, tx + sx * (TW / 2 - 0.08), (TH - 0.03) / 2, tz + sz * (TD / 2 - 0.08));
+    colliders.push({ x0: tx - TW / 2, x1: tx + TW / 2, z0: tz - TD / 2, z1: tz + TD / 2, y1: TH });
+    const chairMat = new THREE.MeshLambertMaterial({ color: 0xc0501e });
+    const chair = (x, z, ry) => {
+      const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
+      const add = (geo, m, px, py, pz, rx = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(px, py, pz); o.rotation.x = rx; g.add(o); };
+      add(new THREE.BoxGeometry(0.42, 0.03, 0.42), chairMat, 0, 0.45, 0);                  // seat
+      add(new THREE.BoxGeometry(0.42, 0.36, 0.03), chairMat, 0, 0.67, -0.2, -0.12);        // back, leaning back
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.012, 0.012, 0.45, 6), chrome, sx * 0.18, 0.225, sz * 0.18);
+    };
+    chair(tx - 0.3, tz - TD / 2 - 0.3, 0); chair(tx + 0.3, tz - TD / 2 - 0.25, 0.15);   // hall side, one pushed out a bit
+    chair(tx, tz + TD / 2 + 0.3, Math.PI);                                               // back-wall side
+    chair(tx + TW / 2 + 0.32, tz + 0.05, -Math.PI / 2 + 0.2);                            // end, turned in
+
+    // kitchenette: base cabinets + counter + sink along the back wall, upper cabinets above
+    const kx0 = 5.55, kx1 = x1 - 0.72, CD = 0.6, CH = 0.9, kz = z1 - CD / 2;
+    const kw = kx1 - kx0, kc = (kx0 + kx1) / 2;
+    bx(kw, CH - 0.04, CD - 0.02, cabinet, kc, (CH - 0.04) / 2, kz + 0.01);
+    bx(kw + 0.02, 0.04, CD + 0.02, laminate, kc, CH - 0.02, kz);
+    for (let i = 1; i < 3; i++) bx(0.006, CH - 0.14, 0.004, lockerDk, kx0 + i * kw / 3, (CH - 0.04) / 2, kz - CD / 2 + 0.005);   // cabinet door gaps
+    const sinkX = kx0 + kw * 0.55;
+    bx(0.42, 0.012, 0.36, chrome, sinkX, CH + 0.001, kz - 0.02);                              // basin rim (reads as a sunk sink)
+    bx(0.36, 0.01, 0.3, new THREE.MeshLambertMaterial({ color: 0x6d7278 }), sinkX, CH + 0.004, kz - 0.02);
+    put(new THREE.CylinderGeometry(0.012, 0.012, 0.26, 8), chrome, sinkX, CH + 0.13, z1 - 0.1);   // faucet riser
+    bx(0.02, 0.02, 0.16, chrome, sinkX, CH + 0.25, z1 - 0.17);                                     // spout
+    const UD = 0.33, uy0 = 1.45, uy1 = 2.15;
+    bx(kw, uy1 - uy0, UD, cabinet, kc, (uy0 + uy1) / 2, z1 - UD / 2);
+    for (let i = 1; i < 3; i++) bx(0.006, uy1 - uy0 - 0.06, 0.004, lockerDk, kx0 + i * kw / 3, (uy0 + uy1) / 2, z1 - UD - 0.002);
+    colliders.push({ x0: kx0, x1: kx1, z0: z1 - CD, z1, y1: CH });
+    // microwave + coffee maker (with a half-full pot) on the counter
+    bx(0.48, 0.28, 0.36, white, kx1 - 0.3, CH + 0.14, kz);
+    bx(0.3, 0.2, 0.01, blackP, kx1 - 0.34, CH + 0.15, kz - 0.181);                             // door glass
+    bx(0.22, 0.34, 0.24, blackP, kx0 + 0.2, CH + 0.17, kz + 0.02);
+    put(new THREE.CylinderGeometry(0.07, 0.075, 0.14, 16), new THREE.MeshPhongMaterial({ color: 0x3a1f0e, transparent: true, opacity: 0.8, shininess: 80 }), kx0 + 0.2, CH + 0.08, kz - 0.09);
+
+    // fridge in the corner
+    const fx = x1 - 0.34, FH = 1.72;
+    bx(0.66, FH, 0.68, white, fx, FH / 2, z1 - 0.34);
+    bx(0.66, 0.006, 0.004, lockerDk, fx, FH * 0.68, z1 - 0.683);                               // freezer / fridge split
+    for (const [y, h] of [[FH * 0.84, 0.28], [FH * 0.45, 0.5]]) bx(0.025, h, 0.03, chrome, fx - 0.26, y, z1 - 0.7);   // handles
+    colliders.push({ x0: fx - 0.33, x1: fx + 0.33, z0: z1 - 0.68, z1, y1: FH });
+
+    // trash can by the counter
+    put(new THREE.CylinderGeometry(0.17, 0.15, 0.55, 18), new THREE.MeshLambertMaterial({ color: 0x3b4a5a }), kx0 - 0.28, 0.275, z1 - 0.3);
+
+    // bulletin board on the hall wall (inside face), pinned notices + a schedule
+    const board = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#a9794a"; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 900; i++) { ctx.fillStyle = Math.random() < 0.5 ? "#8e6238" : "#bf8d5a"; ctx.fillRect(Math.random() * W, Math.random() * H, 3, 3); }
+      const note = (x, y, w, h, bg, lines, rot) => {
+        ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.rotate(rot); ctx.fillStyle = bg; ctx.fillRect(-w / 2, -h / 2, w, h);
+        ctx.fillStyle = "#222"; ctx.font = "bold 15px Arial"; lines.forEach((l, i) => ctx.fillText(l, -w / 2 + 8, -h / 2 + 22 + i * 19));
+        ctx.fillStyle = "#c22"; ctx.beginPath(); ctx.arc(0, -h / 2 + 6, 5, 0, 7); ctx.fill(); ctx.restore();
+      };
+      note(24, 20, 230, 190, "#fff", ["SCHEDULE - WEEK OF", "MON  MIKE / DANA", "TUE  DANA / RAY", "WED  MIKE / TINA", "THU  RAY / TINA", "FRI  ALL HANDS", "SAT  MIKE / DANA", "SUN  CLOSED 9PM"], -0.02);
+      note(280, 26, 180, 110, "#fff59a", ["BE KIND, REWIND", "CHECK EVERY", "RETURN!!"], 0.05);
+      note(290, 150, 170, 90, "#bfe3ff", ["LOST: BLUE", "LUNCHBOX - DANA"], -0.04);
+      note(40, 222, 200, 30, "#ffd0d0", ["NEW RELEASE WALL FRI"], 0.03);
+    }, 512, 280);
+    const bb = put(new THREE.PlaneGeometry(1.2, 0.66), new THREE.MeshLambertMaterial({ map: board }), 3.1, 1.5, z0 + 0.006);
+    bx(1.26, 0.72, 0.02, cabinet, 3.1, 1.5, z0 - 0.004);                                       // frame
+
+    // wall clock over the table + employee of the month on the back wall
+    const clock = makeTexture((ctx, W) => {
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(W / 2, W / 2, W / 2 - 4, 0, 7); ctx.fill();
+      ctx.lineWidth = 8; ctx.strokeStyle = "#222"; ctx.stroke();
+      ctx.fillStyle = "#222"; for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6; ctx.fillRect(W / 2 + Math.sin(a) * W * 0.4 - 3, W / 2 - Math.cos(a) * W * 0.4 - 3, 6, 6); }
+      ctx.lineCap = "round"; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(W / 2, W / 2); ctx.lineTo(W / 2 + W * 0.18, W / 2 - W * 0.12); ctx.stroke();
+      ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(W / 2, W / 2); ctx.lineTo(W / 2 - W * 0.05, W / 2 - W * 0.33); ctx.stroke();
+    }, 256, 256);
+    put(new THREE.CircleGeometry(0.16, 32), new THREE.MeshLambertMaterial({ map: clock }), tx, 2.05, z1 - 0.006, Math.PI);
+    const eotm = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#00349c"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#ffd400"; ctx.font = "bold 22px Arial Black, Arial"; ctx.textAlign = "center";
+      ctx.fillText("EMPLOYEE", W / 2, 34); ctx.fillText("OF THE MONTH", W / 2, 60);
+      ctx.fillStyle = "#ddd"; ctx.fillRect(W / 2 - 60, 76, 120, 140);                            // photo
+      ctx.fillStyle = "#c9a07a"; ctx.beginPath(); ctx.arc(W / 2, 128, 34, 0, 7); ctx.fill(); ctx.fillRect(W / 2 - 46, 168, 92, 48);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 20px Arial"; ctx.fillText("DANA", W / 2, 246);
+    }, 256, 270);
+    put(new THREE.PlaneGeometry(0.4, 0.42), new THREE.MeshLambertMaterial({ map: eotm }), 2.75, 1.55, z1 - 0.006, Math.PI);
+  }
+
+  // ---- restroom (interior x SX+0.1..XR-0.1, z HZ+0.1..BZ1-0.1) ----
+  // toilet on the back wall, wall-hung sink + mirror on the west wall. The
+  // door swings in over x 9.1-10.2 up to ~z 30.9.
+  {
+    const x0 = SX + 0.1, x1 = XR - 0.1, z1 = BZ1 - 0.1;
+    const put = (geo, m, x, y, z, ry = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; scene.add(o); return o; };
+    const bx = (w, h, d, m, x, y, z) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z);
+    const china = new THREE.MeshPhongMaterial({ color: 0xf6f6f2, specular: 0x666666, shininess: 60 });
+    const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
+    const grey = new THREE.MeshLambertMaterial({ color: 0x8c9196 });
+
+    // toilet: tank on the wall, lathe bowl, seat ring + lid up against the tank
+    const tx = 10.25;
+    bx(0.46, 0.36, 0.18, china, tx, 0.62, z1 - 0.09);                                         // tank
+    bx(0.48, 0.03, 0.2, china, tx, 0.815, z1 - 0.09);                                         // tank lid
+    bx(0.06, 0.015, 0.02, chrome, tx - 0.15, 0.72, z1 - 0.185);                               // flush lever
+    const bowl = put(new THREE.LatheGeometry([[0.1, 0], [0.13, 0.05], [0.16, 0.2], [0.2, 0.38], [0.19, 0.4]].map(([r, y]) => new THREE.Vector2(r, y)), 24), china, tx, 0, z1 - 0.42);
+    bowl.scale.set(1, 1, 1.25);
+    const seat = put(new THREE.TorusGeometry(0.17, 0.025, 8, 28), china, tx, 0.41, z1 - 0.42); seat.rotation.x = Math.PI / 2; seat.scale.set(1, 1.25, 1);
+    const lid = bx(0.38, 0.44, 0.02, china, tx, 0.62, z1 - 0.2); lid.rotation.x = -0.12;     // up, leaning on the tank
+    colliders.push({ x0: tx - 0.25, x1: tx + 0.25, z0: z1 - 0.7, z1, y1: 0.85 });
+    // paper roll on the east wall
+    const roll = put(new THREE.CylinderGeometry(0.06, 0.06, 0.11, 18), new THREE.MeshLambertMaterial({ color: 0xfafafa }), x1 - 0.08, 0.72, z1 - 0.55);
+    roll.rotation.x = Math.PI / 2;
+    bx(0.02, 0.02, 0.16, chrome, x1 - 0.02, 0.72, z1 - 0.55);
+
+    // wall-hung sink on the west wall (faces +x), mirror, soap, towels, bin
+    const sz = 31.75;
+    bx(0.42, 0.14, 0.5, china, x0 + 0.21, 0.8, sz);                                           // basin
+    bx(0.3, 0.02, 0.36, new THREE.MeshLambertMaterial({ color: 0xc4c8cc }), x0 + 0.23, 0.872, sz);   // bowl hollow
+    put(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), chrome, x0 + 0.05, 0.94, sz);        // faucet
+    bx(0.12, 0.02, 0.02, chrome, x0 + 0.11, 1.01, sz);
+    colliders.push({ x0, x1: x0 + 0.45, z0: sz - 0.27, z1: sz + 0.27, y1: 0.9 });
+    const mirror = put(new THREE.PlaneGeometry(0.5, 0.7), new THREE.MeshPhongMaterial({ color: 0x9fb0bf, specular: 0xffffff, shininess: 120 }), x0 + 0.006, 1.45, sz, Math.PI / 2);
+    bx(0.02, 0.74, 0.54, chrome, x0 + 0.002, 1.45, sz);                                        // mirror frame (behind the glass)
+    bx(0.08, 0.16, 0.08, grey, x0 + 0.04, 1.12, sz + 0.34);                                    // soap dispenser
+    bx(0.12, 0.34, 0.3, grey, x0 + 0.06, 1.35, sz - 0.62);                                     // paper towels
+    put(new THREE.CylinderGeometry(0.15, 0.13, 0.5, 18), grey, x0 + 0.2, 0.25, sz - 0.62);     // bin under them
+    const wash = textPlane("EMPLOYEES MUST WASH HANDS", 0.42, 0.1, "#fff", "#1a1d22", "Arial", 64);
+    wash.material = new THREE.MeshLambertMaterial({ map: wash.material.map });
+    wash.position.set(x0 + 0.006, 1.9, sz); wash.rotation.y = Math.PI / 2; scene.add(wash);
+  }
+
+  // fluorescent troffers: fixtures taking the place of one ceiling
+  // tile each (snapped into its slot). Mostly one glowing white rectangle —
+  // the diffuser — with the two tubes behind it only faintly brighter bands.
+  // Merged per group, emissive — a handful of independently-lit groups so
+  // warm-up flicker (see setLights) can hit some fixtures and not others,
+  // like real fluorescents restriking
   const PANEL_GROUPS = 6;
   const panelBuckets = Array.from({ length: PANEL_GROUPS }, () => []);
-  for (let x = -10; x <= 10; x += 2.7) for (let z = 3; z <= 27; z += 3.7) {
-    if (x < XL + 1) continue;                // don't float panels past the pulled-in movie-side wall
-    const p = new THREE.PlaneGeometry(1.2, 0.6); p.rotateX(Math.PI / 2); p.translate(x, STORE.h - 0.03, z);
+  const diffuserTex = makeTexture((ctx, W, H) => {
+    ctx.fillStyle = "#e3e8ef"; ctx.fillRect(0, 0, W, H);
+    for (const cy of [H * 0.3, H * 0.7]) {                                          // the two tubes, soft through the diffuser
+      const g = ctx.createLinearGradient(0, cy - H * 0.14, 0, cy + H * 0.14);
+      g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.5, "rgba(255,255,255,1)"); g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, cy - H * 0.14, W, H * 0.28);
+    }
+  }, 128, 64);
+  const troffer = (x, z, y) => {
+    x = Math.round((x - CEIL_TILE.x / 2) / CEIL_TILE.x) * CEIL_TILE.x + CEIL_TILE.x / 2;   // centered in a tile slot
+    z = Math.round((z - CEIL_TILE.z / 2) / CEIL_TILE.z) * CEIL_TILE.z + CEIL_TILE.z / 2;
+    const p = new THREE.PlaneGeometry(CEIL_TILE.x - 0.02, CEIL_TILE.z - 0.02); p.rotateX(Math.PI / 2); p.translate(x, y - 0.02, z);
     panelBuckets[Math.floor(Math.random() * PANEL_GROUPS)].push(p);
+  };
+  // every other tile slot across, every fourth along — a tile or more of
+  // plain ceiling on every side, so no two fixtures ever touch
+  for (let x = -9.9; x <= STORE.x - 1; x += 2 * CEIL_TILE.x) for (let z = 3.15; z <= STORE.z - 1; z += 4 * CEIL_TILE.z) {
+    if (x - CEIL_TILE.x / 2 < XL + 0.3) continue;   // don't float panels past the pulled-in movie-side wall
+    troffer(x, z, STORE.h);
   }
-  for (const [x, z] of [[4, 28.9], [8, 28.9], [3.9, 31.4], [6.6, 31.4], [9.6, 31.4]]) {   // back of house: hall, breakroom, restroom
-    const p = new THREE.PlaneGeometry(1.2, 0.6); p.rotateX(Math.PI / 2); p.translate(x, BOH.h - 0.03, z);
-    panelBuckets[Math.floor(Math.random() * PANEL_GROUPS)].push(p);
-  }
+  for (const [x, z] of [[4.5, 29.25], [8.1, 29.25], [4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // back of house: hall x2, breakroom, restroom
   panelMats = panelBuckets.filter(b => b.length).map(bucket => {
-    const m = new THREE.MeshBasicMaterial({ color: 0xf8fbff });
+    const m = new THREE.MeshBasicMaterial({ color: 0xf8fbff, map: diffuserTex });
     scene.add(new THREE.Mesh(mergeGeometries(bucket), m));
     return m;
   });
 
   // lighting
   const dir = new THREE.DirectionalLight(0xffffff, 0.55); dir.position.set(3, 10, -6);
-  const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0, 3.2, 3);
+  const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0.9, 2.4, 3.15);   // under the entry troffer, low enough not to burn a hot spot into the tiles
   [new THREE.HemisphereLight(0xdfe8ff, 0x223355, 1.15), new THREE.AmbientLight(0xffffff, 0.32),
    dir, lobby].forEach(l => { l.userData.on = l.intensity; allLights.push(l); scene.add(l); });
 }
@@ -616,17 +893,23 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   // straight down. Every 5 stalls (13m), each standing in an empty stall —
   // stall 4 sits right between the sedan and the wagon, so both get lit.
   const poleMat = new THREE.MeshPhongMaterial({ color: 0x3b3f45, specular: 0x222222, shininess: 30 });
-  const sodiumLens = glowMat(0x3a2e1c, 0xffae4a, 1.6);
+  // They don't snap on at dusk: each strikes a moment after night falls
+  // (staggered) and warms up like a real sodium lamp — a dim red-orange glow
+  // building to full orange over a few seconds. See exteriorTick below.
+  const sodium = [];                     // { lens, spot, delay }
   const streetLamp = (x, z) => {
+    const sodiumLens = new THREE.MeshLambertMaterial({ color: 0x3a2e1c, emissive: 0xffae4a, emissiveIntensity: 0 });   // its own, so each warms up on its own clock
     const armLen = 1.6, hy = 6.0, hz = z + armLen + 0.25;
     ecyl(0.26, 0.3, 0.5, mat.sidewalk, x, 0.25, z, 14);                     // concrete footing
     ecyl(0.06, 0.08, 5.6, poleMat, x, 0.5 + 2.8, z, 10);                    // pole
     eb(0.08, 0.08, armLen, poleMat, x, hy, z + armLen / 2);                 // arm out over the stalls
     eb(0.46, 0.16, 0.8, poleMat, x, hy - 0.02, hz);                         // head housing
     eb(0.36, 0.02, 0.62, sodiumLens, x, hy - 0.11, hz).layers.enable(BLOOM_LAYER);
-    const spot = nightLight(new THREE.SpotLight(0xffae4a, 0, 18, 0.72, 0.55, 1.5), 72);   // tall pole: needs a lot of candela to read on dark asphalt
+    const spot = new THREE.SpotLight(0xffae4a, 0, 18, 0.72, 0.55, 1.5);   // tall pole: needs a lot of candela (72 at full) to read on dark asphalt
+    spot.layers.set(EXTERIOR_LAYER); scene.add(spot);
     spot.position.set(x, hy - 0.15, hz);
     spot.target.position.set(x, 0, hz); scene.add(spot.target);
+    sodium.push({ lens: sodiumLens, spot, delay: 0 });
   };
   for (const k of [4, 9, 14, 19]) streetLamp(stallX(k), lotFar + 0.35);
 
@@ -720,8 +1003,27 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     moon.intensity = isDay ? 0 : 0.5; moonFill.intensity = isDay ? 0 : 0.55;
     const sky = isDay ? DAY_SKY : MOON_SKY;
     scene.background.set(sky); backdrop.material.color.set(sky);
-    for (const l of nightLights) l.intensity = isDay ? 0 : l.userData.on;         // street + park lamps: night only
+    for (const l of nightLights) l.intensity = isDay ? 0 : l.userData.on;         // park lamp: night only, straight on
     for (const m of nightGlows) m.emissiveIntensity = isDay ? 0 : m.userData.on;
+    for (const s of sodium) { s.spot.intensity = 0; s.lens.emissiveIntensity = 0; s.delay = 1.2 + Math.random() * 1.3; }   // lot lights: off, then warm up
+    sodiumT = isDay ? null : 0;
+  };
+  let sodiumT = null;                          // seconds since night fell while the lot lights warm up; null = settled
+  const SODIUM_WARM = 5, cold = new THREE.Color(0xff4d1a), warm = new THREE.Color(0xffae4a);
+  exteriorTick = dt => {
+    if (sodiumT === null) return;
+    sodiumT += dt;
+    let done = true;
+    for (const s of sodium) {
+      const k = Math.min(1, Math.max(0, (sodiumT - s.delay) / SODIUM_WARM));
+      if (k < 1) done = false;
+      if (k <= 0) continue;                    // not struck yet
+      const strike = k < 0.06 && Math.random() < 0.35 ? 0.3 : 1;   // a little sputter as it strikes
+      s.spot.intensity = 72 * k * k * strike;  // slow start, then climbs to full
+      s.lens.emissiveIntensity = 1.6 * (0.12 + 0.88 * k) * strike;
+      s.spot.color.copy(cold).lerp(warm, k); s.lens.emissive.copy(cold).lerp(warm, k);
+    }
+    if (done) sodiumT = null;
   };
   setExteriorDay(true);          // matches lightsOut's default (false) — moon/moonFill start off, not double-lit with the sun
 }
@@ -730,6 +1032,9 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 let returnSlotMesh;                          // the E target for the returns counter, set below
 let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
 let flapPivot, flapCollider;                  // the register pass-through flap, set below
+let posScreen;                                // the register monitor's glass (pos.js mirrors its terminal onto it)
+let gateLed;                                  // the security gates' status LED material
+const GATE_Z = 4.0;                           // security gate line across the entry lane (|x| < 2)
 {
   // checkout cluster: its west end keeps its ~0.4m clearance from the (pulled-in)
   // movie-side wall; it runs east to RX, where the returns + front counters turn
@@ -762,7 +1067,7 @@ let flapPivot, flapCollider;                  // the register pass-through flap,
       g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,.55)"); ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
     }, 320, 256);
     add(new THREE.BoxGeometry(0.32, 0.25, 0.01), new THREE.MeshLambertMaterial({ color: 0x0c0f0c }), 0, 0.01, 0.128, mon);   // screen recess
-    glow(add(new THREE.PlaneGeometry(0.3, 0.235), new THREE.MeshBasicMaterial({ map: scr }), 0, 0.01, 0.1335, mon));
+    posScreen = glow(add(new THREE.PlaneGeometry(0.3, 0.235), new THREE.MeshBasicMaterial({ map: scr }), 0, 0.01, 0.1335, mon));   // pos.js takes this over once it's up
     add(new THREE.BoxGeometry(0.012, 0.012, 0.004), new THREE.MeshBasicMaterial({ color: 0x39ff7a }), 0.16, -0.15, 0.132, mon);   // power LED
     // keyboard: beige slab, raised back edge, key grid on top
     const keys = makeTexture((ctx, w, h) => {
@@ -784,6 +1089,7 @@ let flapPivot, flapCollider;                  // the register pass-through flap,
     add(new THREE.BoxGeometry(0.002, 0.003, 0.018), beigeDk, 0.33, 0.028, 0.185);                          // button split
     const cord = add(new THREE.CylinderGeometry(0.003, 0.003, 0.3, 6).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x9a927d }), 0.26, 0.004, 0.03);
     cord.rotation.y = 0.55;
+    pos.traverse(o => { if (o.isMesh) { o.userData.pos = true; aimables.push(o); } });   // E anywhere on it logs in
   }
 
   // returns counter — rotated 90° off the checkout's line so it turns the
@@ -882,10 +1188,10 @@ let flapPivot, flapCollider;                  // the register pass-through flap,
   }
   colliders.push({ x0: BX - 0.05, x1: BX + 0.05, z0: Z0, z1: Z1 });
 
-  const GZ = 4.0;                              // gate line: past the RETURNS counter, level with the checkout corner and the rail's far end
+  const GZ = GATE_Z;                           // gate line: past the RETURNS counter, level with the checkout corner and the rail's far end
   const grey = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
   const acrylic = new THREE.MeshPhongMaterial({ color: 0xdbe8f0, specular: 0xffffff, shininess: 90, transparent: true, opacity: 0.3, depthWrite: false });
-  const led = new THREE.MeshBasicMaterial({ color: 0x39ff7a });
+  const led = gateLed = new THREE.MeshBasicMaterial({ color: 0x39ff7a });   // shared by all three: flashes red when the alarm trips
   const plate = textPlane("SECURITY", 0.3, 0.07, "#fff", "#2b3038"); plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map });
   for (const x of [-1.35, 0, 1.35]) {
     const g = new THREE.Group(); g.position.set(x, 0, GZ); scene.add(g);
@@ -1285,7 +1591,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
       ctx.fillStyle = "#fff"; ctx.font = `${h * 0.3}px Arial`; ctx.fillText("★", w * 0.13, h * 0.53); ctx.fillText("★", w * 0.87, h * 0.53);
     });
     addTo(g, new THREE.BoxGeometry(RW, 0.3, 0.05), frame, 0, RH - 0.15, -RD / 2 + 0.06);
-    addTo(g, new THREE.PlaneGeometry(0.96, 0.28), new THREE.MeshBasicMaterial({ map: headerTex }), 0, RH - 0.15, -RD / 2 + 0.086);
+    addTo(g, new THREE.PlaneGeometry(0.96, 0.28), new THREE.MeshLambertMaterial({ map: headerTex }), 0, RH - 0.15, -RD / 2 + 0.086);   // lit by the room, no glow
     const TILT = 0.12, shelfYs = [0.18, 0.5, 0.8, 1.07];
     const board = new THREE.MeshLambertMaterial({ color: 0xd9dde2 }), lip = new THREE.MeshLambertMaterial({ color: 0xffd400 });
     for (const y of shelfYs) {                // tilted toward the shopper, yellow price lip on the front edge
@@ -1697,7 +2003,7 @@ function buildFace(tapes, ax, az, ry, m, headers = [], lead = true, spec = BAY, 
   const corners = [[0, 0], [spec.depth, 0], [0, m * len], [spec.depth, m * len]]   // footprint, local (x, z) → world
     .map(([x, z]) => [ax + x * Math.cos(ry) + z * Math.sin(ry), az - x * Math.sin(ry) + z * Math.cos(ry)]);
   colliders.push({ x0: Math.min(...corners.map(c => c[0])), x1: Math.max(...corners.map(c => c[0])),
-                   z0: Math.min(...corners.map(c => c[1])), z1: Math.max(...corners.map(c => c[1])) });
+                   z0: Math.min(...corners.map(c => c[1])), z1: Math.max(...corners.map(c => c[1])), y1: spec.h });
   return len;
 }
 
@@ -1730,6 +2036,7 @@ function overWallShelf(x, z) {
                                             : Math.abs(z - w.at) < 0.5 && x > w.a0 - 0.5 && x < w.a1 + 0.5);
 }
 const crtSpots = [];                         // ceiling CRT clusters, filled in below: [x, z]
+const rentedCopies = [];                     // copies pulled off the shelves as "out on rental", filled in below
 const wallSpans = [];                        // what the wall runs cover, for lifting posters above them: { axis, at, a0, a1 }
 {
   const meta = window.VAULT_META || {};
@@ -1853,6 +2160,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   // slice back when it's shelved
   const sweep = [];
   byGenre.forEach((ts, gi) => {
+    ts.forEach(t => t.newRelease = true);             // the walls are the new releases (POS prices them that way)
     const n = copiesFor(ts, bays[gi] * CAP), stock = [];
     ts.forEach((t, i) => {
       t.copies = [];
@@ -2008,94 +2316,94 @@ const wallSpans = [];                        // what the wall runs cover, for li
     }
   }
   flushShelves();
-  window.__layout = { wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
+  // some copies of the multi-copy titles are out on rental: hide a random
+  // share (up to ~45%) off the END of each title's row, so the shelf still
+  // reads as faced-up but clearly shopped. A returned one (returns bin →
+  // putBack) just drops back into its own gap
+  if (SAVE?.rented) for (const c of SAVE.rented.map(copyByKey).filter(Boolean)) { setOnShelf(c, false); rentedCopies.push(c); }   // same gaps as last visit
+  else for (const t of catalog) {
+    const n = 1 + (t.copies?.length || 0);
+    if (n < 3) continue;
+    const out = Math.floor(Math.random() * n * 0.45);
+    t.copies.slice(t.copies.length - out).forEach(c => { setOnShelf(c, false); rentedCopies.push(c); });   // the POS checks each out to a member
+  }
+  window.__layout ={ wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
 }
 
 // ---------------- TV lounge (living room, center of the back half) ----------------
 const TV = { x: 0, z: 26.8 };   // whole lounge (rug, table, couch, lamps, TV lights) is placed relative to this
 const LAMP_ON = 0.32;               // mood lighting only — barely reaches past its own pool
 const SHADE_GLOW = 0.45;                   // lit-fabric glow on the lamp shades — higher blows them out to a white blob under bloom
-// AMBI_N x AMBI_N sample of the screen, row-major top-left..bottom-right;
-// fallback bluish-grey until the first real sample
-const AMBI_N = 10;
-const screenCells = Array.from({ length: AMBI_N * AMBI_N }, () => ({ r: 0.53, g: 0.6, b: 0.73 }));
-// decay 1.5 (softer than physically-correct inverse-square) so it actually
-// reaches the couch/floor/cabinet around it instead of dying a foot out —
-// there's no bounce lighting here, so the direct throw has to do the work
-const tvGlow = new THREE.PointLight(0x8899bb, 0, 26, 1.5); tvGlow.position.set(TV.x, 0.85, TV.z - 1.3); scene.add(tvGlow);
-tvGlow.userData.base = 0;                  // set by playEpisode/eject; boosted for lights-out each frame, below
-// a real TV throws light behind itself too — a short, sharp-falloff light on
-// the back-wall side gives that "wash behind the cabinet" tell without
-// needing actual bounce lighting; short distance = obvious dropoff, not a flat wash
+// TV light, scene side (shader side is TVU/TV_FRAG up top). Zone k = row*3 + col
+// of the picture; the screen faces -z, so picture column 0 (the viewer's left) is world +x
+const tvLight = { base: 0, avg: new THREE.Color(0x8899bb) };   // base: set by playEpisode/eject; avg: linear screen average
+const TV_GAIN = 6.5, TV_AMB = 0.875;                           // direct throw / bounce fill, at full lights-out strength
+const TV_SCREEN_Z = TV.z - 0.558 - 0.01;                       // just in front of the glass
+for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) TVU.uTvZoneP.value.set([0.6 - 0.6 * c, 1.35 - 0.4 * r, TV_SCREEN_Z], (r * 3 + c) * 3);
+TVU.uTvRoom.value.set(WALL_L, STORE.x, STORE.h + 0.05, TV_SCREEN_Z);   // +5cm: the ceiling sits exactly at STORE.h, and a hard cutoff there flickers in and out
+const tvZoneTarget = new Float32Array(27).fill(0.3);           // latest screen sample (linear); uTvZoneC eases toward it every frame
+// a real TV throws light behind itself too — the screen patches above only
+// light what's in front of the glass, so a short point light covers the
+// wash on the wall and floor behind the cabinet
 const tvBackGlow = new THREE.PointLight(0x8899bb, 0, 6, 2); tvBackGlow.position.set(TV.x, 1.3, TV.z + 0.6); scene.add(tvBackGlow);
-// ambilight pool on the rug — a cone fanning out from the screen's own width,
-// losing intensity continuously the whole way down the room (real light
-// doesn't just stop), not cut off at any one object. Painted (not a plain
-// gradient) from the AMBI_N x AMBI_N screen sample below: each cell's color
-// lands mirrored left/right (a reflection flips, like a real ambilight) and
-// near/far by screen row, so the pool actually shows what's on screen. A
-// finer grid just means more (cheap) fillRects — the blur is what does the
-// real work blending them, so it stays soft rather than a visible checkerboard
-function drawPoolGrid(ctx, W, H, cells) {
-  ctx.filter = "none"; ctx.clearRect(0, 0, W, H);
-  const nearW = W * 0.21, farW = W * 0.9;        // ~screen-width (1.5m) at the TV, flaring to ~6.3m down the room — a cone, not a tube
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(W / 2 - nearW / 2, H); ctx.lineTo(W / 2 + nearW / 2, H);
-  ctx.lineTo(W / 2 + farW / 2, 0); ctx.lineTo(W / 2 - farW / 2, 0);
-  ctx.closePath(); ctx.clip();
-  ctx.filter = "blur(30px)";                      // this stays soft — only the shadow trapezoids need crisp edges
-  const N = AMBI_N;
-  for (let sr = 0; sr < N; sr++) {                // screen row 0 (top) = far/dim .. N-1 (bottom) = near/bright
-    const y0 = sr * H / N, y1 = y0 + H / N, alpha = 0.06 + 0.54 * sr / (N - 1);
-    for (let sc = 0; sc < N; sc++) {               // mirrored left/right, like a reflection
-      const col = cells[sr * N + sc], dc = N - 1 - sc, x0 = dc * W / N;
-      ctx.fillStyle = `rgba(${col.r * 255 | 0},${col.g * 255 | 0},${col.b * 255 | 0},${alpha})`;
-      ctx.fillRect(x0, y0, W / N, y1 - y0);
+// shadow casters the colliders don't describe well: the table as its top +
+// TV-side panel (so the floor under it is shaded, not buried in one solid
+// box), the couch as base/back/arms, and the two lamp shades. Everything
+// else casts from its collider (y0..y1, default shelf height)
+const TV_PROXIES = [
+  { x0: -0.53, x1: 0.53, y0: 0.3, y1: 0.35, z0: TV.z - 2.08, z1: TV.z - 1.55 },    // table top
+  { x0: -0.5, x1: 0.5, y0: 0, y1: 0.315, z0: TV.z - 1.58, z1: TV.z - 1.55 },       // table's TV-side panel
+  { x0: -1.254, x1: 1.254, y0: 0.11, y1: 0.5, z0: TV.z - 3.89, z1: TV.z - 2.83 },  // couch base
+  { x0: -1.05, x1: 1.05, y0: 0.39, y1: 1.0, z0: TV.z - 3.89, z1: TV.z - 3.6 },     // couch back
+  ...[-1, 1].map(s => ({ x0: s < 0 ? -1.254 : 1.01, x1: s < 0 ? -1.01 : 1.254, y0: 0.11, y1: 0.71, z0: TV.z - 3.87, z1: TV.z - 2.9 })),   // arms
+  ...[-1, 1].map(s => ({ x0: s * 1.6 - 0.2, x1: s * 1.6 + 0.2, y0: 1.3, y1: 1.64, z0: TV.z - 3.56, z1: TV.z - 3.16 })),              // lamp shades
+];
+const TV_VOL = { x0: WALL_L, z0: 4, cell: 0.3 };               // front of the store past the counter is far enough out to go unshadowed
+const tvVolN = [Math.ceil((STORE.x - WALL_L) / TV_VOL.cell), Math.ceil(STORE.h / TV_VOL.cell), Math.ceil((TV_SCREEN_Z - TV_VOL.z0) / TV_VOL.cell)];
+const tvVisTex = new THREE.Data3DTexture(new Uint8Array(tvVolN[0] * tvVolN[1] * tvVolN[2] * 4).fill(255), ...tvVolN);
+tvVisTex.minFilter = tvVisTex.magFilter = THREE.LinearFilter; tvVisTex.unpackAlignment = 1; tvVisTex.needsUpdate = true;
+TVU.uTvVis.value = tvVisTex;
+TVU.uTvVolMin.value.set(TV_VOL.x0, 0, TV_VOL.z0);
+TVU.uTvVolSize.value.set(tvVolN[0] * TV_VOL.cell, tvVolN[1] * TV_VOL.cell, tvVolN[2] * TV_VOL.cell);
+TVU.uTvCell.value = TV_VOL.cell * 0.6;
+// segment o→o+d (t in 0..1) vs axis-aligned box, slab test
+function segHitsBox(ox, oy, oz, dx, dy, dz, b) {
+  let t0 = 0, t1 = 1;
+  const axis = (o, d, lo, hi) => {
+    if (Math.abs(d) < 1e-9) return o >= lo && o <= hi;
+    let ta = (lo - o) / d, tb = (hi - o) / d; if (ta > tb) { const t = ta; ta = tb; tb = t; }
+    if (ta > t0) t0 = ta; if (tb < t1) t1 = tb; return t0 <= t1;
+  };
+  return axis(ox, dx, b.x0, b.x1) && axis(oy, dy, b.y0, b.y1) && axis(oz, dz, b.z0, b.z1);
+}
+// Bake: per voxel, the fraction of each screen third (6 sample points apiece)
+// with a clear line of sight. A box containing the voxel itself is skipped, so
+// a surface's own lighting reads right instead of every voxel touching a
+// wall or shelf going black. Runs as a generator, a slice per frame, from
+// the main loop — colliders are all in place by the first frame.
+// ponytail: brute-force boxes filtered per voxel column, ~1s spread over frames; a BVH if the store grows a lot
+function* bakeTvVis() {
+  const boxes = colliders.filter(c => c.shadow !== false)
+    .map(c => ({ x0: c.x0, x1: c.x1, y0: c.y0 ?? 0, y1: c.y1 ?? BAY.h, z0: c.z0, z1: c.z1 })).concat(TV_PROXIES);
+  const P = TVU.uTvZoneP.value, [nx, ny, nz] = tvVolN, { x0, z0, cell } = TV_VOL, data = tvVisTex.image.data;
+  const S = [0, 1, 2].map(c => [-0.15, 0.15].flatMap(dx => [1.35, 0.95, 0.55].map(y => [P[c * 3] + dx, y, TV_SCREEN_Z])));
+  for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+    const vx = x0 + (i + 0.5) * cell, vz = z0 + (k + 0.5) * cell;
+    const near = boxes.filter(b => b.x1 > Math.min(vx, -0.9) && b.x0 < Math.max(vx, 0.9) && b.z1 > vz && b.z0 < TV_SCREEN_Z);
+    for (let j = 0; j < ny; j++) {
+      const vy = (j + 0.5) * cell, o = ((k * ny + j) * nx + i) * 4;
+      const cand = near.filter(b => !(vx > b.x0 && vx < b.x1 && vy > b.y0 && vy < b.y1 && vz > b.z0 && vz < b.z1));
+      for (let c = 0; c < 3; c++) {
+        let lit = 0;
+        for (const [sx, sy, sz] of S[c]) if (!cand.some(b => segHitsBox(vx, vy, vz, sx - vx, sy - vy, sz - vz, b))) lit++;
+        data[o + c] = lit * 255 / S[c].length | 0;
+      }
     }
+    yield;
   }
-  ctx.restore();
-  ctx.filter = "none";
+  tvVisTex.needsUpdate = true;
 }
-const tvPoolTex = makeTexture((ctx, W, H) => drawPoolGrid(ctx, W, H, screenCells), 512, 320);
-function paintTvPool() {
-  drawPoolGrid(tvPoolTex.image.getContext("2d"), tvPoolTex.image.width, tvPoolTex.image.height, screenCells);
-  tvPoolTex.needsUpdate = true;
-}
-const tvPoolLen = 5.2;                             // cabinet base out past the couch
-const tvPool = new THREE.Mesh(new THREE.PlaneGeometry(7, tvPoolLen),   // rug-wide, so the cone has room to flare
-  new THREE.MeshBasicMaterial({ map: tvPoolTex, transparent: true, depthWrite: false, opacity: 0 }));
-tvPool.rotation.x = -Math.PI / 2; tvPool.position.set(TV.x, 0.02, TV.z - 0.06 - tvPoolLen / 2); scene.add(tvPool);
-
-// the table and the couch are both big enough to actually block that light —
-// each gets a real trapezoid shadow on the floor directly behind it (away
-// from the screen), same shape logic as the light cone above just inverted:
-// a solid, crisp-edged cutout, not another soft blob
-function shadowTrapezoid(nearFrac, farFrac, alpha) {
-  return makeTexture((ctx, W, H) => {
-    const nearW = W * nearFrac, farW = W * farFrac;
-    ctx.beginPath();
-    ctx.moveTo(W / 2 - nearW / 2, H); ctx.lineTo(W / 2 + nearW / 2, H);
-    ctx.lineTo(W / 2 + farW / 2, 0); ctx.lineTo(W / 2 - farW / 2, 0);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(0,0,0,${alpha})`; ctx.fill();
-  }, 256, 256);
-}
-function shadowPatch(tex, w, d, z) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d),
-    new THREE.MeshBasicMaterial({ map: tex, color: 0x000000, transparent: true, depthWrite: false, opacity: 0 }));
-  m.rotation.x = -Math.PI / 2; m.position.set(TV.x, 0.03, z); m.renderOrder = 1;   // drawn after tvPool, so it darkens it
-  scene.add(m); return m;
-}
-// table's shadow: its narrow end starts at the table's TV-side legs/panel
-// (TV.z-1.55), fanning out under the table, across the gap and on 0.5m under
-// the couch front (TV.z-3.35) so there's no lit sliver where the couch begins
-const tvTableShadow = shadowPatch(shadowTrapezoid(0.5, 0.95, 0.8), 2.2, 1.8, TV.z - 2.45);
-// couch's shadow: wide right behind the couch (it's the widest blocker in the
-// room) and keeps fanning out further into the walkway behind it — the near
-// (narrow) end runs forward under the couch itself so there's no lit sliver
-// between the couch's back and where the shadow starts
-const tvCouchShadow = shadowPatch(shadowTrapezoid(0.6, 1.0, 0.82), 4.2, 3.0, TV.z - 4.8);   // fans with the wider cone
+let tvBake = bakeTvVis();
 const screenGeo = new THREE.PlaneGeometry(1.8, 1.2);   // big-screen TV, ~4:3
 
 // video is drawn into this canvas fit to its own native aspect (never
@@ -2296,50 +2604,44 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
 {
   // the preview living room: rug, coffee table, couch facing the TV
   const rugZ0 = TV.z - 6.2, rugZ1 = STORE.z - 0.1;   // runs up to the back wall and stops — the back-of-house hall is behind it
-  // the Overlook Hotel carpet from The Shining — a straight port of
-  // IceCreamDrip/render_motif_ref.py (the ground truth for that project's
-  // 09_overlook.glsl): per tile (7 x 10 stroke widths), red hexes with a black
-  // outline drawn inward (PIL's polygon outline), big black hex rings (centred
-  // stroke) and black descender bars. Tiles overlap their neighbours and later
-  // tiles draw over earlier ones, so — like the script — a grid of tiles is
-  // drawn in order and one interior tile is cropped out as the seamless repeat.
-  const SW = 0.045;                                                             // world m per stroke width
+  // the Overlook Hotel carpet from The Shining — the SVG pattern behind
+  // IceCreamDrip's render_motif_ref.py, drawn with real SVG semantics (that
+  // script's PIL version draws strokes inward and tiles unclipped/overlapping,
+  // which scrambles the motif): one 7 x 10 stroke-width tile of red hexes with
+  // the group's black stroke, big black hex rings and descender bars, clipped
+  // to the tile and repeated.
+  const SW = 0.18;                                                              // world m per stroke width
   const overlookTex = makeTexture((ctx, W, H) => {
-    const sw = W / 7, w = W, h = H, COLS = 5, ROWS = 4;
-    const ORANGE = "rgb(223,95,24)", RED = "rgb(152,31,36)", BLACK = "#000";
-    const grid = document.createElement("canvas"); grid.width = COLS * w; grid.height = ROWS * h;
-    const g = grid.getContext("2d");
+    const sw = W / 7, w = W, h = H;
+    const ORANGE = "rgb(223,95,24)", RED = "rgb(152,31,36)", BLACK = "rgb(72,38,22)";   // "black" is the carpet's dark brown
+    const g = ctx;
     const hexPts = (cx, cy, r) => [0, 60, 120, 180, 240, 300].map(deg => { const a = deg * Math.PI / 180; return [cx + r * Math.sin(a), cy + r * Math.cos(a)]; });
     const poly = pts => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); };
     const line = (x0, y0, x1, y1, width) => { g.lineWidth = width; g.lineCap = "butt"; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); };
-    g.fillStyle = ORANGE; g.fillRect(0, 0, grid.width, grid.height);
-    g.strokeStyle = BLACK; g.lineJoin = "round";
-    for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
-      const ox = i * w, oy = j * h;
-      for (const [cx, cy] of [[w / 2, h / 2], [0, h - sw], [w, h - sw], [0, -sw], [w, -sw]]) {
-        poly(hexPts(cx + ox, cy + oy, sw * 2)); g.fillStyle = BLACK; g.fill();                        // outline, drawn inward...
-        poly(hexPts(cx + ox, cy + oy, sw * 2 - sw / 0.8660254)); g.fillStyle = RED; g.fill();        // ...around the red fill
-      }
-      for (const [cx, cy] of [[0, -sw], [w, -sw]]) { poly(hexPts(cx + ox, cy + oy, sw * 4)); g.lineWidth = sw; g.stroke(); }   // big rings
-      line(w / 2 + ox, h - sw * 3 + oy, w / 2 + ox, h + oy, sw * 1.1);                               // descenders
-      line(ox, h - sw * 7 + oy, ox, h - sw * 3 + oy, sw);
-      line(w + ox, h - sw * 7 + oy, w + ox, h - sw * 3 + oy, sw);
+    // SVG pattern semantics: one tile, clipped to its own box (the canvas edge
+    // does that), strokes centred on the path, children painted in document order
+    g.save(); g.translate(0, H); g.scale(1, -1);   // flipped so the motif's top points away from the couch, toward the TV
+    g.fillStyle = ORANGE; g.fillRect(0, 0, w, h);
+    g.strokeStyle = BLACK; g.lineJoin = "miter"; g.lineWidth = sw;
+    for (const [cx, cy] of [[w / 2, h / 2], [0, h - sw], [w, h - sw], [0, -sw], [w, -sw]]) {
+      poly(hexPts(cx, cy, sw * 2)); g.fillStyle = RED; g.fill(); g.lineWidth = sw; g.stroke();   // red hexes, inherited black stroke
     }
-    // interior tile; flipped so the motif's top points away from the couch, toward the TV
-    ctx.save(); ctx.translate(0, H); ctx.scale(1, -1);
-    ctx.drawImage(grid, 2 * w, 2 * h, w, h, 0, 0, w, h);
-    ctx.restore();
+    for (const [cx, cy] of [[0, -sw], [w, -sw]]) { poly(hexPts(cx, cy, sw * 4)); g.lineWidth = sw; g.stroke(); }   // big rings
+    line(w / 2, h - sw * 3, w / 2, h, sw * 1.1);                                                     // descenders
+    line(0, h - sw * 7, 0, h - sw * 3, sw);
+    line(w, h - sw * 7, w, h - sw * 3, sw);
+    g.restore();
     const img = ctx.getImageData(0, 0, W, H), d = img.data;                                           // a little pile texture
     for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 14; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
     ctx.putImageData(img, 0, 0);
-  }, 7 * 48, 10 * 48);
+  }, 7 * 96, 10 * 96);
   overlookTex.repeat.set(7 / (7 * SW), (rugZ1 - rugZ0) / (10 * SW));
   const rug = new THREE.Mesh(new THREE.PlaneGeometry(7, rugZ1 - rugZ0), new THREE.MeshLambertMaterial({ map: overlookTex }));
   rug.rotation.x = -Math.PI / 2; rug.position.set(0, 0.01, (rugZ0 + rugZ1) / 2); scene.add(rug);
   // vintage coffee table, 0.78 m clear of the couch front (room — player is 0.64
   // wide — to reach the middle seat). Same 1.0 x 0.5 x 0.35 block as before, so
-  // the tape case on top and tvTableShadow still line up; the TV-facing side
-  // stays one solid flat panel since that shadow assumes a solid blocker.
+  // the tape case on top still lines up; the TV-facing side stays one solid
+  // flat panel (TV_PROXIES casts the TV light's shadow from it).
   {
     const zc = TV.z - 1.8, W = 1.0, D = 0.5, H = 0.35;
     const dark = new THREE.MeshLambertMaterial({ color: 0x4a2a12 });
@@ -2374,7 +2676,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
       const tb = add(new THREE.BoxGeometry(TAPE.d, TAPE.w, TAPE.h), new THREE.MeshLambertMaterial({ color: c }), x, 0.084 + TAPE.w / 2 + k * TAPE.w, 0.01);
       tb.rotation.y = r;
     });
-    colliders.push({ x0: -W / 2 - 0.03, x1: W / 2 + 0.03, z0: zc - D / 2 - 0.03, z1: zc + D / 2 });
+    colliders.push({ x0: -W / 2 - 0.03, x1: W / 2 + 0.03, z0: zc - D / 2 - 0.03, z1: zc + D / 2, shadow: false });   // TV_PROXIES shape its shadow instead
   }
   const couch = buildCouch();                                             // ornate orange sofa facing the TV (couch.js)
   const cs = 1.12;                                                        // model is built life-size; scaled up a touch (SEATS below match)
@@ -2382,7 +2684,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   couch.position.set(0, 0, TV.z - 3.89 - couch.userData.zRange[0] * cs); scene.add(couch);   // back edge stays at TV.z - 3.89
   const couchMeshes = couch.children.filter(c => c.isMesh);              // every mesh carries userData.sit
   { const [z0, z1] = couch.userData.zRange, w = couch.userData.footprint.w * cs;
-    colliders.push({ x0: -w / 2, x1: w / 2, z0: couch.position.z + z0 * cs, z1: couch.position.z + z1 * cs }); }
+    colliders.push({ x0: -w / 2, x1: w / 2, z0: couch.position.z + z0 * cs, z1: couch.position.z + z1 * cs, shadow: false }); }
   const ps = textPlane("PREVIEW STATION", 1.2 * cs, 0.25 * cs);          // on the back of the couch
   const sg = couch.userData.sign;
   ps.position.set(0, sg.y * cs, couch.position.z + sg.z * cs); ps.rotation.set(sg.tilt, Math.PI, 0);
@@ -2557,10 +2859,11 @@ const keys = new Set();
 const HOLD_MS = 450;                       // tap L = overhead lights, hold L = both side lamps
 let lHoldTimer = null, lHeld = false;
 addEventListener("keydown", e => {
+  if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
-  if (e.code === "Escape" && held) putBack();
   if (e.code === "KeyE" && !e.repeat) onE();   // one press, one action — holding E doesn't machine-gun bites, doors, the flap
+  if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
   if (e.code === "Period") stepEpisode(1);
@@ -2573,6 +2876,7 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => {
   keys.delete(e.code);
+  if (posTerm?.isOpen()) return;
   if (e.code === "KeyL") {
     clearTimeout(lHoldTimer);
     if (!lHeld) setLights(!lightsOut);       // released before the hold threshold: a plain tap
@@ -2585,6 +2889,10 @@ canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoo
   else if (held && inspecting) {
     coverZoom = Math.max(1, Math.min(6, coverZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
     $("inspectArt").style.transform = `scale(${coverZoom})`;
+  }
+  else if (inv.length) {                         // scroll the inventory: every item plus one empty slot (empty-handed)
+    const n = Math.min(inv.length + 1, INV_MAX), cur = invSel >= 0 ? invSel : Math.min(invEmpty, inv.length);
+    invSelect((cur + (e.deltaY > 0 ? 1 : -1) + n) % n);
   }
 });
 let lastActive = 0;                          // last mouse-look or key — the crosshair hides after a few still seconds
@@ -2631,8 +2939,13 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
+// a tape you're only looking at — held up straight off a shelf or out of
+// Returns, not taken yet: right-click puts it right back where it came from.
+// Once it's taken (click to tuck, or swapping to another item) it's yours to
+// carry and has to be put back properly
+let peek = null, peekSrc = null;             // peekSrc: "shelf" | "bin"
 let flapOpen = false;
 function toggleFlap() {
   if (flapOpen) {                            // trying to close it — refuse if you're standing in the gap
@@ -2654,12 +2967,26 @@ function toggleDoor(d) {
   d.open = !d.open;
 }
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   const hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
   if (hit) hovered = hit.object.userData.tapes[Math.floor(hit.face.a / COVER_V)];
+  // the tape in hand's own empty slot: aim within ~8cm of its center (a slot is
+  // 13cm wide), nothing solid in front of it, and it can go back on the shelf
+  if (held?.pos && held.offShelf) {
+    const ray = raycaster.ray, t = held.pos.clone().sub(ray.origin).dot(ray.direction);
+    const blocked = (hit && hit.distance < t - 0.15) || raycaster.intersectObjects(aimBlockers, false).some(h => h.distance < t - 0.15);
+    aimSlot = t > 0.3 && t < 3.4 && ray.distanceSqToPoint(held.pos) < 0.08 ** 2 && !blocked;
+  }
+  if (aimSlot) {
+    hovered = null;
+    highlight.visible = true; highlight.position.copy(held.pos); highlight.rotation.y = held.ry;
+    const tip = $("hoverTip");
+    tip.innerHTML = `CLICK — put ${held.title} back`; tip.style.display = "block";
+    return;
+  }
   if (hovered) {
     highlight.visible = true; highlight.position.copy(hovered.pos); highlight.rotation.y = hovered.ry;
     const tip = $("hoverTip");
@@ -2682,16 +3009,18 @@ function pickHover() {
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
     else if (aim?.object.userData.flap && aim.distance < 2.6) aimFlap = aim.object.userData.flap;
     else if (aim?.object.userData.door && aim.distance < 2.4) aimDoor = aim.object.userData.door;
+    else if (aim?.object.userData.pos && aim.distance < 2.4) aimPOS = true;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
-    else if (aimReturns && held) tip.innerHTML = "E — drop tape in Returns";
-    else if (aimReturns && returnBin.length) tip.innerHTML = `E — take a tape from Returns (${returnBin.length})`;
+    else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
+      returnBin.length && inv.length < INV_MAX && `CLICK — look at a tape from Returns (${returnBin.length})`].filter(Boolean).join("<br>");
     else if (aimPop) tip.innerHTML = popcornStep(aimPop, false);
     else if (aimTrash) tip.innerHTML = held ? "Rentals don't go in the trash" : `E — throw away ${heldSnack ? heldSnack.userData.snack.name : "the popcorn"}`;
-    else if (aimSnack && !held && !heldSnack && !heldPopcorn) tip.innerHTML = `CLICK — grab ${aimSnack.userData.snack.name}${aimSnack.userData.snack.kind ? ` <div class="cat">${aimSnack.userData.snack.kind}</div>` : ""}`;
+    else if (aimSnack && inv.length < INV_MAX) tip.innerHTML = `CLICK — grab ${aimSnack.userData.snack.name}${aimSnack.userData.snack.kind ? ` <div class="cat">${aimSnack.userData.snack.kind}</div>` : ""}`;
     else if (aimCooler) tip.innerHTML = `E — ${coolerOpen ? "close" : "open"} the cooler`;
     else if (aimFlap) tip.innerHTML = `E — ${flapOpen ? "close" : "open"} the counter pass-through`;
     else if (aimDoor) tip.innerHTML = aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`;
+    else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
     else { tip.style.display = "none"; return; }
     tip.style.display = "block";
   }
@@ -2700,20 +3029,32 @@ canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("mousedown", e => {
   if (document.pointerLockElement !== canvas) return;
   if (e.button === 2) {                                    // right click puts down whatever's in hand
-    if (seated || tvMenu || tvScreenHit()) { tvMenu = !tvMenu; return; }   // ...unless it's aimed at the TV: that's the picture menu
-    if (held) putBack();
+    if (tvMenu) { tvMenu = false; return; }                // an open picture menu closes from anywhere...
+    if (tvScreenHit()) { tvMenu = true; return; }          // ...but only opens with the crosshair on the screen
+    if (held && held === peek) {                           // only still-being-looked-at tapes go back
+      if (peekSrc === "bin") { returnBin.push(held); releaseFromHand(); refreshReturnsBin(); } else putBack();
+      peek = null;
+    }
     else if (heldSnack) dropSnack();
     else if (heldPopcorn && (heldPopcorn.kind === "kernel" || !heldPopcorn.used)) dropPopcorn();   // a used box only goes in the trash
     return;
   }
   if (e.button !== 0) return;
   if (tvMenu) { const hit = tvScreenHit(); if (hit) { tvMenuClick(hit.x, hit.y); return; } }
-  if (held) { inspecting = !inspecting; return; }          // hold it up / tuck it in hand
-  if (heldSnack) return;                                   // hands full
-  if (aimPop) { popcornStep(aimPop, true); return; }
-  if (heldPopcorn) return;                                 // hands full
-  if (hovered) pickup(hovered);
-  else if (aimSnack) grabSnack(aimSnack);
+  if (held && inspecting) { inspecting = false; peek = null; return; }  // tuck the held-up tape back in hand (it's yours now)
+  if (aimSlot) { putBack(); return; }                      // slotted back into its own spot on the shelf
+  if (aimReturns && returnBin.length) {                    // Returns works like a shelf: click to look, click again to take, right-click to put it back
+    if (invMakeRoom()) { const t = returnBin.pop(); refreshReturnsBin(); pickup(t); peek = t; peekSrc = "bin"; }
+    return;
+  }
+  if (aimPop && popcornStep(aimPop, true)) return;         // popcorn cart steps
+  if (hovered || aimSnack) {                               // another item: whatever's in hand goes into the inventory (up to INV_MAX)
+    if (invMakeRoom()) { if (hovered) { pickup(hovered); peek = hovered; peekSrc = "shelf"; } else grabSnack(aimSnack); }
+    return;
+  }
+  if (held) { inspecting = true; return; }                 // hold it up to look at it
+  if (heldSnack) { if (biteAnim <= 0) consumeSnack(); return; }   // a bite / sip (E stays free for standing up off the couch)
+  if (heldPopcorn) { if (biteAnim <= 0) eatPopcorn(); return; }   // ...or a handful of popcorn
 });
 
 // held tape in hand
@@ -2735,8 +3076,13 @@ snackGroup.position.copy(handGroup.position); snackGroup.rotation.copy(handGroup
 camera.add(snackGroup);
 snackGroup.visible = false;
 function grabSnack(unit) {
+  showSnack(unit); unit.visible = false;
+  snackLeft = snackTotal = portions(unit.userData.snack);
+  snackTag();
+}
+function showSnack(unit) {                   // put this unit in your hand (fresh grab, or back out of the inventory)
   const p = unit.userData.snack;
-  heldSnack = unit; unit.visible = false;
+  heldSnack = unit;
   // rebuild it part for part (shared geometry/materials) rather than clone():
   // clone() deep-copies userData, and a drink's parts point back at their unit
   const copy = o => {
@@ -2746,8 +3092,6 @@ function grabSnack(unit) {
   };
   const inHand = copy(unit); inHand.position.set(0, p.shape === "tube" || !p.r ? 0 : -p.h / 2, 0); inHand.rotation.set(0, 0, 0);
   snackGroup.clear(); snackGroup.add(inHand); snackGroup.visible = true;
-  snackLeft = snackTotal = portions(p);
-  snackTag();
 }
 function dropSnack(toss = false) {           // right-click puts an untouched one back on the shelf; opened ones only go in the trash (toss)
   if (!toss && snackLeft < snackTotal) return;
@@ -2770,7 +3114,7 @@ function snackTag() {
   const p = heldSnack.userData.snack, drink = isDrink(p);
   $("holdingTag").style.display = "block";
   $("holdingName").textContent = snackLeft
-    ? `${p.kind || "Snack"} — ${p.name} · ${snackLeft} ${drink ? "sip" : "bite"}${snackLeft === 1 ? "" : "s"} left · E to ${drink ? "drink" : "eat"}`
+    ? `${p.kind || "Snack"} — ${p.name} · ${snackLeft} ${drink ? "sip" : "bite"}${snackLeft === 1 ? "" : "s"} left · click to ${drink ? "drink" : "eat"}`
     : `Empty ${p.name} ${EMPTY[p.shape]} · take it to the trash`;
 }
 function restock(unit) { setTimeout(() => { if (heldSnack !== unit) unit.visible = true; }, 30000); }   // ponytail: fixed 30s restock, no stock tracking
@@ -2815,7 +3159,7 @@ function popcornVisual() {
   }
   if (hp.kind === "kernel") {
     const m = new THREE.Mesh(popMats.kernelGeo, popMats.kernel); m.position.set(-0.08, 0.1, -0.05); popcornGroup.add(m);
-    $("holdingName").textContent = "A piece of popcorn · E to eat";
+    $("holdingName").textContent = "A piece of popcorn · click to eat";
   } else {
     popcornGroup.add(new THREE.Mesh(popcornKit.cup, popcornKit.cupMat));
     if (hp.fill > 0) {                       // mound shrinks as you eat it
@@ -2827,7 +3171,7 @@ function popcornVisual() {
       }
     }
     const tops = hp.toppings.map(t => TOPPINGS[t]).join(", ");
-    $("holdingName").textContent = hp.fill ? `Popcorn${tops ? ` — ${tops}` : ""} · E to eat`
+    $("holdingName").textContent = hp.fill ? `Popcorn${tops ? ` — ${tops}` : ""} · click to eat`
       : hp.used ? "Empty popcorn box · refill it or take it to the trash" : "Empty popcorn box";
   }
   popcornGroup.visible = true; $("holdingTag").style.display = "block";
@@ -2835,12 +3179,14 @@ function popcornVisual() {
 function popcornStep(what, apply) {
   const hp = heldPopcorn;
   let tip, act = null;
-  if (held || heldSnack) tip = "Hands full";
+  const full = !hp && inv.length >= INV_MAX;
+  const take = v => () => { if (invMakeRoom()) heldPopcorn = v(); };   // stashes whatever's in hand into the inventory first
+  if (full && (what === "boxes" || what === "corn")) tip = "Hands full";
   else if (what === "boxes") {
-    if (!hp) { tip = "CLICK — take a popcorn box"; act = () => heldPopcorn = { kind: "box", fill: 0, toppings: [] }; }
+    if (!hp) { tip = "CLICK — take a popcorn box"; act = take(() => ({ kind: "box", fill: 0, toppings: [] })); }
     else tip = hp.kind === "kernel" ? "Eat that piece first (E)" : "You've already got a box";
   } else if (what === "corn") {
-    if (!hp) { tip = "CLICK — grab a piece of popcorn"; act = () => heldPopcorn = { kind: "kernel" }; }
+    if (!hp) { tip = "CLICK — grab a piece of popcorn"; act = take(() => ({ kind: "kernel" })); }
     else if (hp.kind === "kernel") tip = "Eat that piece first (E)";
     else if (hp.fill === 8) tip = "Your box is full";
     else { tip = hp.fill ? "CLICK — top it off" : "CLICK — scoop popcorn"; act = () => { hp.fill = 8; hp.used = true; }; }
@@ -2851,7 +3197,7 @@ function popcornStep(what, apply) {
     else { tip = `CLICK — add ${what}`; act = () => hp.toppings.push(what); }
   }
   if (apply && act) { act(); popcornVisual(); }
-  return tip;
+  return apply ? !!act : tip;
 }
 function eatPopcorn() {
   const hp = heldPopcorn;
@@ -2862,6 +3208,87 @@ function eatPopcorn() {
 }
 function dropPopcorn() { heldPopcorn = null; popcornVisual(); }
 
+// ---------------- inventory: up to 9 things carried at once ----------------
+// Only one is ever "in hand" — it lives in held / heldSnack / heldPopcorn and
+// behaves exactly as before. Picking up something else stashes the in-hand
+// item here (with its state: bites left, popcorn fill) and a bar of slots
+// appears; 1-9 or the mouse wheel swap which one is in hand. When the in-hand
+// item leaves (put back, eaten up, trashed, into the TV) the next one comes out.
+const INV_MAX = 9;
+const inv = [];                              // { kind: "tape"|"snack"|"popcorn", ref, left?, total?, thumb? }
+let invSel = -1;                             // index of the in-hand entry; -1 = empty hand
+let invEmpty = -1;                           // which empty slot is selected while the hand is empty (for the outline)
+const invKind = () => held ? "tape" : heldSnack ? "snack" : heldPopcorn ? "popcorn" : null;
+function invMakeRoom() {                     // before picking something new up: stash the in-hand item, or refuse at 9
+  invSync();                                 // account for anything picked up since the last frame first
+  if (inv.length >= INV_MAX) return false;
+  invStash(); return true;
+}
+function invStash() {
+  const e = inv[invSel]; if (!e) return;
+  if (e.kind === "tape") { held = null; inspecting = false; handGroup.visible = false; }
+  else if (e.kind === "snack") { e.left = snackLeft; e.total = snackTotal; e.thumb = invThumb(snackGroup); heldSnack = null; snackGroup.visible = false; snackGroup.clear(); }
+  else { e.thumb = invThumb(popcornGroup); heldPopcorn = null; popcornGroup.visible = false; }
+  $("holdingTag").style.display = "none";
+  invSel = -1; peek = null;                  // swapping away from a tape counts as taking it
+}
+function invSelect(i) {
+  invSync();
+  if (i === invSel || i < 0 || i >= INV_MAX || biteAnim > 0) return;
+  invStash();
+  if (!inv[i]) { invEmpty = i; invRender(); return; }   // an empty slot: empty-handed (e.g. to eject a tape without swapping one in)
+  const e = inv[i]; invSel = i;
+  if (e.kind === "tape") showTape(e.ref);
+  else if (e.kind === "snack") { showSnack(e.ref); snackLeft = e.left; snackTotal = e.total; snackTag(); }
+  else { heldPopcorn = e.ref; popcornVisual(); }
+  invRender();
+}
+function invSync() {                         // once a frame: notice pickups and whatever left your hand
+  const kind = invKind(), ref = held || heldSnack || heldPopcorn, e = inv[invSel];
+  if (e && kind === e.kind) e.ref = ref;     // same item, maybe changed in place (a popcorn refill)
+  else if (e) {                              // it's gone: the next one comes to hand
+    inv.splice(invSel, 1); const next = Math.min(invSel, inv.length - 1); invSel = -1;
+    if (ref) { inv.push({ kind, ref }); invSel = inv.length - 1; }
+    else if (next >= 0) invSelect(next);
+    invRender();
+  } else if (ref) {                          // a fresh pickup
+    inv.push({ kind, ref, thumb: kind === "snack" ? invThumb(snackGroup) : kind === "popcorn" ? invThumb(popcornGroup) : null });
+    invSel = inv.length - 1; invRender();
+  }
+}
+// slot pictures: a tape shows its cover; snacks and popcorn get a little
+// render of the actual in-hand object (a second tiny WebGL canvas, made on first use)
+let thumbR = null;
+const thumbScene = new THREE.Scene(), thumbCam = new THREE.PerspectiveCamera(30, 1, 0.01, 10);
+thumbScene.add(new THREE.AmbientLight(0xffffff, 1.4));
+{ const d = new THREE.DirectionalLight(0xffffff, 1.6); d.position.set(1, 2, 3); thumbScene.add(d); }
+function invThumb(group) {
+  if (!group.children.length) return null;
+  try {
+    thumbR ||= new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+    thumbR.setSize(96, 96, false);
+    const o = group.clone(); o.position.set(0, 0, 0); o.rotation.set(0.35, -0.6, 0); o.visible = true;
+    thumbScene.add(o);
+    const box = new THREE.Box3().setFromObject(o), c = box.getCenter(new THREE.Vector3()), r = box.getSize(new THREE.Vector3()).length() / 2;
+    thumbCam.position.set(c.x, c.y, c.z + r / Math.tan(THREE.MathUtils.degToRad(15)) * 1.05); thumbCam.lookAt(c);
+    thumbR.render(thumbScene, thumbCam);
+    thumbScene.remove(o);
+    return thumbR.domElement.toDataURL();
+  } catch { return null; }
+}
+function invRender() {
+  const bar = $("invBar"), show = inv.length > 1 || (inv.length && invSel < 0);   // 2+ items, or empty-handed with something stashed
+  bar.style.display = show ? "flex" : "none";
+  if (!show) return;
+  const sel = invSel >= 0 ? invSel : invEmpty;
+  bar.innerHTML = Array.from({ length: INV_MAX }, (_, i) => {
+    const e = inv[i];
+    const img = !e ? "" : e.kind === "tape" ? artUrl(e.ref.art) : e.thumb;
+    const wind = e?.kind === "tape" ? `<i class="wind" style="--w:${(windFrac(e.ref) * 100).toFixed(1)}%"></i>` : "";   // rewound = all green; red = how far it's played
+    return `<div class="slot${i === sel ? " sel" : ""}"><span>${i + 1}</span>${img ? `<img src="${img}">` : ""}${wind}</div>`;
+  }).join("");
+}
+
 // ---------------- hold a tape up to look at it ----------------
 let inspecting = false;                      // true = box held up in view, false = carried in hand
 let coverZoom = 1;                           // mouse-wheel zoom on the held-up cover (1-6x), reset per pickup
@@ -2869,8 +3296,11 @@ function releaseFromHand() {                 // clears the hand WITHOUT touching
   held = null; inspecting = false; handGroup.visible = false; $("holdingTag").style.display = "none";
 }
 function pickup(tape) {                      // from a shelf slot OR out of the returns bin — either way, into your hand
-  held = tape; inspecting = true;
   setOnShelf(tape, false);                   // gone from the shelf while it's in your hand
+  showTape(tape); inspecting = true;
+}
+function showTape(tape) {                    // the tape in your hand (fresh pickup, or back out of the inventory)
+  held = tape; inspecting = false;
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tape.title;
   // embedded shelf art shows instantly; the full-res TMDB version swaps in once
   // it loads (a plain <img> can load cross-origin even from file://). Offline
@@ -2886,8 +3316,8 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
   loadCoverTexture(tape, t => { handArt.material.map = t; handArt.material.needsUpdate = true; });
   handGroup.visible = true;
 }
-function putBack() {                         // manual reshelve — always goes home, never to the returns bin
-  if (held) setOnShelf(held, true);
+function putBack() {                         // back into its own shelf slot (aimed at it, or a just-looked-at tape via right-click)
+  if (held) { shelveCheck(held); setOnShelf(held, true); }
   releaseFromHand();
 }
 
@@ -2921,12 +3351,12 @@ function showTableBox(tape) {
 }
 
 let playing = null; // { tape, idx, eps }
-async function playEpisode(idx) {
-  const tape = held || playing?.tape;
+async function playEpisode(idx, tape = playing?.tape) {
   if (!tape) return;
   const eps = tape.seasons[0].episodes;
   idx = Math.max(0, Math.min(eps.length - 1, idx));
   playing = { tape, idx, eps };
+  tape.tapePos = { ep: idx, t: 0 };          // the tape winds forward as it plays (see the main loop)
   inspecting = false;                        // into the TV — box drops to your side
   const [iaId, epTitle] = eps[idx];
   const bits = epTitle.split(" - ");
@@ -2945,7 +3375,7 @@ async function playEpisode(idx) {
     await video.play();
 
     miniScreens.forEach(m => m.material = videoMat); // every screen shows the tape
-    tvGlow.userData.base = 1.6;
+    tvLight.base = 1;
     $("nowPlaying").textContent = `Now Playing: ${tape.title} — ${code}${name}`;
     tvOsd(`PLAY ▶ ${code.replace(" · ", "")}`.trim(), 4);
   } catch (err) {
@@ -2955,14 +3385,13 @@ async function playEpisode(idx) {
 function eject() {
   const tape = playing?.tape;
   video.pause(); video.removeAttribute("src"); video.load();
-  playing = null; tvGlow.userData.base = 0;
+  playing = null; tvLight.base = 0;
   miniScreens.forEach(m => m.material = screensaverMat);   // back to the bouncing-logo screensaver
   $("nowPlaying").style.display = "none";
   tableBoxGroup.visible = false;
   if (tape) {                              // the tape comes back out into your hand, not the shelf
-    if (heldSnack) dropSnack(snackLeft < snackTotal);   // make room: untouched back on the shelf, opened tossed
-    if (heldPopcorn) dropPopcorn();
-    pickup(tape);
+    if (invMakeRoom()) pickup(tape);         // whatever you were holding slides into the inventory
+    else { returnBin.push(tape); refreshReturnsBin(); }   // hands full (9 items): it goes to Returns instead
   }
 }
 function togglePause() {
@@ -2970,7 +3399,7 @@ function togglePause() {
   video.paused ? video.play().catch(() => {}) : video.pause();
   if (!video.paused) tvOsd("PLAY ▶", 2);
 }
-function stepEpisode(d) { if (playing) playEpisode(playing.idx + d); }
+function stepEpisode(d) { if (playing) playEpisode(playing.idx + d, playing.tape); }
 video.addEventListener("ended", () => stepEpisode(1));
 function setLamp(l, on) {
   l.userData.on = on ? LAMP_ON : 0;
@@ -2993,6 +3422,7 @@ function onE() {
     seated = true; player.yaw = Math.PI; player.pitch = 0;   // facing the TV
     return;
   }
+  if (aimPOS) { openPOS(); return; }
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
   if (aimDoor) { toggleDoor(aimDoor); return; }
@@ -3001,19 +3431,19 @@ function onE() {
     if (heldSnack) dropSnack(true); else if (heldPopcorn) dropPopcorn(); else return;
     trashFlapT = 0.5; return;                // swing the flap
   }
-  if (aimReturns) {                          // drop a held tape off, or take one back out
-    if (held) { returnBin.push(held); releaseFromHand(); }
-    else if (returnBin.length) pickup(returnBin.pop());
-    refreshReturnsBin();
+  if (aimReturns && held) {                  // drop the tape in hand off (taking one out is a click, like a shelf)
+    returnBin.push(held); releaseFromHand(); refreshReturnsBin();
     return;
   }
   if (aimTV) {                               // must actually be looking at the screen
     if (held) {
-      const tape = held;
-      if (playing) { returnBin.push(playing.tape); refreshReturnsBin(); }  // swap: whatever was already in the TV goes to Returns
-      playEpisode(0);
+      const tape = held, old = playing?.tape;
+      playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to (the episode — archive.org can't seek)
       releaseFromHand();                     // the tape leaves your hand...
       showTableBox(tape);                    // ...and its case lands on the coffee table
+      if (old) {                             // swap: the tape that was in the VCR comes out into your inventory
+        if (invMakeRoom()) showTape(old); else { returnBin.push(old); refreshReturnsBin(); }   // (9 items already: Returns)
+      }
     }
     else if (playing) eject();
     return;
@@ -3022,29 +3452,28 @@ function onE() {
   if (heldPopcorn) eatPopcorn();             // nothing else aimed: E eats a handful (or the single piece)
   else if (heldSnack) consumeSnack();        // ...or a bite / sip of whatever snack or drink you're holding
 }
-// CRT/floor-pool glow tinted by the video: an AMBI_N x AMBI_N sample
-// (VaultVision ambilight trick) — drawImage's own downscale does the
-// per-cell averaging, one pixel per cell, so no manual bucketing needed.
-// The overall average drives the plain point lights (tvGlow/tvBackGlow/
-// crtGlows); the full grid repaints the floor pool (see drawPoolGrid above)
-// with real per-region color
+// TV light colors: every 150ms the screen canvas (already cropped,
+// letterboxed and filtered — exactly what's on the glass) is shrunk to 24x18
+// and averaged into the 3x3 zones the shader lights with; the main loop eases
+// toward each sample so the room doesn't visibly step between them
 const glowCtx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
-glowCtx.canvas.width = glowCtx.canvas.height = AMBI_N;
+glowCtx.canvas.width = 24; glowCtx.canvas.height = 18;
+const tvTmp = new THREE.Color();
 setInterval(() => {
-  if (!playing || video.paused || !video.videoWidth) return;
+  if (!tvLight.base) return;
   try {
-    glowCtx.filter = pictureFilter(playing.tape, false);
-    glowCtx.drawImage(video, 0, 0, AMBI_N, AMBI_N);
-    const d = glowCtx.getImageData(0, 0, AMBI_N, AMBI_N).data;
-    let r = 0, g = 0, b = 0;
-    for (let i = 0; i < screenCells.length; i++) {
-      const c = screenCells[i] = { r: d[i * 4] / 255, g: d[i * 4 + 1] / 255, b: d[i * 4 + 2] / 255 };
-      r += c.r; g += c.g; b += c.b;
+    glowCtx.drawImage(videoCanvas, 0, 0, 24, 18);
+    const d = glowCtx.getImageData(0, 0, 24, 18).data, sum = new Float32Array(27);
+    for (let y = 0; y < 18; y++) for (let x = 0; x < 24; x++) {
+      const z = ((y / 6 | 0) * 3 + (x / 8 | 0)) * 3, p = (y * 24 + x) * 4;
+      sum[z] += d[p]; sum[z + 1] += d[p + 1]; sum[z + 2] += d[p + 2];
     }
-    tvGlow.color.setRGB(r / screenCells.length, g / screenCells.length, b / screenCells.length);
-    paintTvPool();
+    for (let z = 0; z < 27; z += 3) {           // pixels are sRGB; the shader works in linear
+      tvTmp.setRGB(sum[z] / 12240, sum[z + 1] / 12240, sum[z + 2] / 12240, THREE.SRGBColorSpace);   // 48 px x 255
+      tvZoneTarget[z] = tvTmp.r; tvZoneTarget[z + 1] = tvTmp.g; tvZoneTarget[z + 2] = tvTmp.b;
+    }
   } catch { /* tainted frame: keep the last colors */ }
-}, 200);
+}, 150);
 
 // ---------------- pointer lock / title screen ----------------
 let started = false;
@@ -3054,10 +3483,12 @@ $("titleScreen").addEventListener("click", () => {
 });
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
+  if (!locked && posTerm?.isOpen()) { keys.clear(); $("crosshair").hidden = true; return; }   // the mouse was freed for the terminal, not a pause
   $("titleScreen").style.display = locked ? "none" : "flex";
   $("crosshair").hidden = !locked;
   if (locked) {
     started = true;
+    if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
     $("enterHint").textContent = "CLICK TO RESUME";
     $("titleScreen").classList.add("paused");
   } else keys.clear();
@@ -3069,6 +3500,128 @@ addEventListener("resize", () => {
   finalComposer.setSize(innerWidth, innerHeight);
   bloomPass.setSize(innerWidth, innerHeight);
 });
+
+// ---------------- register terminal (pos.js) ----------------
+// E at the register frees the mouse and hands the keyboard to a full-screen
+// green-screen session; logging off (Esc / F10 / 0) takes you straight back
+// into the store. The in-world monitor mirrors whatever's on it.
+const posTex = new THREE.CanvasTexture(document.createElement("canvas"));
+posTex.colorSpace = THREE.SRGBColorSpace;
+// ---------------- security gate alarm ----------------
+// Walk through the entry gates with a tape in hand and they trip: LEDs flash
+// red and a two-tone shop alarm sounds (WebAudio, no sound file) until it's
+// silenced from the register terminal — the only place that option shows up.
+const gateAlarm = { on: false, armed: true, t: 0, ac: null, stop: null };   // armed: off (from the POS) = walk through freely
+function startGateAlarm() {
+  if (gateAlarm.on || !gateAlarm.armed) return;
+  gateAlarm.on = true; gateAlarm.t = 0;
+  try {
+    const ac = gateAlarm.ac ||= new AudioContext(); ac.resume();
+    const osc = ac.createOscillator(), g = ac.createGain();
+    osc.type = "square"; g.gain.value = 0; osc.connect(g).connect(ac.destination); osc.start();
+    let hi = false;
+    const beep = () => { const t = ac.currentTime; hi = !hi; osc.frequency.setValueAtTime(hi ? 2600 : 2050, t); g.gain.setValueAtTime(0.045, t); g.gain.setValueAtTime(0, t + 0.2); };
+    beep(); const timer = setInterval(beep, 280);
+    gateAlarm.stop = () => { clearInterval(timer); osc.stop(); osc.disconnect(); };
+  } catch { /* no audio: the lights still go */ }
+}
+function silenceGateAlarm() {
+  if (!gateAlarm.on) return;
+  gateAlarm.on = false; gateAlarm.stop?.(); gateAlarm.stop = null; gateLed.color.set(gateAlarm.armed ? 0x39ff7a : 0x151515);
+}
+function armGates(on) {                      // disarmed gates go dark and ignore tapes walking through
+  gateAlarm.armed = on;
+  if (gateAlarm.on) silenceGateAlarm(); else gateLed.color.set(on ? 0x39ff7a : 0x151515);
+}
+let gateLastZ = player.z;
+
+const posTerm = window.createPOS({
+  catalog, rented: rentedCopies,
+  returnBin: () => returnBin, held: () => held, playing: () => playing,
+  alarm: () => gateAlarm.on, silenceAlarm: silenceGateAlarm, resetSave: () => resetSave(),
+  gatesArmed: () => gateAlarm.armed, armGates,
+  onRedraw(c) {
+    if (posTex.image !== c) { posTex.image = c; posScreen.material.map = posTex; posScreen.material.needsUpdate = true; }
+    posTex.needsUpdate = true;
+  },
+  onClose() {                                      // straight back into the store (Esc/F10 keydown counts as the gesture)
+    const p = canvas.requestPointerLock();
+    p?.catch?.(() => { $("titleScreen").style.display = "flex"; });
+  },
+});
+posTerm.idle();
+function openPOS() {
+  keys.clear(); $("hoverTip").style.display = "none";
+  posTerm.open();
+  document.exitPointerLock();
+}
+
+// ---------------- save / restore (localStorage) ----------------
+// The store remembers itself between visits: where you're standing, lights
+// and lamps, doors / flap / cooler, your inventory (and which slot is in
+// hand, bites left, popcorn fill), the returns bin, which copies are out on
+// rental, the tape in the VCR and the last episode watched per title. (TV
+// picture settings already persist on their own — see applyTv.) Saved every
+// couple of seconds and on the way out; a tape that was playing sits in the
+// VCR and starts its episode again on your first click into the store (a
+// browser won't autoplay sound before that, and archive.org streams can't
+// seek, so it's the episode — not the exact minute — that resumes).
+let resumePlay = null, saveOff = false;
+const snackUnits = () => [...new Set(aimables.map(o => o.userData.unit || (o.userData.snack ? o : null)).filter(Boolean))];
+function saveState() {
+  if (saveOff || !started) return;           // nothing worth keeping until you've been in the store
+  const units = snackUnits();
+  const item = (e, i) => e.kind === "tape" ? { kind: "tape", key: copyKey(e.ref) }
+    : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
+    : { kind: "popcorn", pop: e.ref };
+  const data = {
+    v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
+    lightsOut, gatesArmed: gateAlarm.armed, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
+    rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey),
+    inv: inv.map(item), invSel, invEmpty,
+    playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
+    wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
+  };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
+}
+function loadState(S) {
+  if (S?.v !== SAVE_V) return;
+  try {
+    if (S.player) Object.assign(player, S.player);
+    if (S.lightsOut) setLights(true);
+    if (S.gatesArmed === false) armGates(false);
+    S.lamps?.forEach((on, i) => lamps[i] && setLamp(lamps[i], on));
+    S.doors?.forEach((open, i) => { if (doors[i] && open !== doors[i].open) toggleDoor(doors[i]); });
+    if (S.flap && !flapOpen) toggleFlap();
+    coolerOpen = !!S.cooler;
+    for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
+    payLedger.push(...(S.payLedger || []));
+    for (const c of (S.returns || []).map(copyByKey).filter(Boolean)) { setOnShelf(c, false); returnBin.push(c); }
+    refreshReturnsBin();
+    const units = snackUnits();
+    for (const it of S.inv || []) {          // re-pick each item up in order, exactly as if you'd grabbed it
+      const c = it.kind === "tape" && copyByKey(it.key), u = it.kind === "snack" && units[it.i];
+      if ((it.kind === "tape" && !c) || (it.kind === "snack" && !u) || !invMakeRoom()) continue;
+      if (c) { setOnShelf(c, false); showTape(c); }
+      else if (u) { u.visible = false; showSnack(u); snackLeft = it.left; snackTotal = it.total; snackTag(); }
+      else { heldPopcorn = it.pop; popcornVisual(); }
+      invSync();
+    }
+    if (inv.length) invSelect(S.invSel >= 0 ? S.invSel : S.invEmpty >= 0 ? S.invEmpty : inv.length - 1);
+    const pt = S.playing && copyByKey(S.playing.key);
+    if (pt) {                                 // back in the VCR, case on the coffee table; rolls on your first click in
+      setOnShelf(pt, false);
+      playing = { tape: pt, idx: S.playing.idx, eps: pt.seasons[0].episodes };
+      showTableBox(pt); resumePlay = playing;
+    }
+  } catch (err) { console.warn("VaultBuster: couldn't restore the saved store", err); }
+}
+function resetSave() { saveOff = true; try { localStorage.removeItem(SAVE_KEY); } catch {} location.reload(); }
+loadState(SAVE);
+gateLastZ = player.z;                        // restored position isn't a walk through the gates
+setInterval(saveState, 2000);
+addEventListener("beforeunload", saveState);
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveState(); });
 
 // ---------------- main loop ----------------
 const clock = new THREE.Clock();
@@ -3090,6 +3643,7 @@ renderer.setAnimationLoop(() => {
     const v = 0.5 + 0.5 * Math.sin(clockT * 7 + b.phase);
     b.mat.color.setRGB(0.3 + 0.7 * v, 0.27 + 0.62 * v, 0.03 + 0.09 * v);
   }
+  exteriorTick(dt);
   const cloudSpan = (STORE.x + 20) - (WALL_L - 20);
   for (const c of exteriorClouds) {       // a slow drift so the sky doesn't feel static
     c.position.x += dt * 0.15;
@@ -3097,6 +3651,8 @@ renderer.setAnimationLoop(() => {
   }
   if (!playing) updateScreensaver(dt);
   if (playing || tvMenu) updateVideoFrame();
+  if (playing && video.currentTime > 0 && !video.paused)   // the tape winds on
+    playing.tape.tapePos = { ep: playing.idx, t: video.currentTime, d: isFinite(video.duration) ? video.duration : undefined };
   if (!playing) screenMesh.material = tvMenu ? videoMat : screensaverMat;   // menu over a blank screen when no tape's in
   if (tvMenu) {                                   // what the crosshair (the remote) is pointing at on the menu
     const hit = tvScreenHit();
@@ -3121,15 +3677,22 @@ renderer.setAnimationLoop(() => {
   // close, not what lights the floor — the floor's falloff (and the table's
   // and couch's shadows) is owned by the decals below, which can actually
   // respect where the furniture blocks it; a real point light can't
-  tvGlow.intensity = tvGlow.userData.base * (lightsOut ? 2.2 : 1);
-  tvGlow.distance = lightsOut ? 16 : 11;
-  tvBackGlow.color.copy(tvGlow.color);
-  tvBackGlow.intensity = tvGlow.userData.base * (lightsOut ? 1.1 : 0.4);
-  tvPool.material.opacity = tvGlow.userData.base && lightsOut ? 0.55 : 0;   // carpet effects are a lights-out-only trick — color is baked into the texture by paintTvPool
-  const shadowOp = tvGlow.userData.base && lightsOut ? 0.65 : 0;   // matches the carpet's other dark patches — the glass front lets in more light now
-  tvTableShadow.material.opacity = tvCouchShadow.material.opacity = shadowOp;
-  const crtBase = tvGlow.userData.base ? 0.9 : 0;   // ceiling CRTs tint/dim with whatever's actually playing
-  crtGlows.forEach(cg => { cg.color.copy(tvGlow.color); cg.intensity = crtBase * (lightsOut ? 1.8 : 1); });
+  {                                        // TV light: ease the zone colors toward the latest sample, scale for lights on/out
+    const k = 1 - Math.exp(-dt / 0.08), zc = TVU.uTvZoneC.value;
+    let r = 0, g = 0, b = 0;
+    for (let i = 0; i < 27; i += 3) {
+      zc[i] += (tvZoneTarget[i] - zc[i]) * k; zc[i + 1] += (tvZoneTarget[i + 1] - zc[i + 1]) * k; zc[i + 2] += (tvZoneTarget[i + 2] - zc[i + 2]) * k;
+      r += zc[i]; g += zc[i + 1]; b += zc[i + 2];
+    }
+    tvLight.avg.setRGB(r / 9, g / 9, b / 9);
+    const on = tvLight.base * (lightsOut ? 1 : 0.35);    // the fluorescents wash most of it out
+    TVU.uTvGain.value = on * TV_GAIN;
+    TVU.uTvAmb.value.copy(tvLight.avg).multiplyScalar(on * TV_AMB);
+    tvBackGlow.color.copy(tvLight.avg); tvBackGlow.intensity = tvLight.base * (lightsOut ? 0.8 : 0.3);   // a hint of bleed, not a second light
+    const crtBase = tvLight.base ? 0.9 : 0;   // ceiling CRTs tint/dim with whatever's actually playing
+    crtGlows.forEach(cg => { cg.color.copy(tvLight.avg); cg.intensity = crtBase * (lightsOut ? 1.8 : 1); });
+    if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
+  }
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
   flapPivot.rotation.x += ((flapOpen ? -Math.PI / 2 : 0) - flapPivot.rotation.x) * Math.min(1, dt * 6);   // eases open/closed
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
@@ -3140,6 +3703,9 @@ renderer.setAnimationLoop(() => {
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
   move(dt);
+  if (inv.some(e => e.kind === "tape") && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
+  gateLastZ = player.z;
+  if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
   if (seated) camera.position.set(seatAt.x, seatAt.y, seatAt.z);
   else {
     eyeY += ((keys.has("KeyC") ? 0.95 : 1.65) - eyeY) * Math.min(1, dt * 10);
@@ -3152,6 +3718,7 @@ renderer.setAnimationLoop(() => {
     camera.updateProjectionMatrix();
   }
   camera.rotation.y = player.yaw; camera.rotation.x = player.pitch;
+  invSync();
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
     handGroup.visible = !inspecting;        // 3D box only for the carried-at-your-side pose
@@ -3166,7 +3733,7 @@ renderer.setAnimationLoop(() => {
   if (showTvHint) $("tvHint").textContent = tvMenu
     ? "Click to choose · wheel adjusts a slider · right-click closes"
     : seated
-    ? "Press E to stand up · right-click for picture settings"
+    ? "Press E to stand up · right-click the screen for picture settings"
     : aimCouch
       ? "Press E to sit on the couch"
       : held
