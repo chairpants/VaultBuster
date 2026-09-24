@@ -49,6 +49,11 @@ Walk the aisles of a fluorescent-lit rental store, pull a tape off the shelf, an
 - The storefront is glass. Outside there's a sidewalk, a striped parking lot with three parked cars, a road, a bench under an iron park lamp, and a treeline.
 - The time of day follows the store lights. Lights on means blue sky, sun, and drifting clouds. Lights out means a moonlit midnight-blue night, with sodium street lights glowing orange over the lot.
 
+**Saved between visits**
+- The store remembers itself in your browser's local storage: where you're standing, the lights and lamps, doors, your inventory (with bites left and popcorn fill), the returns bin, which copies are out on rental, the tape in the VCR, and the last episode you watched of each title.
+- A tape that was playing starts its episode again on your first click into the store. archive.org streams can't seek, so it's the episode that resumes, not the exact minute.
+- To start fresh, type `SYSRESET` at the register terminal.
+
 ---
 
 ## Running it
@@ -78,13 +83,16 @@ Neither server has any dependencies.
 | **C** | Crouch |
 | **Click** a tape | Pick it up and hold it up to look at it |
 | **Click** again | Tuck it in your hand |
-| **Right-click** / **Esc** | Put it back |
-| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · use the returns counter · open or close a door |
+| **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
+| **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
+| **Right-click** the TV screen | Picture settings menu |
+| **E** | Put the tape in the TV · sit or stand at the couch · switch a lamp on or off · drop a tape in Returns (click the bin to look at / take one, like a shelf) · open or close a door · log in to the register terminal (Esc / F10 logs off) |
 | **Space** | Pause / play |
 | **, .** | Previous / next episode |
 | **L** (tap) | Store lights on/off, which also switches day and night |
 | **L** (hold) | Both side lamps on/off |
-| **Mouse wheel** | Zoom while seated |
+| **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
+| **1–9** | Pick an inventory slot (carry up to 9 items; the bar appears once you hold 2+) |
 | **H** | Hide the HUD |
 | **F** | Fullscreen |
 
