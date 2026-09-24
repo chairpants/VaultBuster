@@ -4,6 +4,8 @@
 <meta charset="utf8">
 <title>VaultBuster</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">  <!-- the register terminal's font (pos.js) -->
 <style>
   :root { --bb-blue: #00349c; --bb-blue-dark: #001f5c; --bb-yellow: #ffd400; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -59,9 +61,36 @@
   #inspect img { height: 36vh; width: 24vh; max-width: 92vw; object-fit: contain; background: #000; border: 4px solid #14181f;
     box-shadow: 0 24px 70px #000e; border-radius: 3px; transition: transform .12s ease-out; }
 
+  /* ---------- one-line notices (e.g. shelving an unrewound tape) ---------- */
+  #toast { position: fixed; z-index: 12; left: 50%; top: 18%; transform: translateX(-50%); display: none;
+    background: #8c1c1c; color: #fff; border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 16px;
+    font-size: 14px; font-weight: bold; white-space: nowrap; box-shadow: 0 6px 20px #000a; }
+  body.nohud #toast { display: none !important; }
+
+  /* ---------- inventory bar: shows once you carry 2+ things ---------- */
+  #invBar { position: fixed; z-index: 11; left: 50%; bottom: 14px; transform: translateX(-50%); display: none; gap: 6px; pointer-events: none; }
+  #invBar .slot { position: relative; width: 58px; height: 58px; background: #ffffff40; border: 3px solid #ffffff40; border-radius: 4px;
+    box-shadow: 0 2px 8px #0008; display: flex; align-items: center; justify-content: center; }
+  #invBar .slot.sel { border-color: var(--bb-yellow); outline: 3px solid var(--bb-blue); transform: translateY(-4px); }
+  #invBar .slot img { max-width: 46px; max-height: 50px; object-fit: contain; }
+  #invBar .slot span { position: absolute; left: 3px; top: 1px; font: bold 10px Arial, sans-serif; color: #889; }
+  /* tape wind bar: faint green = rewound, red fills in as far as it's played */
+  #invBar .slot .wind { position: absolute; left: 3px; right: 3px; bottom: 2px; height: 4px; border-radius: 2px;
+    background: linear-gradient(to right, #e23232 var(--w), #3fcf6a80 var(--w)); }
+
+  /* ---------- register terminal (pos.js): an 80x25 green-screen CRT ---------- */
+  #posTerm { position: fixed; z-index: 30; inset: 0; display: flex; align-items: center; justify-content: center; background: #000c; }
+  #posTerm[hidden] { display: none; }
+  #posTerm pre { margin: 0; padding: 2.2vh 2.4vh; background: #0000aa; color: #c8c8d8; border: 14px solid #cfc7b2; border-radius: 18px;
+    font: min(1.95vw, 3.7vh)/1.0 VT323, "Courier New", monospace; text-shadow: 0 0 4px #aab4ff66;
+    box-shadow: inset 0 0 80px #000a, 0 20px 80px #000;
+    background-image: repeating-linear-gradient(#0000 0 2px, #0002 2px 3px); }
+  #posTerm .inv { background: #00aaaa; color: #000; text-shadow: none; }
+  #posTerm .sel { background: #c8c8d8; color: #0000aa; text-shadow: none; }
+
   /* ---------- H toggles every HUD overlay off ---------- */
   body.nohud #nowPlaying, body.nohud #tvHint,
-  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #crosshair { display: none !important; }
+  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #invBar, body.nohud #crosshair { display: none !important; }
 
   /* ---------- now playing: quiet corner caption ---------- */
   #nowPlaying { position: fixed; z-index: 10; right: 16px; bottom: 12px; display: none;
@@ -77,16 +106,18 @@
   </div>
   <div id="enterHint">CLICK TO ENTER THE STORE</div>
   <div id="controlsHelp">
-    <b>W A S D</b> — walk &nbsp;·&nbsp; <b>MOUSE</b> — look &nbsp;·&nbsp; <b>CLICK</b> a tape — pick up &amp; hold it up · <b>CLICK</b> again — tuck in hand · <b>RIGHT-CLICK</b> — put back<br>
+    <b>W A S D</b> — walk &nbsp;·&nbsp; <b>MOUSE</b> — look &nbsp;·&nbsp; <b>CLICK</b> a tape — pick up &amp; hold it up · <b>CLICK</b> again — tuck in hand · <b>RIGHT-CLICK</b> — put back a tape you're still looking at · <b>CLICK</b> a snack in hand — eat / drink · <b>RIGHT-CLICK</b> the TV screen — picture menu<br>
     <b>E</b> — insert tape into the store TV &nbsp;·&nbsp; <b>SPACE</b> — pause / play &nbsp;·&nbsp; <b>, .</b> — prev / next episode<br>
-    <b>ESC</b> — put tape back / menu &nbsp;·&nbsp; <b>SHIFT</b> — hustle &nbsp;·&nbsp; <b>C</b> — crouch &nbsp;·&nbsp; <b>L</b> — lights out<br>
-    <b>H</b> — hide HUD &nbsp;·&nbsp; <b>F</b> — fullscreen &nbsp;·&nbsp; <b>MOUSE WHEEL</b> — zoom (seated, or a held-up cover) &nbsp;·&nbsp; 1600+ tapes on the shelves
+    <b>ESC</b> — menu &nbsp;·&nbsp; <b>SHIFT</b> — hustle &nbsp;·&nbsp; <b>C</b> — crouch &nbsp;·&nbsp; <b>L</b> — lights out<br>
+    <b>H</b> — hide HUD &nbsp;·&nbsp; <b>F</b> — fullscreen &nbsp;·&nbsp; <b>MOUSE WHEEL</b> — zoom (seated, or a held-up cover), else switch items · <b>1-9</b> — inventory slot &nbsp;·&nbsp; 1600+ tapes on the shelves
   </div>
 </div>
 
 <div id="crosshair" hidden></div>
 <div id="hoverTip"></div>
 <div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
+<div id="invBar"></div>
+<div id="toast"></div>
 <div id="tvHint"></div>
 <div id="inspect"><img id="inspectArt" alt=""></div>
 
@@ -113,6 +144,7 @@
 <script src="covers.js"></script>  <!-- built by fetch-covers.mjs -->
 <script src="meta.js"></script>    <!-- built by fetch-covers.mjs: [year, TMDB votes] per title -->
 <script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store.js -->
+<script src="pos.js"></script>     <!-- window.createPOS(); the register's terminal, created from store.js -->
 <script type="module">
   // file:// can't load local files as ES modules, so: import three from the CDN
   // here (https CORS is fine), expose the globals, then load store.js as a
