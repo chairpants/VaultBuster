@@ -33,7 +33,7 @@ It's a Friday night and the store is yours. Work the counter, run the register, 
 - **Security gates** that do exactly what you'd expect when a tagged tape walks out the door.
 - **Almost everything is interactive.** Pick things up, carry them around, restock, eat the snacks. Most of it is yours to find.
 - **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
-- **Lights out:** close up for the night, and it's dark outside too.
+- **Real light switches:** the store is wired in zones, and the back rooms have their own. Daylight comes in through the front windows.
 - **The store remembers.** Clock out, come back, and everything is where you left it.
 
 ---
@@ -70,8 +70,7 @@ Neither server has any dependencies.
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
 | **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down |
-| **L** (tap) | Store lights on/off, which also switches day and night |
-| **L** (hold) | Both side lamps on/off |
+| **L** | Cycle the time of day outside: day, dusk, night, dawn. The store lights are real switches on the walls |
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
 | **1–9** | Pick an inventory slot (carry up to 9 items; the bar appears once you hold 2+) |
 | **H** | Hide the HUD |
