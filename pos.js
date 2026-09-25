@@ -13,7 +13,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -375,5 +375,13 @@ window.createPOS = function createPOS(api) {
     },
     close,
     idle() { draw(); },                          // paint the monitor once at startup
+    // for store.js's walk-in customers: every member is somebody who might come in
+    members: customers,
+    dueIn: r => Math.round((r.due - TODAY) / DAY),   // days until a rental's due (negative = late)
+    checkIn(copy) {                              // a member dropped this copy back off: close out the rental
+      const r = copy.rental; if (!r) return;
+      r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); delete copy.rental;   // off their account and out of the reports
+      if (open && mode === "app") draw();
+    },
   };
 };
