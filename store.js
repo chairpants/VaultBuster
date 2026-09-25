@@ -232,14 +232,24 @@ function rewinderFinish(clunk = true) {
 function rewinderSound(on) {
   if (!on) { rewinder.snd?.(); rewinder.snd = null; return; }
   rewinder.led.material.color.set(0xff3b1f);
-  try {                                       // motor whir: a low buzz plus a rising whine as the reel speeds up
+  try {                                       // little motor: a soft hum, tape hiss, and the reel's rattle, speeding up a touch as the tape runs down
     const ac = rewinder.ac ||= new AudioContext(); ac.resume();
-    const buzz = ac.createOscillator(), whine = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
-    buzz.type = "sawtooth"; buzz.frequency.value = 75; whine.type = "triangle";
-    whine.frequency.setValueAtTime(500, t); whine.frequency.linearRampToValueAtTime(1300, t + rewinder.dur);
-    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.025, t + 0.15);
-    buzz.connect(g); whine.connect(g); g.connect(ac.destination); buzz.start(); whine.start();
-    rewinder.snd = () => { buzz.stop(); whine.stop(); g.disconnect(); };
+    const t = ac.currentTime, end = t + rewinder.dur, out = ac.createGain();
+    out.gain.setValueAtTime(0, t); out.gain.linearRampToValueAtTime(0.05, t + 0.2); out.connect(ac.destination);
+    const hum = ac.createOscillator(), humF = ac.createBiquadFilter(), humG = ac.createGain();
+    hum.type = "sawtooth"; hum.frequency.setValueAtTime(95, t); hum.frequency.linearRampToValueAtTime(125, end);
+    humF.type = "lowpass"; humF.frequency.value = 260; humG.gain.value = 0.35;
+    hum.connect(humF).connect(humG).connect(out);
+    const noise = ac.createBufferSource(), buf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    noise.buffer = buf; noise.loop = true;
+    const hiss = ac.createBiquadFilter(), rattle = ac.createGain(), lfo = ac.createOscillator(), depth = ac.createGain();
+    hiss.type = "bandpass"; hiss.Q.value = 0.8; hiss.frequency.setValueAtTime(1400, t); hiss.frequency.linearRampToValueAtTime(1800, end);
+    lfo.type = "square"; lfo.frequency.setValueAtTime(9, t); lfo.frequency.linearRampToValueAtTime(14, end);   // the reel's click-click, not a turbine
+    rattle.gain.value = 0.35; depth.gain.value = 0.25; lfo.connect(depth).connect(rattle.gain);
+    noise.connect(hiss).connect(rattle).connect(out);
+    const src = [hum, noise, lfo]; src.forEach(o => o.start());
+    rewinder.snd = () => { src.forEach(o => o.stop()); out.disconnect(); };
   } catch {}
 }
 function rewinderTick(dt) {
@@ -3516,7 +3526,22 @@ const CUST_COUNTER = { x: -5.45, z: 4.95, ry: Math.PI };           // across the
 // themselves (each knows its slot and which way its shelf faces). Tapes are
 // grouped into ~1.5 m stretches per facing; each stretch becomes a spot 0.8 m
 // out in the aisle, tagged with the sections it holds. Built on first use
-let custSpots = null;
+let custSpots = null, custSnackSpots = null;
+const snackPrice = p => p.kind ? 1.25 : 0.99;       // drinks carry a kind (Soda, Water...), candy doesn't
+function snackSpots() {                           // in front of each snack fixture (the cooler, the candy racks), where a shopper can reach it
+  if (custSnackSpots) return custSnackSpots;
+  const grid = navGrid(cust.box), spots = new Map(), v = new THREE.Vector3(), n = new THREE.Vector3();
+  for (const u of snackUnits()) {
+    u.parent.getWorldDirection(n); u.getWorldPosition(v);   // fixtures face their local +z
+    const x = v.x + n.x * 0.75, z = v.z + n.z * 0.75;
+    if (x < -2.25 && z < 4.5) continue;           // behind the counter is staff only
+    const key = `${Math.round(x / 1.5)},${Math.round(z / 1.5)}`;
+    let s = spots.get(key); if (!s) spots.set(key, s = { x: 0, z: 0, n: 0, ry: Math.atan2(-n.x, -n.z), units: [], drinks: false });
+    s.x += x; s.z += z; s.n++; s.units.push(u); s.drinks ||= !!u.userData.snack.kind;
+  }
+  return custSnackSpots = [...spots.values()].map(s => Object.assign(s, { x: s.x / s.n, z: s.z / s.n }))
+    .filter(s => navPath(grid, CUST_DOOR.x, CUST_DOOR.z, s.x, s.z));
+}
 function browseSpots() {
   if (custSpots) return custSpots;
   const grid = navGrid(cust.box), groups = new Map();   // not counting the customer asking: they're standing in the doorway the flood fill starts from
@@ -3525,14 +3550,14 @@ function browseSpots() {
     const nx = Math.cos(c.ry), nz = -Math.sin(c.ry), sx = c.pos.x + nx * 0.8, sz = c.pos.z + nz * 0.8;   // shelves face their local +x
     if (sx < -2.25 && sz < 4.5) continue;        // behind the counter is staff only
     const key = `${Math.round(sx / 1.5)},${Math.round(sz / 1.5)},${Math.round(c.ry / (Math.PI / 2))}`;
-    let g = groups.get(key); if (!g) groups.set(key, g = { x: 0, z: 0, nx, nz, n: 0, cats: {} });
-    g.x += sx; g.z += sz; g.n++; g.cats[c.category] = (g.cats[c.category] || 0) + 1;
+    let g = groups.get(key); if (!g) groups.set(key, g = { x: 0, z: 0, nx, nz, n: 0, cats: {}, copies: [] });
+    g.x += sx; g.z += sz; g.n++; g.copies.push(c); g.cats[c.category] = (g.cats[c.category] || 0) + 1;
   }
   const reach = new Uint8Array(grid.g.length), q = [grid.at(CUST_DOOR.x, CUST_DOOR.z)];   // flood fill from the door: what can actually be walked to
   reach[q[0]] = 1;
   while (q.length) { const n = q.pop(), i = n % grid.nx; for (const m of [i + 1 < grid.nx && n + 1, i > 0 && n - 1, n + grid.nx, n - grid.nx]) if (m !== false && m >= 0 && m < reach.length && !reach[m] && !grid.g[m]) { reach[m] = 1; q.push(m); } }
   return custSpots = [...groups.values()].filter(g => g.n >= 4)
-    .map(g => ({ x: g.x / g.n, z: g.z / g.n, ry: Math.atan2(-g.nx, -g.nz), n: g.n, cats: g.cats }))   // facing the shelf
+    .map(g => ({ x: g.x / g.n, z: g.z / g.n, ry: Math.atan2(-g.nx, -g.nz), n: g.n, cats: g.cats, copies: g.copies }))   // facing the shelf
     .filter(g => reach[grid.at(g.x, g.z)] === 1);
 }
 // who's walking in: a seed drives both the look and the personality, so the
@@ -3591,7 +3616,7 @@ function custSpawn(member = custPickMember()) {
   c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); c.group.rotation.y = cust.ry = cust.face = 0;
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
-  Object.assign(cust, { tagged: false, alarmed: false, holding: 0, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
+  Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
 }
 function custGo(state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
   const p = cust.c.group.position, r = 0.35;
@@ -3614,8 +3639,13 @@ function custNextStop() {                         // a shelf they haven't looked
   const spot = spots[i]; if (!spot) return custDone();
   cust.seen.add(spot); custGo("stop", spot);
 }
-function custDone() {                             // out of shelves to look at: pay for what they've got, or give up
-  if (cust.holding) { cust.c.setMood("happy"); custGo("counter", CUST_COUNTER); }
+function custDone() {                             // out of shelves to look at: grab a snack on the way maybe, then pay for what they've got, or give up
+  if (!cust.snackDone) {
+    cust.snackDone = true;
+    const spots = snackSpots();
+    if (spots.length && Math.random() < (cust.holding ? 0.4 : 0.15)) return custGo("snack", spots[Math.floor(Math.random() * spots.length)]);
+  }
+  if (cust.holding || cust.snacks.length) { cust.c.setMood("happy"); custGo("counter", CUST_COUNTER); }
   else { cust.c.setMood("meh"); custGo("leave", CUST_DOOR); }
 }
 function custDecide() {                           // done browsing this shelf: take one, put one back, or move on
@@ -3629,16 +3659,29 @@ function custDecide() {                           // done browsing this shelf: t
   if (cust.reach) { cust.c.setPose("reach"); cust.c.setMood(cust.reach === "return" ? "meh" : likes > 0.4 ? "love" : "happy"); cust.state = "reach"; cust.t = 1.3; }
   else { cust.c.setMood(cust.holding ? "happy" : "neutral"); cust.stopsLeft > 0 ? custNextStop() : custDone(); }
 }
+function custPickCopy() {                        // a copy still on this shelf, favoring their kind of thing
+  const cs = cust.spot.copies.filter(c => !c.offShelf), cats = cust.who.persona.taste.cats;
+  if (!cs.length) return null;
+  const w = cs.map(c => cats.includes(c.category) ? 6 : 1);
+  let r = cust.who.rnd() * w.reduce((a, b) => a + b, 0), i = 0; while (i < cs.length - 1 && (r -= w[i]) > 0) i++;
+  return cs[i];
+}
+const registerStaffed = () => emp.state === "post" || Math.hypot(player.x - EMP_POST.x, player.z - EMP_POST.z) < 1.5;   // Dana at her post, or you behind the register
 function custGone() {
+  if (cust.tagged) for (const c of cust.tapes) c.lost = true;   // walked out with them: gone for good (order a replacement on the POS)
+  cust.snacks.forEach(restock);                   // lifted snacks just restock, no loss tracking
   const c = cust.c;
   scene.remove(c.group); c.dispose();
   for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
   colliders.splice(colliders.indexOf(cust.box), 1);
-  cust.c = null; cust.state = "gone"; cust.t = 6 + Math.random() * 6;
+  cust.c = null; cust.state = "gone"; cust.t = 20 + Math.random() * 20;
 }
 function custInteract() {                        // E on a customer: ring them up at the counter, or just say hi
   const c = cust.c;
   if (["wait", "impatient", "angry"].includes(cust.state)) {
+    for (const t of cust.tapes) { posTerm.checkOut(t, cust.member); rentedCopies.push(t); }   // rung up: on their account
+    if (cust.snacks.length) posTerm.sale(cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0));
+    cust.snacks.forEach(restock); cust.snacks = [];   // sold: the shelf slot refills like one you ate
     cust.tagged = false; c.setMood("thanks"); c.setPose("hold"); cust.state = "paid"; cust.t = 1.8;
   } else if (!["paid", "leave", "out"].includes(cust.state)) { cust.hi = 1.4; c.setMood("happy"); }
 }
@@ -3677,15 +3720,27 @@ function custTick(dt) {
       } break;
       case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = 3 + cust.who.rnd() * 4; break;
       case "browse": if (cust.t <= 0) custDecide(); break;
+      case "snack":                               // reach in (the cooler door swings open for it), take one if any are left
+        c.setPose("reach"); c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
+        if (cust.spot.drinks && !coolerOpen) { coolerOpen = true; cust.openedCooler = true; }
+        break;
+      case "snacking": if (cust.t <= 0) {
+        const left = cust.spot.units.filter(u => u.visible && u !== heldSnack);
+        if (left.length) { const u = left[Math.floor(Math.random() * left.length)]; u.visible = false; cust.snacks.push(u); }
+        if (cust.openedCooler) { coolerOpen = false; cust.openedCooler = false; }
+        c.setPose(cust.holding ? "hold" : "idle"); custDone();
+      } break;
       case "reach": if (cust.t <= 0) {
-        cust.holding += cust.reach === "take" ? 1 : cust.reach === "return" ? -1 : 0;   // a swap trades one for one
+        if (cust.reach !== "take") setOnShelf(cust.tapes.pop(), true);   // put back (a swap trades one for one)
+        if (cust.reach !== "return") { const c = custPickCopy(); if (c) { setOnShelf(c, false); cust.tapes.push(c); } }   // an actual copy off this shelf
+        cust.holding = cust.tapes.length;
         c.holdTape(cust.holding); c.setPose(cust.holding ? "hold" : "idle");
         cust.stopsLeft > 0 ? custNextStop() : custDone();
       } break;
-      case "counter": c.setPose("wait"); c.setMood("wait"); cust.state = "wait"; cust.t = 12 * P.patience; break;
-      case "wait": if (cust.t <= 0) { c.setMood("impatient"); cust.state = "impatient"; cust.t = 12 * P.patience; } break;
+      case "counter": if (!registerStaffed()) { dingBell(); empSummon(); } c.setPose("wait"); c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience; break;   // ding! then a fair wait
+      case "wait": if (cust.t <= 0) { dingBell(); empSummon(); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;   // ding ding, hello?
       case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
-      case "angry": if (cust.t <= 0) { cust.tagged = true; cust.alarmed = false; c.setPose("hold"); custGo("leave", CUST_DOOR); } break;   // storms out with it
+      case "angry": if (cust.t <= 0) { cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo("leave", CUST_DOOR); } break;   // storms out with it
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo("leave", CUST_DOOR); } break;
       case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;   // screen clicks off at the door...
       case "out": if (cust.t <= 0) custGone(); return;                               // ...and they're gone
@@ -3701,12 +3756,13 @@ function custTick(dt) {
 // ---------------- the employee: Dana, on the register ----------------
 // Same TV-head build as the customers, in the store polo. By default she works
 // the register: rings up whoever's waiting and silences the gates. E on her
-// switches her to processing returns — take a few from the tote, rewind any
+// switches her to processing returns — take an armful from the tote, rewind any
 // that need it on the counter rewinder, reshelve each in its own slot — and
 // back to the register once the bin's empty (or when you tell her).
 const EMP_POST = { x: -5.45, z: 3.2, ry: 0 };                      // behind the register, facing the customer side
 const EMP_TOTE = { x: -3.05, z: 4 - 0.35 - 1.05, ry: Math.PI / 2 }; // behind the returns slot, at the tote
 const EMP_REWIND = { x: -4.5, z: 3.2, ry: 0 };                      // at the rewinder
+const EMP_ARMFUL = 10;                                              // returns she takes out per trip
 const emp = { c: null, task: "register", state: "", path: [], ry: 0, face: 0, t: 0, ringT: 0, alarmT: 0, carry: [], rewinding: null, openedFlap: false, stuck: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
 function empSpawn() {
   const outfit = { ...VaultCustomers.randomOutfit(seeded(417)), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
@@ -3728,7 +3784,11 @@ function empNext() {                              // processing returns: what's 
   const c = emp.c;
   c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
   if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", EMP_REWIND);
-  if (emp.carry.length) return empGo("toShelf", shelfSpot(emp.carry[0]));
+  if (emp.carry.length) {                         // nearest slot next: one loop through the floor, not a trip per tape
+    const p = c.group.position, d = t => Math.hypot(t.pos.x - p.x, t.pos.z - p.z);
+    emp.target = emp.carry.reduce((a, b) => d(b) < d(a) ? b : a);   // ponytail: greedy nearest-neighbor, fine for a handful of tapes
+    return empGo("toShelf", shelfSpot(emp.target));
+  }
   empGo("toTote", EMP_TOTE);
 }
 function empToggle() {                            // E on Dana: returns <-> register
@@ -3739,7 +3799,12 @@ function empToggle() {                            // E on Dana: returns <-> regi
     emp.task = "returns"; c.setMood("happy"); empGo("toTote", EMP_TOTE);
   } else empBackToRegister();
 }
+function empSummon() {                           // the bell: drop what she's doing (tapes stay in hand), ring them up, then back to it
+  if (emp.task !== "returns" || emp.paused) return;
+  emp.paused = true; emp.c.setMood("happy"); empGo("toPost", EMP_POST);
+}
 function empBackToRegister(msg) {
+  emp.paused = false;
   const c = emp.c;
   returnBin.push(...emp.carry); emp.carry = []; refreshReturnsBin();   // anything still in hand goes back in the tote
   emp.rewinding = null;                            // (a tape in the rewinder stays there for whoever's next)
@@ -3817,6 +3882,7 @@ function empTick(dt) {
         } else emp.ringT = 0;
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 2.5) { emp.alarmT = 0; silenceGateAlarm(); } } else emp.alarmT = 0;
         if (emp.t <= 0 && c.mood === "happy" && !(cust.c && ["wait", "impatient", "angry"].includes(cust.state))) { c.setPose("idle"); c.setMood("neutral"); }
+        if (emp.paused && emp.t <= 0 && !(cust.c && ["counter", "wait", "impatient", "angry"].includes(cust.state))) { emp.paused = false; empNext(); break; }   // served: back to the returns
         if (empCanWatch()) {                       // closed up and you're on the couch: take the next cushion over
           const side = seatAt.x > 0 ? -1 : seatAt.x < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);   // the end cushion farthest from you
           emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
@@ -3841,7 +3907,7 @@ function empTick(dt) {
       case "toTote":
         if (!returnBin.length) { empBackToRegister("Dana: returns are all put away"); break; }
         c.setPose("reach"); emp.state = "grab"; emp.t = 0.9; break;
-      case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-3); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
+      case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-EMP_ARMFUL); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
       case "toRewinder": emp.state = "rewind"; break;
       case "rewind": {
         const t = emp.carry.find(x => !isRewound(x));
@@ -3860,7 +3926,7 @@ function empTick(dt) {
         break;
       }
       case "toShelf": c.setPose("reach"); emp.state = "shelve"; emp.t = 0.9; break;
-      case "shelve": if (emp.t <= 0) { const t = emp.carry.shift(); t.desens = false; setOnShelf(t, true); empNext(); } break;   // back in its slot, tag re-armed
+      case "shelve": if (emp.t <= 0) { const t = emp.target; emp.carry.splice(emp.carry.indexOf(t), 1); t.desens = false; setOnShelf(t, true); empNext(); } break;   // back in its slot, tag re-armed
     }
   }
   // the counter pass-through: lift it to get by, drop it again behind her
@@ -4480,7 +4546,9 @@ function armGates(on) {                      // disarmed gates go dark and ignor
 let gateLastZ = player.z;
 
 const posTerm = window.createPOS({
-  catalog, rented: rentedCopies,
+  catalog, rented: rentedCopies, budget: SAVE?.budget,
+  savedRental: c => SAVE?.rentals?.[copyKey(c)],
+  replace(c) { returnBin.push(c); refreshReturnsBin(); toast(`Replacement arrived: ${c.title} · in the returns bin`, true); },
   returnBin: () => returnBin, held: () => held, playing: () => playing,
   alarm: () => gateAlarm.on, silenceAlarm: silenceGateAlarm, resetSave: () => resetSave(),
   gatesArmed: () => gateAlarm.armed, armGates,
@@ -4522,7 +4590,8 @@ function saveState() {
     v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
     lightsOut, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
-    rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
+    rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
+    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
@@ -4545,6 +4614,7 @@ function loadState(S) {
     payLedger.push(...(S.payLedger || []));
     for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
     for (const k of S.desens || []) { const c = copyByKey(k); if (c) c.desens = true; }
+    for (const k of S.lost || []) { const c = copyByKey(k); if (c) { c.lost = true; setOnShelf(c, false); } }
     for (const c of (S.returns || []).map(copyByKey).filter(Boolean)) { setOnShelf(c, false); returnBin.push(c); }
     refreshReturnsBin();
     const rw = S.rewinder && copyByKey(S.rewinder);
@@ -4714,4 +4784,5 @@ window.__t = {
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
+  emp, cust, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
