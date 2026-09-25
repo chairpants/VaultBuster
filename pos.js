@@ -406,6 +406,7 @@ window.createPOS = function createPOS(api) {
       if (open && mode === "app") draw();
     },
     budget: () => budget,
+    rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
     sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     checkIn(copy) {                              // a member dropped this copy back off: close out the rental
