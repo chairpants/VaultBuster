@@ -3784,10 +3784,37 @@ function custSpawn(member = custPickMember()) {
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
   Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
 }
+// ---- getting past you (shared by customers and Dana) ----
+// you're standing on where they're headed: use a spot beside it (sideways to
+// the way they'd face there), whichever side is open
+function spotBesideYou(spot, grid) {
+  if (Math.hypot(player.x - spot.x, player.z - spot.z) > 0.6) return spot;
+  const ry = spot.ry ?? 0, sx = Math.cos(ry), sz = -Math.sin(ry);
+  for (const k of [0.75, -0.75, 1.1, -1.1]) {
+    const q = { ...spot, x: spot.x + sx * k, z: spot.z + sz * k };
+    if (grid.free(q.x, q.z) && Math.hypot(player.x - q.x, player.z - q.z) > 0.6) return q;
+  }
+  return spot;
+}
+// one step of "are you in my way": yields while you're right ahead; detours
+// around you after a moment (and, on a detour, only yields when actually about
+// to bump you); squeezes past if there's truly no way round. w: the walker's
+// state ({ stuck, detour, squeeze }), redo(avoid): re-plan the path
+function yieldTo(w, p, dx, dz, dt, redo) {
+  if (w.squeeze > 0) { w.squeeze -= dt; return false; }            // excuse me...
+  const near = Math.hypot(player.x - p.x, player.z - p.z) < (w.detour ? 0.5 : 0.75);
+  if (!(near && (player.x - p.x) * dx + (player.z - p.z) * dz > 0)) return false;
+  w.stuck = (w.stuck || 0) + dt;
+  if (w.stuck > 0.6 && !w.detour) { w.detour = true; redo(true); w.stuck = 0.01; }   // go around
+  else if (w.stuck > 3.5) { w.squeeze = 1.4; w.stuck = 0; }                         // no way round: slip past
+  return true;
+}
 function custGo(state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
   const p = cust.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
-  cust.path = navPath(navGrid(cust.box, you), p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];
+  const grid = navGrid(cust.box, you); spot = spotBesideYou(spot, grid);
+  cust.path = navPath(grid, p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];
+  if (!avoidPlayer) cust.detour = false;
   cust.stuck = 0;
   cust.state = state; cust.spot = spot;
 }
@@ -3859,9 +3886,8 @@ function custTick(dt) {
   let speed = 0;
   if (cust.path.length) {                         // walking: follow the path, waiting politely if you're in the way
     const [tx, tz] = cust.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
-    const inWay = Math.hypot(player.x - p.x, player.z - p.z) < 0.75 && (player.x - p.x) * dx + (player.z - p.z) * dz > 0;
     if (d < 0.05) cust.path.shift();
-    else if (inWay) { if ((cust.stuck += dt) > 1) custGo(cust.state, cust.spot, true); }   // you're not moving: go around
+    else if (yieldTo(cust, p, dx, dz, dt, av => custGo(cust.state, cust.spot, av))) {}   // you're in the way
     else {
       speed = P.speed * (cust.state === "leave" && cust.tagged ? 1.4 : 1);
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
@@ -3933,7 +3959,8 @@ function custTick(dt) {
   cust.lastZ = p.z;
   cust.face += Math.atan2(Math.sin(cust.ry - cust.face), Math.cos(cust.ry - cust.face)) * Math.min(1, dt * 8);   // turn smoothly, the short way round
   c.group.rotation.y = cust.face;
-  Object.assign(cust.box, { x0: p.x - 0.22, x1: p.x + 0.22, z0: p.z - 0.22, z1: p.z + 0.22 });
+  const cr = cust.squeeze > 0 ? 0 : 0.22;          // slipping past you: no body to bump for a moment
+  Object.assign(cust.box, { x0: p.x - cr, x1: p.x + cr, z0: p.z - cr, z1: p.z + cr });
   c.tick(dt, speed);
 }
 // ---------------- the employee: Dana, on the register ----------------
@@ -3964,7 +3991,9 @@ function empSpawn() {
 function empGo(state, spot, avoidPlayer = false) {
   const p = emp.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
-  emp.path = navPath(navGrid([emp.box, flapCollider], you), p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];   // she can lift the pass-through
+  const grid = navGrid([emp.box, flapCollider], you); spot = spotBesideYou(spot, grid);
+  emp.path = navPath(grid, p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];   // she can lift the pass-through
+  if (!avoidPlayer) emp.detour = false;
   emp.state = state; emp.spot = spot; emp.stuck = 0;
 }
 const shelfSpot = copy => ({ x: copy.pos.x + Math.cos(copy.ry) * 0.8, z: copy.pos.z - Math.sin(copy.ry) * 0.8, ry: Math.atan2(-Math.cos(copy.ry), Math.sin(copy.ry)) });
@@ -4051,9 +4080,8 @@ function empTick(dt) {
   let speed = 0;
   if (emp.path.length) {                          // walking (same manners as the customers)
     const [tx, tz] = emp.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
-    const inWay = Math.hypot(player.x - p.x, player.z - p.z) < 0.75 && (player.x - p.x) * dx + (player.z - p.z) * dz > 0;
     if (d < 0.05) emp.path.shift();
-    else if (inWay) { if ((emp.stuck += dt) > 1) empGo(emp.state, emp.spot, true); }
+    else if (yieldTo(emp, p, dx, dz, dt, av => empGo(emp.state, emp.spot, av))) {}
     else {
       speed = 1.45;
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
@@ -4071,7 +4099,7 @@ function empTick(dt) {
         } else emp.ringT = 0;
         const mine = co?.by === "dana" && cust.c;
         // she shuffles over to the pad for the desensitize step and back after — never leans across for it
-        const wantX = mine && coStep()?.at === "pad" ? -4.2 : EMP_POST.x, gap = wantX - p.x;
+        const wantX = mine && coStep()?.at === "pad" ? -4.2 : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // home = wherever she parked (beside you, if you're on her spot)
         if (Math.abs(gap) > 0.02) { const st = Math.sign(gap) * Math.min(Math.abs(gap), 1.0 * dt); p.x += st; speed = 1.0; }
         if (mine) {                                // chatting while she works: faces them, nods, smiles
           c.talk(true);
@@ -4143,7 +4171,8 @@ function empTick(dt) {
   else if (emp.openedFlap && flapOpen && fd > 1.4 && !(goal && (p.z - fz) * (goal[1] - fz) < 0)) { toggleFlap(); if (!flapOpen) emp.openedFlap = false; }   // through and clear (her post is ~1.6 m off)
   emp.face += Math.atan2(Math.sin(emp.ry - emp.face), Math.cos(emp.ry - emp.face)) * Math.min(1, dt * 8);
   c.group.rotation.y = emp.face;
-  Object.assign(emp.box, { x0: p.x - 0.22, x1: p.x + 0.22, z0: p.z - 0.22, z1: p.z + 0.22 });
+  const er = emp.squeeze > 0 ? 0 : 0.22;
+  Object.assign(emp.box, { x0: p.x - er, x1: p.x + er, z0: p.z - er, z1: p.z + er });
   c.tick(dt, speed);
 }
 function setFrontLock(on) {
@@ -4174,7 +4203,7 @@ const CO_STEPS = [
     tip: () => { const t = cust.tapes.find(t => !t.desens); return `desensitize ${t.title}${cust.tapes.length > 1 ? ` (${cust.tapes.filter(t => t.desens).length + 1} of ${cust.tapes.length})` : ""}`; },
     do() { desensitize(cust.tapes.find(t => !t.desens)); } },
   { id: "cash", at: "customer", need: () => true, tip: () => `take the cash · ${money(co.total)} due`,
-    do() { cust.c.holdProp(null); co.cashIn = co.bill; } },
+    do() { cust.c.holdProp(null); co.cashIn = co.bill; co.hand = "cash"; } },
   { id: "ring", at: "register", need: () => true, tip: () => `ring it up · ${money(co.bill)} in${co.change ? `, ${money(co.change)} change` : ""}`,
     do() {
       for (const t of cust.tapes) { posTerm.checkOut(t, cust.member); rentedCopies.push(t); }   // on their account
@@ -4223,6 +4252,7 @@ function coAct(at) {                              // do the current step if it h
   return true;
 }
 function coHud() {
+  coHandShow();
   const el = $("checkoutTag");
   if (!co) { el.style.display = "none"; return; }
   const s = coStep(), who = co.by === "dana" ? "Dana is ringing up" : "Ringing up";
@@ -4230,6 +4260,36 @@ function coHud() {
   el.innerHTML = `<div class="h">CHECKOUT</div>${who} ${memberName(cust.member)} · ${money(co.total)}` +
     (co.by === "player" && s ? `<div class="next">Next: ${s.tip()}</div>` : "");
 }
+// what you're holding mid-checkout, drawn in your hand like a held tape: their
+// card, the stack of tapes (real covers), the cash, the change
+const coHand = new THREE.Group(); coHand.visible = false;
+let coHandKey = "";
+function coHandShow() {
+  const want = co?.by === "player" ? co.hand || "" : "";
+  const key = want + (want === "tapes" ? cust.tapes.map(t => t.desens ? 1 : 0).join("") : "");
+  if (key === coHandKey) return; coHandKey = key;
+  coHand.clear(); coHand.visible = !!want;
+  if (!coHand.parent) camera.add(coHand);
+  coHand.position.set(0.26, -0.26, -0.5); coHand.rotation.set(0.1, -0.35, 0.05);
+  const card = (m, w, h) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.003), m); o.rotation.x = -0.25; coHand.add(o); };
+  if (want === "card") card(coHandMats.card, 0.086, 0.054);
+  if (want === "cash" || want === "change") card(coHandMats.cash, 0.156, 0.066);
+  if (want === "tapes") cust.tapes.forEach((t, i) => {             // fanned out a little, covers toward you
+    const g = new THREE.Group(); g.position.set(-0.05 + i * 0.045, i * 0.01, -0.03 - i * 0.012); g.rotation.set(-0.15, Math.PI / 2 + 0.35 - i * 0.12, 0.08 * i); coHand.add(g);   // cover toward you, fanned
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(TAPE.w, TAPE.h, TAPE.d), t.sideMat || mat.tapeBody));
+    const art = new THREE.Mesh(new THREE.PlaneGeometry(TAPE.d, TAPE.h), new THREE.MeshBasicMaterial({ color: 0x333333 }));
+    art.rotation.y = -Math.PI / 2; art.position.x = -TAPE.w / 2 - 0.001; g.add(art);
+    loadCoverTexture(t, tex => { art.material.map = tex; art.material.color.set(0xffffff); art.material.needsUpdate = true; });
+    if (t.desens) {                                                // a little green dot: done
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.008, 12), new THREE.MeshBasicMaterial({ color: 0x2bff6a }));
+      dot.rotation.y = -Math.PI / 2; dot.position.set(-TAPE.w / 2 - 0.002, TAPE.h / 2 - 0.02, 0); g.add(dot);
+    }
+  });
+}
+const coHandMats = {
+  card: new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, w, h); g.fillStyle = "#ffd400"; g.fillRect(0, h * 0.62, w, h * 0.14); g.fillStyle = "#fff"; g.font = `bold ${h * 0.16}px Arial`; g.fillText("VAULTBUSTER", w * 0.07, h * 0.3); g.font = `${h * 0.11}px monospace`; g.fillText("MEMBER", w * 0.07, h * 0.5); }, 256, 160) }),
+  cash: new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => { g.fillStyle = "#9cc795"; g.fillRect(0, 0, w, h); g.strokeStyle = "#3d6b3a"; g.lineWidth = 6; g.strokeRect(6, 6, w - 12, h - 12); g.fillStyle = "#3d6b3a"; g.beginPath(); g.ellipse(w / 2, h / 2, h * 0.28, h * 0.34, 0, 0, 7); g.fill(); g.font = `bold ${h * 0.3}px Georgia`; g.fillText("$", w * 0.08, h * 0.42); }, 256, 110) }),
+};
 let posBeepAc = null;
 function posBeep(f) {
   try {
@@ -5050,7 +5110,7 @@ renderer.setAnimationLoop(() => {
   empTick(dt);
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
-    handGroup.visible = !inspecting;        // 3D box only for the carried-at-your-side pose
+    handGroup.visible = !inspecting && !coHand.visible;   // hands full with a sale: your own tape waits        // 3D box only for the carried-at-your-side pose
     handGroup.position.set(0.3, -0.28, -0.55); handGroup.rotation.set(0.05, -0.4, 0.06); handGroup.scale.setScalar(1);
   }
   $("inspect").style.display = inspecting ? "flex" : "none";
