@@ -6,6 +6,9 @@
 // api: {
 //   catalog,            every title (copies hang off t.copies)
 //   rented,             the copies store.js pulled off the shelves as "out on rental"
+//   savedRental(copy),  [member #, out ms] from last visit, if this copy's rental was saved
+//   budget,             store budget from last visit (a fresh store starts with $300)
+//   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
 //   returnBin(), held(), playing(),   live store state, read on demand
 //   alarm(), silenceAlarm(),          security gate alarm: is it going off / shut it up
 //   gatesArmed(), armGates(on),       the gate system itself: armed or switched off entirely
@@ -13,7 +16,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -74,15 +77,18 @@ window.createPOS = function createPOS(api) {
   // every copy store.js pulled off the shelf is checked out to somebody —
   // regulars take the lion's share
   const rentals = api.rented.map(copy => {
-    const cust = rnd() < 0.55 ? pick(heavy) : pick(customers), p = priceOf(copy);
-    const out = new Date(TODAY - int(0, p.nights + 4) * DAY), due = new Date(+out + p.nights * DAY);
+    const saved = api.savedRental?.(copy), p = priceOf(copy);
+    const cust = saved && customers.find(c => c.num === saved[0]) || (rnd() < 0.55 ? pick(heavy) : pick(customers));
+    const out = saved ? new Date(saved[1]) : new Date(TODAY - int(0, p.nights + 4) * DAY), due = new Date(+out + p.nights * DAY);
     const r = { copy, cust, out, due };
     copy.rental = r; cust.rentals.push(r); return r;
   });
   const daysLate = r => Math.max(0, Math.round((TODAY - r.due) / DAY));
   const lateFee = r => daysLate(r) * priceOf(r.copy).late;
   const custFees = c => c.rentals.reduce((a, r) => a + lateFee(r), 0);
-  const copyStatus = c => c === api.held() ? "IN HAND (STAFF)" : api.returnBin().includes(c) ? "IN RETURNS BIN"
+  let budget = api.budget ?? 300;
+  const replaceCost = t => t.newRelease ? 64.95 : 24.95;   // studio pricing: new releases come in at rental-market prices
+  const copyStatus = c => c.lost ? "LOST - STOLEN" : c === api.held() ? "IN HAND (STAFF)" : api.returnBin().includes(c) ? "IN RETURNS BIN"
     : api.playing()?.tape === c ? "IN LOUNGE VCR" : c.rental ? `OUT #${c.rental.cust.num} DUE ${fmtD(c.rental.due)}${daysLate(c.rental) ? ` LATE ${daysLate(c.rental)}D` : ""}`
     : c.offShelf ? "UNACCOUNTED" : "ON SHELF";
   const copyIn = t => copiesOf(t).filter(c => !c.offShelf).length;
@@ -292,6 +298,22 @@ window.createPOS = function createPOS(api) {
       if (v !== "Y") { msg = "TYPE Y TO CHANGE."; return draw(); }
       const arm = !api.gatesArmed(); api.armGates(arm); back(); msg = arm ? "GATES ARMED." : "GATES DISARMED - NO ALARMS WILL SOUND."; draw();
     } })],
+    ["B", "BUDGET - ORDER REPLACEMENT COPIES", () => {
+      const lost = api.catalog.flatMap(copiesOf).filter(c => c.lost);
+      go(listScreen(`LOST / STOLEN COPIES - BUDGET ${money(budget)}`, `      ${L("TITLE", 44)} ${L("CLASS", 12)}    COST`, lost,
+        (c, n) => ` ${R(n, 3)}  ${L(up(c.title), 44)} ${L(priceOf(c).cls, 12)} ${R(money(replaceCost(c)), 7)}`,
+        c => go({ title: "ORDER REPLACEMENT", prompt: "Y TO ORDER, ESC TO CANCEL", lines: () => ["",
+          ` TITLE....: ${up(c.title)}`.slice(0, COLS), ` COST.....: ${money(replaceCost(c))}`, ` BUDGET...: ${money(budget)}`, "",
+          budget >= replaceCost(c) ? " SHIPS WITH TODAY'S DELIVERY - CHECK THE RETURNS BIN." : " *** INSUFFICIENT BUDGET ***"],
+          submit(v) {
+            if (v !== "Y") { msg = "TYPE Y TO ORDER."; return draw(); }
+            if (!c.lost) { back(); return; }
+            if (budget < replaceCost(c)) { msg = "INSUFFICIENT BUDGET."; return draw(); }
+            budget -= replaceCost(c); c.lost = false; api.replace(c);   // ponytail: arrives instantly; add a delivery delay if it should take a day
+            back(); back(); msg = `ORDERED: ${up(c.title)}. BUDGET NOW ${money(budget)}.`; draw();
+          } }),
+        "NO LOST COPIES ON FILE."));
+    }],
     ["0", "LOG OFF", () => logoff()],
     // only listed while the entry gates are going off
     ["A", "*** SECURITY - SILENCE GATE ALARM ***", () => go({ title: "SECURITY GATE CONTROL", prompt: "Y TO SILENCE, ESC TO CANCEL", lines: () => [
@@ -305,7 +327,7 @@ window.createPOS = function createPOS(api) {
     title: "MAIN MENU", prompt: "SELECTION OR COMMAND",
     pick: { cur: 0, count: () => menuItems().length, value: i => menuItems()[i][0], line: i => 1 + i },
     lines: () => ["", ...menuItems().map(([k, label]) => `      ${k}.  ${label}`), "",
-      `      ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS ON FILE.  RETURNS BIN: ${api.returnBin().length}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`],
+      `      ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS ON FILE.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`],
     submit(v) {
       const [cmd, ...rest] = v.split(/\s+/), arg = rest.join(" ");
       const m = menuItems().find(([k]) => k === v);
@@ -378,6 +400,14 @@ window.createPOS = function createPOS(api) {
     // for store.js's walk-in customers: every member is somebody who might come in
     members: customers,
     dueIn: r => Math.round((r.due - TODAY) / DAY),   // days until a rental's due (negative = late)
+    checkOut(copy, cust) {                       // a walk-in rented this copy: on their account, and the money in the budget
+      const p = priceOf(copy), out = new Date(), r = { copy, cust, out, due: new Date(+out + p.nights * DAY) };
+      copy.rental = r; cust.rentals.push(r); rentals.push(r); budget += p.rate;
+      if (open && mode === "app") draw();
+    },
+    budget: () => budget,
+    sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
+    rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     checkIn(copy) {                              // a member dropped this copy back off: close out the rental
       const r = copy.rental; if (!r) return;
       r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); delete copy.rental;   // off their account and out of the reports
