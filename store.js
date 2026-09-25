@@ -427,6 +427,8 @@ const colliders = [];                      // axis-aligned floor boxes the playe
 // the Dracula standee: where it stands (x, z, facing ry), its mesh group once
 // the PNG has loaded, and its collider — one box, refit wherever it's set down
 const cutout = { x: 0, z: 0, ry: 0, g: null, box: { y1: 1.85 }, carried: false };
+// the front doors' deadbolt: locked = the sign reads CLOSED and no new customers come in
+const frontLock = { locked: false, turn: null, signs: [] };
 function cutoutFit(x, z, ry, b) {            // floor box around the board's solid middle + the strut's foot behind it, at any angle
   const c = Math.cos(ry), sn = Math.sin(ry), xs = [], zs = [];
   for (const [lx, lz] of [[-0.4, 0.05], [0.4, 0.05], [-0.4, -0.45], [0.4, -0.45]]) { xs.push(x + lx * c + lz * sn); zs.push(z - lx * sn + lz * c); }
@@ -574,6 +576,17 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       }
     };
     door(-0.9, 1); door(0.9, -1);
+    // deadbolt on the inside of the astragal: a brass plate and a thumb turn
+    // (upright = unlocked, flat = locked), and a flip sign hung in the right leaf's glass
+    const plate = box(0.07, 0.17, 0.014, mat.aluminum, 0, 1.12, DZ + 0.157);
+    const turn = frontLock.turn = box(0.022, 0.075, 0.03, mat.frame, 0, 1.15, DZ + 0.178);
+    for (const m of [plate, turn]) { m.userData.frontLock = true; aimables.push(m); }
+    for (const [text, fg, bg, open] of [["COME IN — WE'RE OPEN", "#fff", "#1c7c3c", true], ["SORRY — WE'RE CLOSED", "#fff", "#b3202a", false]])
+      for (const face of [1, -1]) {                  // both faces: in toward the store, out toward the lot
+        const sg = textPlane(text, 0.5, 0.2, fg, bg, "Arial Black", 70);
+        sg.position.set(0.9, 1.95, DZ + face * 0.025); if (face < 0) sg.rotation.y = Math.PI;
+        sg.visible = open; sg.userData.open = open; scene.add(sg); frontLock.signs.push(sg);
+      }
   }
 
   // back of house: hallway along the back wall, breakroom + restroom off it.
@@ -3232,7 +3245,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   }
 }
 // one seat per couch cushion (cushion centers ±0.6 m in couch.js, × the 1.12 couch scale)
-const SEATS = [-0.672, 0, 0.672].map(x => ({ x, y: 0.98, z: TV.z - 3.45 }));
+const SEATS = [-0.672, 0, 0.672].map(x => ({ x, y: 1.12, z: TV.z - 3.3 }));   // eye point: sitting up, forward off the back cushion
 let seatAt = SEATS[1], aimSeatX = 0;         // seat in use / world x where the couch was aimed at
 let seated = false, stoodAt = null;
 
@@ -3375,7 +3388,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -3446,8 +3459,427 @@ function cutoutPutDown() {
   colliders.push(cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box));
   tvBake = bakeTvVis();
 }
+// ---------------- customers (prototype): one TV-head customer at a time ----------------
+// customers.js builds them; this walks one through a visit: in the door,
+// browse a shelf, pick a tape, wait at the register getting steadily less
+// patient, then leave — rung up (E on them at the counter) or not, in which
+// case the tape they walk out with sets the gates off. Paths come from a grid
+// A* over the colliders, rebuilt per trip, so doors and the moved standee count.
+const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: STORE.x, z1: STORE.z, pad: 0.3 };
+function navGrid(skip, extra = []) {                // extra: temporary obstacles (you, standing in the way)
+  const { cell, x0, z0, pad } = NAV, nx = Math.ceil((NAV.x1 - x0) / cell), nz = Math.ceil((NAV.z1 - z0) / cell);
+  const g = new Uint8Array(nx * nz);
+  const skips = [].concat(skip);                   // one collider or several to leave out (the asker's own, a door they'll open)
+  for (const c of colliders.concat(extra)) {
+    if (skips.includes(c)) continue;
+    const i0 = Math.max(0, Math.ceil((c.x0 - pad - x0) / cell - 0.5)), i1 = Math.min(nx - 1, Math.floor((c.x1 + pad - x0) / cell - 0.5));
+    const k0 = Math.max(0, Math.ceil((c.z0 - pad - z0) / cell - 0.5)), k1 = Math.min(nz - 1, Math.floor((c.z1 + pad - z0) / cell - 0.5));
+    for (let k = k0; k <= k1; k++) g.fill(1, k * nx + i0, k * nx + i1 + 1);
+  }
+  const at = (x, z) => { const i = Math.floor((x - x0) / cell), k = Math.floor((z - z0) / cell); return i < 0 || k < 0 || i >= nx || k >= nz ? -1 : k * nx + i; };
+  const free = (x, z) => { const n = at(x, z); return n >= 0 && !g[n]; };
+  return { nx, nz, g, at, free, xy: n => [x0 + (n % nx + 0.5) * cell, z0 + ((n / nx | 0) + 0.5) * cell] };
+}
+function navPath(grid, ax, az, bx, bz) {         // A* (8-way, binary heap), then string-pulled to straight runs
+  const { nx, g, at, free, xy } = grid, near = n => {   // snap a blocked start/goal to the nearest open cell
+    if (n >= 0 && !g[n]) return n;
+    for (let r = 1; r < 8; r++) for (let dk = -r; dk <= r; dk++) for (let di = -r; di <= r; di++) { const m = n + dk * nx + di; if (m >= 0 && m < g.length && !g[m]) return m; }
+    return -1;
+  };
+  const s = near(at(ax, az)), e = near(at(bx, bz)); if (s < 0 || e < 0) return null;
+  const cost = new Float32Array(g.length).fill(Infinity), from = new Int32Array(g.length).fill(-1), heap = [[0, s]];
+  const h = n => { const dx = Math.abs(n % nx - e % nx), dz = Math.abs((n / nx | 0) - (e / nx | 0)); return Math.max(dx, dz) + 0.414 * Math.min(dx, dz); };
+  const push = it => { heap.push(it); for (let i = heap.length - 1; i && heap[i - 1 >> 1][0] > heap[i][0]; i = i - 1 >> 1) [heap[i], heap[i - 1 >> 1]] = [heap[i - 1 >> 1], heap[i]]; };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; for (let i = 0; ;) { let m = i; for (const c of [2 * i + 1, 2 * i + 2]) if (c < heap.length && heap[c][0] < heap[m][0]) m = c; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  cost[s] = 0;
+  while (heap.length) {
+    const [, n] = pop(); if (n === e) break;
+    const i = n % nx;
+    for (const [di, dk, w] of [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]]) {
+      if (i + di < 0 || i + di >= nx) continue;
+      const m = n + dk * nx + di; if (m < 0 || m >= g.length || g[m]) continue;
+      if (di && dk && (g[n + di] || g[n + dk * nx])) continue;   // no cutting a corner
+      const c = cost[n] + w; if (c < cost[m]) { cost[m] = c; from[m] = n; push([c + h(m), m]); }
+    }
+  }
+  if (from[e] < 0 && e !== s) return null;
+  const cells = []; for (let n = e; n >= 0; n = from[n]) cells.unshift(xy(n));
+  const clear = ([ax, az], [bx, bz]) => { const n = Math.ceil(Math.hypot(bx - ax, bz - az) / 0.1); for (let i = 1; i < n; i++) if (!free(ax + (bx - ax) * i / n, az + (bz - az) * i / n)) return false; return true; };
+  const out = [cells[0]];
+  for (let i = 1; i < cells.length; i++) if (!clear(out[out.length - 1], cells[i])) out.push(cells[i - 1]);
+  out.push([bx, bz]); if (!free(bx, bz)) out[out.length - 1] = cells[cells.length - 1];
+  return out;
+}
+const CUST_DOOR = { x: 0.7, z: 0.9 };
+const CUST_COUNTER = { x: -5.45, z: 4.95, ry: Math.PI };           // across the register from the clerk
+// where customers browse: every shelf face in the store, found from the tapes
+// themselves (each knows its slot and which way its shelf faces). Tapes are
+// grouped into ~1.5 m stretches per facing; each stretch becomes a spot 0.8 m
+// out in the aisle, tagged with the sections it holds. Built on first use
+let custSpots = null;
+function browseSpots() {
+  if (custSpots) return custSpots;
+  const grid = navGrid(cust.box), groups = new Map();   // not counting the customer asking: they're standing in the doorway the flood fill starts from
+  for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
+    if (!c.pos) continue;
+    const nx = Math.cos(c.ry), nz = -Math.sin(c.ry), sx = c.pos.x + nx * 0.8, sz = c.pos.z + nz * 0.8;   // shelves face their local +x
+    if (sx < -2.25 && sz < 4.5) continue;        // behind the counter is staff only
+    const key = `${Math.round(sx / 1.5)},${Math.round(sz / 1.5)},${Math.round(c.ry / (Math.PI / 2))}`;
+    let g = groups.get(key); if (!g) groups.set(key, g = { x: 0, z: 0, nx, nz, n: 0, cats: {} });
+    g.x += sx; g.z += sz; g.n++; g.cats[c.category] = (g.cats[c.category] || 0) + 1;
+  }
+  const reach = new Uint8Array(grid.g.length), q = [grid.at(CUST_DOOR.x, CUST_DOOR.z)];   // flood fill from the door: what can actually be walked to
+  reach[q[0]] = 1;
+  while (q.length) { const n = q.pop(), i = n % grid.nx; for (const m of [i + 1 < grid.nx && n + 1, i > 0 && n - 1, n + grid.nx, n - grid.nx]) if (m !== false && m >= 0 && m < reach.length && !reach[m] && !grid.g[m]) { reach[m] = 1; q.push(m); } }
+  return custSpots = [...groups.values()].filter(g => g.n >= 4)
+    .map(g => ({ x: g.x / g.n, z: g.z / g.n, ry: Math.atan2(-g.nx, -g.nz), n: g.n, cats: g.cats }))   // facing the shelf
+    .filter(g => reach[grid.at(g.x, g.z)] === 1);
+}
+// who's walking in: a seed drives both the look and the personality, so the
+// same seed always rebuilds the same person (outfit, taste, patience)
+const TASTES = [
+  { name: "horror fan", cats: ["Horror", "Horror & Anthology", "MonsterVision"] },
+  { name: "parent", cats: ["Family & Kids", "Kids & Educational", "Animation", "Holiday"] },
+  { name: "couch potato", cats: ["Sitcoms", "Classic Sitcoms", "Drama & Adventure", "Sketch Comedy & Late Night", "Reality TV"] },
+  { name: "action junkie", cats: ["Action & Adventure", "Sci-Fi & Fantasy"] },
+  { name: "date night", cats: ["Comedy", "Drama"] },
+  { name: "anime kid", cats: ["Anime", "Animation", "Sci-Fi & Fantasy"] },
+  { name: "wanderer", cats: [] },                                 // no favorites: grabs whatever catches their eye
+];
+function seeded(seed) { return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function customerFor(seed) {
+  const rnd = seeded(seed), outfit = VaultCustomers.randomOutfit(rnd);
+  const who = { seed, rnd, outfit, persona: {
+    taste: TASTES[Math.floor(rnd() * TASTES.length)],
+    patience: 0.6 + rnd() * 1.2,                  // scales how long they'll wait at the counter
+    speed: 0.85 + rnd() * 0.5,                    // m/s
+    picky: 0.25 + rnd() * 0.5,                    // chance a shelf they like has something for them
+    stops: 1 + Math.floor(rnd() * 3),             // shelves they'll look at before deciding
+    maxTapes: 1 + (rnd() < 0.35) + (rnd() < 0.12),   // most rent one; some make a night of it
+  } };
+  who.persona.stops += who.persona.maxTapes - 1;   // a bigger haul means more shelves to look at
+  return who;
+}
+const cust = { c: null, state: "gone", t: 3, path: [], ry: 0, face: 0, tagged: false, hi: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
+const custLikes = spot => {                       // 0..1: how much of this shelf is their kind of thing
+  const cats = cust.who.persona.taste.cats; if (!cats.length) return 0.3;
+  return cats.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n;
+};
+// who comes in: every walk-in is one of the POS's members, and their member
+// number is their seed, so the same member always looks and acts the same.
+// About half the time it's someone with tapes out, bringing them back — most
+// likely whoever's due today or late
+function custPickMember() {
+  const ms = posTerm.members.filter(m => m !== cust.lastMember);
+  const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
+  const due = ms.filter(m => m.rentals.length && soonest(m) <= 1);
+  if (due.length && Math.random() < 0.5) {
+    const w = due.map(m => soonest(m) <= 0 ? 3 : 1);
+    let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < due.length - 1 && (r -= w[i]) > 0) i++;
+    return due[i];
+  }
+  return ms[Math.floor(Math.random() * ms.length)];
+}
+const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
+function custSpawn(member = custPickMember()) {
+  const who = cust.who = customerFor(Math.imul(member.num, 2654435761) >>> 0);   // member # -> the same person every time
+  cust.member = cust.lastMember = member;
+  cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
+  const c = cust.c = VaultCustomers.build(who.outfit);
+  c.parts.forEach(m => { m.userData.customer = true; aimables.push(m); });
+  glow(c.screen);
+  c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); c.group.rotation.y = cust.ry = cust.face = 0;
+  scene.add(c.group); colliders.push(cust.box);
+  c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
+  Object.assign(cust, { tagged: false, alarmed: false, holding: 0, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
+}
+function custGo(state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
+  const p = cust.c.group.position, r = 0.35;
+  const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
+  cust.path = navPath(navGrid(cust.box, you), p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];
+  cust.stuck = 0;
+  cust.state = state; cust.spot = spot;
+}
+function custReturnsSpot() {                      // in the lane, facing the drop slot
+  const s = returnSlotMesh.position;
+  return { x: s.x + 0.6, z: s.z, ry: -Math.PI / 2 };
+}
+function custNextStop() {                         // a shelf they haven't looked at yet, favoring their kind of thing
+  let spots = browseSpots().filter(s => !cust.seen.has(s));
+  if (cust.stopsLeft === 1 && !cust.holding && cust.who.persona.taste.cats.length) {   // last stop, still empty-handed: one more try at their favorite section
+    const favs = spots.filter(s => custLikes(s) > 0.5); if (favs.length) spots = favs;
+  }
+  const w = spots.map(s => 1 + 8 * custLikes(s)), total = w.reduce((a, b) => a + b, 0);
+  let r = cust.who.rnd() * total, i = 0; while (i < spots.length - 1 && (r -= w[i]) > 0) i++;
+  const spot = spots[i]; if (!spot) return custDone();
+  cust.seen.add(spot); custGo("stop", spot);
+}
+function custDone() {                             // out of shelves to look at: pay for what they've got, or give up
+  if (cust.holding) { cust.c.setMood("happy"); custGo("counter", CUST_COUNTER); }
+  else { cust.c.setMood("meh"); custGo("leave", CUST_DOOR); }
+}
+function custDecide() {                           // done browsing this shelf: take one, put one back, or move on
+  const { rnd, persona } = cust.who, likes = custLikes(cust.spot), last = cust.stopsLeft <= 1;
+  cust.stopsLeft--;
+  const take = ((persona.taste.cats.length ? persona.picky * likes * 1.2 : 0.25) + (last && !cust.holding ? 0.3 : 0.03)) * 0.7 ** cust.holding;   // each extra tape is a harder sell
+  if (cust.holding < persona.maxTapes && rnd() < take) cust.reach = "take";
+  else if (cust.holding && rnd() < 0.2) cust.reach = "swap";      // saw something better: put theirs back, take this
+  else if (cust.holding && rnd() < 0.12) cust.reach = "return";   // second thoughts
+  else cust.reach = null;
+  if (cust.reach) { cust.c.setPose("reach"); cust.c.setMood(cust.reach === "return" ? "meh" : likes > 0.4 ? "love" : "happy"); cust.state = "reach"; cust.t = 1.3; }
+  else { cust.c.setMood(cust.holding ? "happy" : "neutral"); cust.stopsLeft > 0 ? custNextStop() : custDone(); }
+}
+function custGone() {
+  const c = cust.c;
+  scene.remove(c.group); c.dispose();
+  for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
+  colliders.splice(colliders.indexOf(cust.box), 1);
+  cust.c = null; cust.state = "gone"; cust.t = 6 + Math.random() * 6;
+}
+function custInteract() {                        // E on a customer: ring them up at the counter, or just say hi
+  const c = cust.c;
+  if (["wait", "impatient", "angry"].includes(cust.state)) {
+    cust.tagged = false; c.setMood("thanks"); c.setPose("hold"); cust.state = "paid"; cust.t = 1.8;
+  } else if (!["paid", "leave", "out"].includes(cust.state)) { cust.hi = 1.4; c.setMood("happy"); }
+}
+function custTick(dt) {
+  if (!cust.c) { if ((cust.t -= dt) <= 0 && !frontLock.locked) custSpawn(); return; }   // locked: whoever's inside finishes up; nobody new
+  const c = cust.c, p = c.group.position, P = cust.who.persona;
+  let speed = 0;
+  if (cust.path.length) {                         // walking: follow the path, waiting politely if you're in the way
+    const [tx, tz] = cust.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+    const inWay = Math.hypot(player.x - p.x, player.z - p.z) < 0.75 && (player.x - p.x) * dx + (player.z - p.z) * dz > 0;
+    if (d < 0.05) cust.path.shift();
+    else if (inWay) { if ((cust.stuck += dt) > 1) custGo(cust.state, cust.spot, true); }   // you're not moving: go around
+    else {
+      speed = P.speed * (cust.state === "leave" && cust.tagged ? 1.4 : 1);
+      const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
+      cust.ry = Math.atan2(dx, dz);
+    }
+    if (cust.tagged && !cust.alarmed && Math.abs(p.x) < 2 && cust.lastZ >= GATE_Z && p.z < GATE_Z) {   // out through the gates with a tagged tape
+      cust.alarmed = true; startGateAlarm(); c.setMood("alarm");
+    }
+    if (!cust.path.length && cust.spot?.ry !== undefined) cust.ry = cust.spot.ry;
+  } else {                                        // arrived: do this stop's thing
+    cust.t -= dt;
+    switch (cust.state) {
+      case "boot": if (cust.t <= 0) { c.setMood("neutral"); cust.returning.length ? custGo("dropoff", custReturnsSpot()) : custNextStop(); } break;
+      case "dropoff": c.setPose("reach"); cust.state = "dropping"; cust.t = 1.2; break;   // tapes in the slot...
+      case "dropping": if (cust.t <= 0) {                                               // ...and checked back in
+        for (const copy of cust.returning) {
+          posTerm.checkIn(copy);
+          if (Math.random() < 0.4) setWindFrac(copy, 0.15 + Math.random() * 0.85);   // be kind, rewind — not everyone is
+          const k = rentedCopies.indexOf(copy); if (k >= 0) rentedCopies.splice(k, 1);
+          returnBin.push(copy);
+        }
+        refreshReturnsBin(); cust.returning = []; c.holdTape(0); c.setPose("idle"); c.setMood("happy");
+        if (Math.random() < 0.5) custNextStop(); else custGo("leave", CUST_DOOR);   // stay and browse, or just a drop-off
+      } break;
+      case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = 3 + cust.who.rnd() * 4; break;
+      case "browse": if (cust.t <= 0) custDecide(); break;
+      case "reach": if (cust.t <= 0) {
+        cust.holding += cust.reach === "take" ? 1 : cust.reach === "return" ? -1 : 0;   // a swap trades one for one
+        c.holdTape(cust.holding); c.setPose(cust.holding ? "hold" : "idle");
+        cust.stopsLeft > 0 ? custNextStop() : custDone();
+      } break;
+      case "counter": c.setPose("wait"); c.setMood("wait"); cust.state = "wait"; cust.t = 12 * P.patience; break;
+      case "wait": if (cust.t <= 0) { c.setMood("impatient"); cust.state = "impatient"; cust.t = 12 * P.patience; } break;
+      case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
+      case "angry": if (cust.t <= 0) { cust.tagged = true; cust.alarmed = false; c.setPose("hold"); custGo("leave", CUST_DOOR); } break;   // storms out with it
+      case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo("leave", CUST_DOOR); } break;
+      case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;   // screen clicks off at the door...
+      case "out": if (cust.t <= 0) custGone(); return;                               // ...and they're gone
+    }
+  }
+  if (cust.hi > 0 && (cust.hi -= dt) <= 0) c.setMood({ browse: "browse", wait: "wait", impatient: "impatient", angry: "angry" }[cust.state] || (cust.holding ? "happy" : "neutral"));   // the hello wears off
+  cust.lastZ = p.z;
+  cust.face += Math.atan2(Math.sin(cust.ry - cust.face), Math.cos(cust.ry - cust.face)) * Math.min(1, dt * 8);   // turn smoothly, the short way round
+  c.group.rotation.y = cust.face;
+  Object.assign(cust.box, { x0: p.x - 0.22, x1: p.x + 0.22, z0: p.z - 0.22, z1: p.z + 0.22 });
+  c.tick(dt, speed);
+}
+// ---------------- the employee: Dana, on the register ----------------
+// Same TV-head build as the customers, in the store polo. By default she works
+// the register: rings up whoever's waiting and silences the gates. E on her
+// switches her to processing returns — take a few from the tote, rewind any
+// that need it on the counter rewinder, reshelve each in its own slot — and
+// back to the register once the bin's empty (or when you tell her).
+const EMP_POST = { x: -5.45, z: 3.2, ry: 0 };                      // behind the register, facing the customer side
+const EMP_TOTE = { x: -3.05, z: 4 - 0.35 - 1.05, ry: Math.PI / 2 }; // behind the returns slot, at the tote
+const EMP_REWIND = { x: -4.5, z: 3.2, ry: 0 };                      // at the rewinder
+const emp = { c: null, task: "register", state: "", path: [], ry: 0, face: 0, t: 0, ringT: 0, alarmT: 0, carry: [], rewinding: null, openedFlap: false, stuck: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
+function empSpawn() {
+  const outfit = { ...VaultCustomers.randomOutfit(seeded(417)), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
+    pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#8fe8ff" };
+  const c = emp.c = VaultCustomers.build(outfit);
+  c.parts.forEach(m => { m.userData.employee = true; aimables.push(m); });
+  glow(c.screen); scene.add(c.group); colliders.push(emp.box);
+  c.group.position.set(EMP_POST.x, 0, EMP_POST.z); emp.ry = emp.face = EMP_POST.ry;
+  c.setMood("neutral"); emp.state = "post";
+}
+function empGo(state, spot, avoidPlayer = false) {
+  const p = emp.c.group.position, r = 0.35;
+  const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
+  emp.path = navPath(navGrid([emp.box, flapCollider], you), p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];   // she can lift the pass-through
+  emp.state = state; emp.spot = spot; emp.stuck = 0;
+}
+const shelfSpot = copy => ({ x: copy.pos.x + Math.cos(copy.ry) * 0.8, z: copy.pos.z - Math.sin(copy.ry) * 0.8, ry: Math.atan2(-Math.cos(copy.ry), Math.sin(copy.ry)) });
+function empNext() {                              // processing returns: what's next with what she's carrying
+  const c = emp.c;
+  c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
+  if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", EMP_REWIND);
+  if (emp.carry.length) return empGo("toShelf", shelfSpot(emp.carry[0]));
+  empGo("toTote", EMP_TOTE);
+}
+function empToggle() {                            // E on Dana: returns <-> register
+  const c = emp.c;
+  if (emp.state === "watching") { c.setMood("happy"); emp.watch.hold = 1.5; return; }   // just a smile; she's off the clock
+  if (emp.task === "register") {
+    if (!returnBin.length) { toast("Dana: returns bin's empty!", true); c.setMood("happy"); emp.t = 1; return; }
+    emp.task = "returns"; c.setMood("happy"); empGo("toTote", EMP_TOTE);
+  } else empBackToRegister();
+}
+function empBackToRegister(msg) {
+  const c = emp.c;
+  returnBin.push(...emp.carry); emp.carry = []; refreshReturnsBin();   // anything still in hand goes back in the tote
+  emp.rewinding = null;                            // (a tape in the rewinder stays there for whoever's next)
+  c.holdTape(0); c.setPose("idle"); c.setMood(msg ? "happy" : "neutral");
+  emp.task = "register"; empGo("toPost", EMP_POST);
+  if (msg) toast(msg, true);
+}
+// ---- off the clock: with the doors locked and the store empty, Dana joins you
+// on the couch. She reacts to what the TV actually sounds like — its audio is
+// routed through an analyser (the stream is CORS-loaded, so the samples are
+// readable): a sudden jump over the recent level startles her, a long loud
+// stretch has her into it, near-silence puts her to sleep ----
+let tvAudio = null;
+function tvLevel() {                              // RMS of the TV's audio right now, 0..~0.5 (null if unreadable)
+  if (!playing || video.paused) return 0;
+  if (!tvAudio) try {                             // built once, on first need: after this the TV's sound runs through it
+    const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 1024;
+    ac.createMediaElementSource(video).connect(an); an.connect(ac.destination);
+    tvAudio = { ac, an, buf: new Float32Array(1024) };
+  } catch { tvAudio = { fail: true }; }
+  if (tvAudio.fail) return null;
+  if (tvAudio.ac.state === "suspended") tvAudio.ac.resume();
+  tvAudio.an.getFloatTimeDomainData(tvAudio.buf);
+  let sum = 0; for (const v of tvAudio.buf) sum += v * v;
+  return Math.sqrt(sum / tvAudio.buf.length);
+}
+const empCanWatch = () => frontLock.locked && !cust.c && emp.task === "register" && seated;   // what brings her over
+const inLounge = () => Math.hypot(player.x - TV.x, player.z - (TV.z - 2.5)) < 5.5;
+const empKeepWatching = () => frontLock.locked && !cust.c && emp.task === "register" && (seated || inLounge());   // what keeps her there
+function empWatch(dt) {                           // on the couch: pick a face from the sound
+  const c = emp.c, w = emp.watch, lvl = tvLevel();
+  w.cool -= dt;
+  // you look over at her -> she looks back (and after a scare, she checks on you)
+  const hp = c.group.position, cam = camera.position, to = c.screen.getWorldPosition(new THREE.Vector3()).sub(cam).normalize();   // toward her face
+  const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
+  w.eye = fwd.dot(to) > 0.8 ? (w.eye || 0) + dt : 0;
+  const glance = w.eye > 0.35 || (w.hold > 0 && w.hold < 0.9);
+  const rel = Math.atan2(cam.x - hp.x, cam.z - hp.z) - emp.face;
+  c.lookAt(glance ? Math.atan2(Math.sin(rel), Math.cos(rel)) : null);   // wrapped: her body angle can be a full turn (2π) off
+  if (w.eye > 0.35 && w.hold <= 0) { c.setMood("happy"); return; }
+  if (lvl === null) { c.setMood("watch"); return; }   // can't hear it: just watches
+  w.fast += (lvl - w.fast) * Math.min(1, dt / 0.12);
+  w.avg += (lvl - w.avg) * Math.min(1, dt / 4);
+  w.quiet = lvl < 0.004 ? w.quiet + dt : 0;
+  w.loud = w.avg > 0.12 ? w.loud + dt : 0;
+  if (w.cool <= 0 && w.fast > 0.06 && w.fast > w.avg * 2.4) { c.setMood("shock"); w.cool = 3; w.hold = 1.3; }   // BANG
+  if ((w.hold -= dt) > 0) return;
+  c.setMood(!playing ? (w.idle = (w.idle || 0) + dt) > 8 ? "sleep" : "meh"   // nothing on: bored, then out
+    : w.quiet > 6 ? "sleep" : w.loud > 3 ? "happy" : "watch");
+  if (playing) w.idle = 0;
+}
+function empTick(dt) {
+  if (!emp.c) { if (window.VaultCustomers && posTerm) empSpawn(); else return; }
+  const c = emp.c, p = c.group.position;
+  let speed = 0;
+  if (emp.path.length) {                          // walking (same manners as the customers)
+    const [tx, tz] = emp.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+    const inWay = Math.hypot(player.x - p.x, player.z - p.z) < 0.75 && (player.x - p.x) * dx + (player.z - p.z) * dz > 0;
+    if (d < 0.05) emp.path.shift();
+    else if (inWay) { if ((emp.stuck += dt) > 1) empGo(emp.state, emp.spot, true); }
+    else {
+      speed = 1.25;
+      const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
+      emp.ry = Math.atan2(dx, dz);
+    }
+    if (!emp.path.length && emp.spot) emp.ry = emp.spot.ry;
+  } else {
+    emp.t -= dt;
+    switch (emp.state) {
+      case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
+      case "post":                                // ring up whoever's waiting; shut the gates up
+        if (cust.c && ["wait", "impatient", "angry"].includes(cust.state)) {
+          c.setMood("happy");
+          if ((emp.ringT += dt) > 1.5) { emp.ringT = 0; c.setPose("reach"); emp.t = 0.8; custInteract(); }
+        } else emp.ringT = 0;
+        if (gateAlarm.on) { if ((emp.alarmT += dt) > 2.5) { emp.alarmT = 0; silenceGateAlarm(); } } else emp.alarmT = 0;
+        if (emp.t <= 0 && c.mood === "happy" && !(cust.c && ["wait", "impatient", "angry"].includes(cust.state))) { c.setPose("idle"); c.setMood("neutral"); }
+        if (empCanWatch()) {                       // closed up and you're on the couch: take the next cushion over
+          const side = seatAt.x > 0 ? -1 : seatAt.x < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);   // the end cushion farthest from you
+          emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
+          empGo("toCouch", { x: emp.seat.x, z: TV.z - 2.425, ry: 0 });   // the strip between the couch and the coffee table
+        }
+        break;
+      case "toCouch": emp.state = "sitDown"; emp.t = 0.7; emp.from = { x: p.x, z: p.z }; c.setPose("sit"); break;
+      case "sitDown": {                            // back onto the cushion, facing the TV
+        const k = 1 - Math.max(0, emp.t) / 0.7;
+        p.x = emp.from.x + (emp.seat.x - emp.from.x) * k; p.z = emp.from.z + (emp.seat.z - emp.from.z) * k; emp.ry = 0;
+        if (emp.t <= 0) { emp.state = "watching"; emp.watch = { fast: 0, avg: 0, quiet: 0, loud: 0, cool: 2, hold: 0 }; emp.leaveT = 0; }
+        break;
+      }
+      case "watching":
+        empWatch(dt);
+        if (!empKeepWatching()) {                  // you wandered off (she gives it a bit) / the store opened up (back to work now)
+          if ((emp.leaveT += dt) > (frontLock.locked && !cust.c ? 8 : 1.5)) { emp.state = "standUp"; emp.t = 0.6; c.setPose("idle"); c.setMood("neutral"); }
+        }
+        else emp.leaveT = 0;
+        break;
+      case "standUp": if (emp.t <= 0) { p.z = TV.z - 2.425; c.lookAt(null); empGo("toPost", EMP_POST); } break;
+      case "toTote":
+        if (!returnBin.length) { empBackToRegister("Dana: returns are all put away"); break; }
+        c.setPose("reach"); emp.state = "grab"; emp.t = 0.9; break;
+      case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-3); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
+      case "toRewinder": emp.state = "rewind"; break;
+      case "rewind": {
+        const t = emp.carry.find(x => !isRewound(x));
+        if (emp.rewinding && rewinder.tape !== emp.rewinding) {   // someone else took it out: it's theirs now
+          emp.carry.splice(emp.carry.indexOf(emp.rewinding), 1); emp.rewinding = null; empNext(); break;
+        }
+        if (!emp.rewinding) {
+          if (!t) { empNext(); break; }
+          if (rewinder.tape) { c.setMood("impatient"); break; }   // somebody's tape is in there: wait for it
+          rewinderLoad(t); emp.rewinding = t; c.setPose("reach"); c.setMood("wait");
+          c.holdTape(Math.min(3, emp.carry.length - 1));
+        } else if (rewinder.done) {                // out it comes, rewound
+          rewinderSound(false); rewinder.tape = null; rewinder.tapeMesh.visible = false; rewinder.led.material.color.set(0x222222);
+          emp.rewinding = null; c.setMood("neutral"); empNext();
+        } else c.setPose("hold");
+        break;
+      }
+      case "toShelf": c.setPose("reach"); emp.state = "shelve"; emp.t = 0.9; break;
+      case "shelve": if (emp.t <= 0) { const t = emp.carry.shift(); t.desens = false; setOnShelf(t, true); empNext(); } break;   // back in its slot, tag re-armed
+    }
+  }
+  // the counter pass-through: lift it to get by, drop it again behind her
+  const fx = (flapCollider.x0 + flapCollider.x1) / 2, fz = (flapCollider.z0 + flapCollider.z1) / 2, fd = Math.hypot(p.x - fx, p.z - fz);
+  const goal = emp.path[emp.path.length - 1];
+  if (!flapOpen && fd < 1.2 && goal && (p.z - fz) * (goal[1] - fz) < 0) { toggleFlap(); emp.openedFlap = true; }
+  else if (emp.openedFlap && flapOpen && fd > 1.4 && !(goal && (p.z - fz) * (goal[1] - fz) < 0)) { toggleFlap(); if (!flapOpen) emp.openedFlap = false; }   // through and clear (her post is ~1.6 m off)
+  emp.face += Math.atan2(Math.sin(emp.ry - emp.face), Math.cos(emp.ry - emp.face)) * Math.min(1, dt * 8);
+  c.group.rotation.y = emp.face;
+  Object.assign(emp.box, { x0: p.x - 0.22, x1: p.x + 0.22, z0: p.z - 0.22, z1: p.z + 0.22 });
+  c.tick(dt, speed);
+}
+function setFrontLock(on) {
+  frontLock.locked = on;
+  frontLock.turn.rotation.z = on ? Math.PI / 2 : 0;
+  frontLock.signs.forEach(sg => sg.visible = sg.userData.open !== on);
+}
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cutout.carried) {                      // arms full: the standee is the only thing E does
@@ -3499,6 +3931,9 @@ function pickHover() {
     else if (aim?.object.userData.desens && aim.distance < 2.4 && held) aimDesens = true;
     else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || rewinder.tape)) aimRewinder = true;
     else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
+    else if (aim?.object.userData.frontLock && aim.distance < 2.2) aimLock = true;
+    else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = true;
+    else if (aim?.object.userData.customer && aim.distance < 2.6 && cust.c && !cust.path.length) aimCustomer = true;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
@@ -3513,6 +3948,11 @@ function pickHover() {
       : rewinder.done ? `E — take out ${rewinder.tape.title} · rewound`
       : `Rewinding… ${Math.round(100 * rewinder.t / rewinder.dur)}% · E — take it out early`;
     else if (aimBell) tip.innerHTML = "E — ring for service";
+    else if (aimEmp) tip.innerHTML = emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
+      ? (returnBin.length ? `E — ask Dana to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `Dana<div class="cat">On the register · returns bin is empty</div>`)
+      : `E — send Dana back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`;
+    else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
+    else if (aimCustomer) tip.innerHTML = `${["wait", "impatient", "angry"].includes(cust.state) ? "E — ring them up" : "E — say hi"}<div class="cat">${memberName(cust.member)} · #${cust.member.num}</div>`;
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
     else if (aimDesens) tip.innerHTML = held.desens ? `${held.title} · already desensitized` : `E — desensitize ${held.title}`;
     else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
@@ -3919,7 +4359,10 @@ function onE() {
     seated = true; player.yaw = Math.PI; player.pitch = 0;   // facing the TV
     return;
   }
-  if (cutout.carried) { cutoutPutDown(); return; }   // stays in your arms if it won't fit there
+  if (cutout.carried) { cutoutPutDown(); return; }
+  if (aimCustomer) { custInteract(); return; }
+  if (aimEmp) { empToggle(); return; }
+  if (aimLock) { setFrontLock(!frontLock.locked); toast(frontLock.locked ? "Front doors locked — no new customers" : "Front doors unlocked — open for business", true); return; }   // stays in your arms if it won't fit there
   if (aimPOS) { openPOS(); return; }
   if (aimRewinder) { rewinderUse(); return; }
   if (aimBell) { dingBell(); return; }
@@ -4077,7 +4520,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
-    lightsOut, gatesArmed: gateAlarm.armed, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
+    lightsOut, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
     inv: inv.map(item), invSel, invEmpty,
@@ -4093,6 +4536,7 @@ function loadState(S) {
     if (S.player) Object.assign(player, S.player);
     if (S.lightsOut) setLights(true);
     if (S.gatesArmed === false) armGates(false);
+    if (S.frontLocked) setFrontLock(true);
     S.lamps?.forEach((on, i) => lamps[i] && setLamp(lamps[i], on));
     S.doors?.forEach((open, i) => { if (doors[i] && open !== doors[i].open) toggleDoor(doors[i]); });
     if (S.flap && !flapOpen) toggleFlap();
@@ -4240,6 +4684,8 @@ renderer.setAnimationLoop(() => {
   camera.rotation.y = player.yaw; camera.rotation.x = player.pitch;
   invSync();
   cutoutCarryTick();
+  custTick(dt);
+  empTick(dt);
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
     handGroup.visible = !inspecting;        // 3D box only for the carried-at-your-side pose
