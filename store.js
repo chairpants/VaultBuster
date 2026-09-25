@@ -67,7 +67,8 @@ const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 1
 camera.rotation.order = "YXZ";
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
-let setExteriorDay;                        // (isDay) => ... — swaps the exterior's own day/night rig; wired up below, called from setLights
+let setExteriorDay;                        // (isDay) => ... — street lamps and lot lights on/off; wired up below, called from the time of day
+let setSky = () => {};                     // (color) => ... — sky + backdrop
 let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
 const exteriorClouds = [];                 // drifted a little each frame, see the main loop
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -89,7 +90,47 @@ const TVU = {
   uTvZoneP: { value: new Float32Array(27) }, uTvZoneC: { value: new Float32Array(27) },
   uTvVis: { value: null }, uTvVolMin: { value: new THREE.Vector3() }, uTvVolSize: { value: new THREE.Vector3(1, 1, 1) },
   uTvRoom: { value: new THREE.Vector4() },   // room x0, x1, ceiling, screen-plane z (front wall is z 0)
+  // room lighting (see ROOM_FRAG): switchable zones, daylight through the glass, and the outdoors
+  uZone: { value: new THREE.Vector4(1, 1, 1, 1) },   // front, aisles, lounge switches (0..1, flicker-aware), daylight 0..1
+  uBoh: { value: new THREE.Vector4(1, 1, 1, 0) },    // hall, break room, restroom switches
+  uFloorBox: { value: new THREE.Vector4() },         // sales floor: x0, x1, z1 (back wall), ceiling
+  uBohBox: { value: new THREE.Vector4() },           // back of house: x0, x1, hall|rooms z, z1
+  uBohSplit: { value: new THREE.Vector2() },         // break room | restroom x, ceiling
+  uInSky: { value: new THREE.Color() }, uInGround: { value: new THREE.Color() }, uInAmb: { value: new THREE.Color() },
+  uInDirC: { value: new THREE.Color() }, uInDir: { value: new THREE.Vector3() },   // one room's worth of fluorescents
+  uSunSky: { value: new THREE.Color() }, uSunGround: { value: new THREE.Color() }, uSunC: { value: new THREE.Color() }, uSunDir: { value: new THREE.Vector3() },
+  uMoonSky: { value: new THREE.Color() }, uMoonGround: { value: new THREE.Color() }, uMoonC: { value: new THREE.Color() }, uMoonDir: { value: new THREE.Vector3() },
+  uDayC: { value: new THREE.Color() }, uNightC: { value: new THREE.Color() },       // what comes in through the storefront glass by day / by night
 };
+// Room lighting, per fragment, by where it is (world space): no light objects,
+// so it costs the same however many zones there are, and it stops dead at the
+// walls — a switched-off break room is dark even with the store lit next door.
+// The sales floor is three switch zones along z, blended over ~2 m where they
+// meet; daylight falls in through the storefront glass and fades toward the
+// back; outside the building it's sun, moon or somewhere in between
+const ROOM_FRAG = `
+{
+  vec3 rN = inverseTransformDirection(normal, viewMatrix), P = vTvPos;
+  vec3 fl = mix(uInGround, uInSky, 0.5 * rN.y + 0.5) + uInAmb + uInDirC * max(dot(rN, uInDir), 0.0);
+  float day = uZone.w;
+  vec3 rl;
+  if (P.x > uFloorBox.x && P.x < uFloorBox.y && P.z > -0.05 && P.z < uFloorBox.z && P.y < uFloorBox.w) {
+    float w1 = 1.0 - smoothstep(9.0, 11.0, P.z), w3 = smoothstep(18.0, 20.0, P.z), w2 = max(0.0, 1.0 - w1 - w3);
+    float win = exp(-P.z / 9.0);                       // nearer the glass, the more of the outside there is
+    float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);   // faces turned toward the windows / up catch more
+    rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
+       + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
+  } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
+    float lvl = P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
+    rl = (0.03 + 0.97 * lvl) * fl;                    // no windows back here: off is dark
+  } else {
+    vec3 sun = mix(uSunGround, uSunSky, 0.5 * rN.y + 0.5) + uSunC * max(dot(rN, uSunDir), 0.0);
+    vec3 moon = mix(uMoonGround, uMoonSky, 0.5 * rN.y + 0.5) + uMoonC * max(dot(rN, uMoonDir), 0.0);
+    rl = mix(moon, sun, day);
+  }
+  reflectedLight.indirectDiffuse += rl * BRDF_Lambert(diffuseColor.rgb);
+}
+`;
 const TV_FRAG = `
 if (uTvGain > 0.0 && vTvPos.x > uTvRoom.x && vTvPos.x < uTvRoom.y && vTvPos.y < uTvRoom.z && vTvPos.z > 0.0 && vTvPos.z < uTvRoom.w) {
   vec3 tvN = inverseTransformDirection(normal, viewMatrix);
@@ -117,8 +158,10 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
   shader.fragmentShader = shader.fragmentShader
     .replace("#include <common>", `#include <common>
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
-      uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;`)
-    .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + TV_FRAG);
+      uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
+      uniform vec4 uZone, uBoh, uFloorBox, uBohBox; uniform vec2 uBohSplit;
+      uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC;`)
+    .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + ROOM_FRAG + TV_FRAG);
 };
 
 const canvas = renderer.domElement;
@@ -138,7 +181,7 @@ const hiddenMaterials = new Map();
 function glow(obj) { obj.layers.enable(BLOOM_LAYER); return obj; }   // mark a mesh as a real light source
 
 const renderScene = new RenderPass(scene, camera);
-// subtle by default (lights on) — setLights() turns it up a bit for the dark
+// subtle by default (lights on) — applyLighting() turns it up a bit for the dark
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.3, 0.4);
 const bloomComposer = new EffectComposer(renderer);
 bloomComposer.renderToScreen = false;
@@ -155,9 +198,10 @@ const finalComposer = new EffectComposer(renderer);
 finalComposer.addPass(renderScene);
 finalComposer.addPass(mixPass);
 finalComposer.addPass(new OutputPass());
+const clearMaterial = new THREE.MeshBasicMaterial({ visible: false });   // see-through overlays (screen glass) mustn't black out the glow behind them
 function renderWithBloom() {
   scene.traverse(o => {
-    if (o.isMesh && !bloomLayer.test(o.layers)) { hiddenMaterials.set(o, o.material); o.material = darkMaterial; }
+    if (o.isMesh && !bloomLayer.test(o.layers)) { hiddenMaterials.set(o, o.material); o.material = o.userData.clearToBloom ? clearMaterial : darkMaterial; }
   });
   bloomComposer.render();
   hiddenMaterials.forEach((m, o) => o.material = m);
@@ -427,7 +471,15 @@ const mat = {
   lineYellow: new THREE.MeshBasicMaterial({ color: 0xe8c33c }),
   aluminum: new THREE.MeshLambertMaterial({ color: 0xc2c6cb }),
 };
-let panelMats = [];                        // ceiling panel groups — dimmed in lights-out, flicker independently on warm-up
+let panelMats = [];                        // ceiling panel groups, per switch zone — dark when switched off, flicker independently on warm-up
+// the light switch zones: three along the sales floor, then the back of house rooms
+const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom"];
+const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom" };
+const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS" };   // printed on the plates
+function lightZoneAt(x, z) {
+  if (z > STORE.z) return z < BOH.hallZ ? "hall" : x < BOH.splitX ? "breakroom" : "restroom";
+  return z < 10 ? "front" : z < 19 ? "aisles" : "lounge";
+}
 const allLights = [];                      // every light that lights-out kills (base intensity in userData.on)
 const aimables = [];                       // E targets: TV screen, couch, lamps, returns counter, snack stand
 const aimBlockers = [];                    // solid things you can't reach through: walls, the back of a snack rack
@@ -800,10 +852,10 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   // tile each (snapped into its slot). Mostly one glowing white rectangle —
   // the diffuser — with the two tubes behind it only faintly brighter bands.
   // Merged per group, emissive — a handful of independently-lit groups so
-  // warm-up flicker (see setLights) can hit some fixtures and not others,
+  // warm-up flicker (see setZone) can hit some fixtures and not others,
   // like real fluorescents restriking
-  const PANEL_GROUPS = 6;
-  const panelBuckets = Array.from({ length: PANEL_GROUPS }, () => []);
+  const PANEL_GROUPS = 3;                         // flicker groups per switch zone
+  const panelBuckets = new Map();                 // "zone:group" -> geometries
   const diffuserTex = makeTexture((ctx, W, H) => {
     ctx.fillStyle = "#e3e8ef"; ctx.fillRect(0, 0, W, H);
     for (const cy of [H * 0.3, H * 0.7]) {                                          // the two tubes, soft through the diffuser
@@ -816,7 +868,9 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     x = Math.round((x - CEIL_TILE.x / 2) / CEIL_TILE.x) * CEIL_TILE.x + CEIL_TILE.x / 2;   // centered in a tile slot
     z = Math.round((z - CEIL_TILE.z / 2) / CEIL_TILE.z) * CEIL_TILE.z + CEIL_TILE.z / 2;
     const p = new THREE.PlaneGeometry(CEIL_TILE.x - 0.02, CEIL_TILE.z - 0.02); p.rotateX(Math.PI / 2); p.translate(x, y - 0.02, z);
-    panelBuckets[Math.floor(Math.random() * PANEL_GROUPS)].push(p);
+    const key = `${lightZoneAt(x, z)}:${Math.floor(Math.random() * PANEL_GROUPS)}`;
+    if (!panelBuckets.has(key)) panelBuckets.set(key, []);
+    panelBuckets.get(key).push(p);
   };
   // every other tile slot across, every fourth along — a tile or more of
   // plain ceiling on every side, so no two fixtures ever touch
@@ -825,17 +879,22 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     troffer(x, z, STORE.h);
   }
   for (const [x, z] of [[4.5, 29.25], [8.1, 29.25], [4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // back of house: hall x2, breakroom, restroom
-  panelMats = panelBuckets.filter(b => b.length).map(bucket => {
+  panelMats = [...panelBuckets].map(([key, bucket]) => {
     const m = new THREE.MeshBasicMaterial({ color: 0xf8fbff, map: diffuserTex });
+    m.userData.zone = key.split(":")[0];
     scene.add(new THREE.Mesh(mergeGeometries(bucket), m));
     return m;
   });
 
-  // lighting
-  const dir = new THREE.DirectionalLight(0xffffff, 0.55); dir.position.set(3, 10, -6);
+  // lighting: the overhead rig (hemisphere + ambient + a key light) now lives
+  // in the room shader, one copy per switch zone — see ROOM_FRAG / TVU
+  const lin = (hex, k) => new THREE.Color(hex).multiplyScalar(k);
+  TVU.uInSky.value.copy(lin(0xdfe8ff, 1.15)); TVU.uInGround.value.copy(lin(0x223355, 1.15));
+  TVU.uInAmb.value.copy(lin(0xffffff, 0.32)); TVU.uInDirC.value.copy(lin(0xffffff, 0.55)); TVU.uInDir.value.set(3, 10, -6).normalize();
+  TVU.uFloorBox.value.set(XL - 0.05, XR + 0.05, Z, H + 0.05);
+  TVU.uBohBox.value.set(BOH.x0, XR + 0.05, BOH.hallZ, BOH.z1 + 0.05); TVU.uBohSplit.value.set(BOH.splitX, BOH.h);
   const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0.9, 2.4, 3.15);   // under the entry troffer, low enough not to burn a hot spot into the tiles
-  [new THREE.HemisphereLight(0xdfe8ff, 0x223355, 1.15), new THREE.AmbientLight(0xffffff, 0.32),
-   dir, lobby].forEach(l => { l.userData.on = l.intensity; allLights.push(l); scene.add(l); });
+  lobby.userData.on = lobby.intensity; lobby.userData.zone = "front"; allLights.push(lobby); scene.add(lobby);
 }
 
 // ---------------- exterior (glimpsed through the storefront glass) ----------------
@@ -1107,18 +1166,18 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 
   // day/night rig — its own layer, so it's the only thing illuminating the
   // above, and never touches (or is touched by) the interior's fluorescents.
-  // Warm sun by day, cool pale-blue moon by night; setLights() below picks
+  // Warm sun by day, cool pale-blue moon by night; the time of day (L) picks
   // which one's live, in sync with the store's own lights toggle.
-  const sun = new THREE.DirectionalLight(0xfff3d9, 0.95); sun.position.set(12, 30, -8);
-  const sunFill = new THREE.HemisphereLight(0xaed4f5, 0x4c6a3c, 0.75);
-  const moon = new THREE.DirectionalLight(0xaec2e8, 0.5); moon.position.set(-14, 26, -10);
-  const moonFill = new THREE.HemisphereLight(0x2c3d68, 0x05070f, 0.55);
-  [sun, sunFill, moon, moonFill].forEach(l => { l.layers.set(EXTERIOR_LAYER); scene.add(l); });
+  // (three.js doesn't limit lights by layer, so real sun/moon lights used to
+  // light the inside of the store too; the room shader does them instead,
+  // outside the building only — the interior gets daylight through the glass)
+  const lin = (hex, k) => new THREE.Color(hex).multiplyScalar(k);
+  TVU.uSunSky.value.copy(lin(0xaed4f5, 0.75)); TVU.uSunGround.value.copy(lin(0x4c6a3c, 0.75)); TVU.uSunC.value.copy(lin(0xfff3d9, 0.95)); TVU.uSunDir.value.set(12, 30, -8).normalize();
+  TVU.uMoonSky.value.copy(lin(0x2c3d68, 0.55)); TVU.uMoonGround.value.copy(lin(0x05070f, 0.55)); TVU.uMoonC.value.copy(lin(0xaec2e8, 0.5)); TVU.uMoonDir.value.set(-14, 26, -10).normalize();
+  setSky = c => { scene.background.copy(c); backdrop.material.color.copy(c); };
+  let wasDay = null;
   setExteriorDay = isDay => {
-    sun.intensity = isDay ? 0.95 : 0; sunFill.intensity = isDay ? 0.75 : 0;
-    moon.intensity = isDay ? 0 : 0.5; moonFill.intensity = isDay ? 0 : 0.55;
-    const sky = isDay ? DAY_SKY : MOON_SKY;
-    scene.background.set(sky); backdrop.material.color.set(sky);
+    if (isDay === wasDay) return; wasDay = isDay;
     for (const l of nightLights) l.intensity = isDay ? 0 : l.userData.on;         // park lamp: night only, straight on
     for (const m of nightGlows) m.emissiveIntensity = isDay ? 0 : m.userData.on;
     for (const s of sodium) { s.spot.intensity = 0; s.lens.emissiveIntensity = 0; s.delay = 1.2 + Math.random() * 1.3; }   // lot lights: off, then warm up
@@ -3279,25 +3338,132 @@ function buildFlickerSchedule(duration) {
 }
 function flickerLit(schedule, t) { return schedule.some(([on, off]) => t >= on && t < off); }
 
+// ---- lights: six switch zones (see LIGHT_ZONES), each with its own flicker warm-up ----
+// lightsOut = "the store's dark": every sales-floor zone off and no daylight
+// to speak of — the TV glow, marquee posters, bloom and lamp pools key off it
 let lightsOut = false;
-let warmup = null;                           // { t, duration, schedules } while panels are flickering on
-function setLights(out) {
-  lightsOut = out;
-  if (out) {
-    warmup = null;
-    for (const l of allLights) l.intensity = 0;
-    panelMats.forEach(m => m.color.set(0x0d1016));
+const zoneOn = Object.fromEntries(LIGHT_ZONES.map(z => [z, true]));
+const zoneLvl = Object.fromEntries(LIGHT_ZONES.map(z => [z, 1]));   // what the shader gets: 0..1, flickering while warming up
+const zoneWarm = {};                              // zone -> { t, duration, mats, schedules } while its panels restrike
+function setZone(zone, on) {
+  zoneOn[zone] = on;
+  const mats = panelMats.filter(m => m.userData.zone === zone);
+  if (on) {
+    const duration = 1.1 + Math.random() * 0.6;
+    zoneWarm[zone] = { t: 0, duration, mats, schedules: mats.map(() => buildFlickerSchedule(duration)) };
   } else {
-    const duration = 1.4 + Math.random() * 0.6;
-    warmup = { t: 0, duration, schedules: panelMats.map(() => buildFlickerSchedule(duration)) };
+    delete zoneWarm[zone]; zoneLvl[zone] = 0;
+    mats.forEach(m => m.color.set(0x0d1016));
   }
-  for (const m of posterMats) m.emissiveIntensity = out ? 0.22 : 0;   // marquees and screens glow on their own
-  bloomPass.strength = out ? 0.55 : 0.28;    // barely-there with the lights on; a bit more presence in the dark
+  applyLighting();
+}
+function lightingTick(dt) {                       // fluorescents restriking, zone by zone
+  for (const [zone, w] of Object.entries(zoneWarm)) {
+    w.t += dt;
+    const done = w.t >= w.duration;
+    let lit = 0;
+    w.mats.forEach((m, i) => { const on = done || flickerLit(w.schedules[i], w.t); if (on) lit++; m.color.set(on ? 0xf8fbff : 0x30343d); });
+    zoneLvl[zone] = w.mats.length ? lit / w.mats.length : 1;
+    if (done) delete zoneWarm[zone];
+  }
+  todTick(dt);
+  applyLighting();
+}
+function applyLighting() {
+  const Z = TVU.uZone.value, B = TVU.uBoh.value;
+  Z.set(zoneLvl.front, zoneLvl.aisles, zoneLvl.lounge, tod.level);
+  B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, 0);
+  for (const l of allLights) l.intensity = l.userData.on * (zoneLvl[l.userData.zone] ?? 1);
+  const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;
+  if (dark === lightsOut && applyLighting.done) return;
+  applyLighting.done = true; lightsOut = dark;
+  for (const m of posterMats) m.emissiveIntensity = dark ? 0.22 : 0;   // marquees and screens glow on their own
+  bloomPass.strength = dark ? 0.55 : 0.28;    // barely-there with the lights on; a bit more presence in the dark
   // threshold raised from .2/.4 — screen whites (menus, bright scenes) were blooming
-  // too readily; this only raises the bar for what counts as "glowing", it doesn't
-  // touch the real PointLights doing the room-ambience work above
-  bloomPass.threshold = out ? 0.34 : 0.52;
-  setExteriorDay(!out);                      // store lights on = daytime outside, off = moonlit night
+  // too readily; this only raises the bar for what counts as "glowing"
+  bloomPass.threshold = dark ? 0.34 : 0.52;
+}
+
+// ---- time of day: L cycles it. Daylight (level) eases between phases and
+// sets how much comes in through the storefront; the street lights come on
+// from dusk ----
+const TOD = [
+  { name: "Day", level: 1, sky: 0x4f8fd6 },
+  { name: "Dusk", level: 0.4, sky: 0xc9794f },
+  { name: "Night", level: 0, sky: 0x0e1a38 },
+  { name: "Dawn", level: 0.45, sky: 0x9b8cb4 },
+];
+const tod = { i: 0, level: 1, from: 1, t: 1, sky: new THREE.Color(TOD[0].sky), skyFrom: new THREE.Color(TOD[0].sky) };
+function setTimeOfDay(i, instant = false) {
+  tod.i = (i + TOD.length) % TOD.length;
+  tod.from = tod.level; tod.skyFrom.copy(tod.sky); tod.t = instant ? 1 : 0; tod.done = false;
+  if (instant) todTick(0);
+}
+function todTick(dt) {
+  if (tod.t >= 1 && tod.done) return;
+  tod.t = Math.min(1, tod.t + dt / 2.5); tod.done = tod.t >= 1;    // a 2.5 s fade
+  const ph = TOD[tod.i], k = tod.t * tod.t * (3 - 2 * tod.t);
+  tod.level = tod.from + (ph.level - tod.from) * k;
+  tod.sky.copy(tod.skyFrom).lerp(new THREE.Color(ph.sky), k); setSky(tod.sky);
+  setExteriorDay(tod.level > 0.5);                                   // lamps/lot lights from dusk on
+  TVU.uDayC.value.set(0.95, 0.97, 1.0);                             // daylight through the glass (linear)
+  TVU.uNightC.value.set(0.035, 0.045, 0.08);                        // moonlight + the lot lights through it
+}
+function nextTimeOfDay() { setTimeOfDay(tod.i + 1); toast(`Outside: ${TOD[tod.i].name.toLowerCase()}`, true); }
+
+// the light switches: a plate of toggles on the wall, one per zone. Built in
+// the world section below (lightSwitches), toggled with E
+const switchToggles = [];                         // { mesh, zone } — the rocker flips with its zone
+let switchAc = null;
+function flipSwitch(zone) {
+  setZone(zone, !zoneOn[zone]);
+  try {                                           // a plastic snap
+    const ac = switchAc ||= new AudioContext(), n = ac.sampleRate * 0.03, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (n * 0.12));
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    f.type = "bandpass"; f.frequency.value = zoneOn[zone] ? 2600 : 2100; g.gain.value = 0.35;
+    src.buffer = b; src.connect(f).connect(g).connect(ac.destination); src.start();
+  } catch {}
+}
+
+// the plates: ivory, a toggle per gang with its zone printed under it. A gang's
+// whole face is the aim target (an invisible pad), so you don't have to hit the lever
+{
+  const ivory = new THREE.MeshLambertMaterial({ color: 0xece6d6 }), pad = new THREE.MeshBasicMaterial({ visible: false });
+  const plate = (x, y, z, ry, zones) => {
+    const n = zones.length, GW = 0.07, W = GW * n + 0.03, H = 0.15;
+    const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; scene.add(g);
+    const face = makeTexture((ctx, w, h) => {                     // the plate's face: screw dots, lever slots, labels
+      ctx.fillStyle = "#ece6d6"; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#2b2b2b"; ctx.textAlign = "center";
+      zones.forEach((zn, i) => {
+        const cx = (0.015 + GW * (i + 0.5)) / W * w;
+        ctx.fillStyle = "#b9b09a"; ctx.fillRect(cx - w * 0.012 / W, h * 0.3, w * 0.024 / W, h * 0.3);   // the slot
+        ctx.fillStyle = "#c9c1ad"; for (const sy of [0.13, 0.75]) { ctx.beginPath(); ctx.arc(cx, h * sy, h * 0.03, 0, 7); ctx.fill(); }   // screws
+        const lb = ZONE_LABELS[zn], maxW = w * (GW - 0.008) / W;
+        let fs = Math.round(h * 0.11); ctx.font = `bold ${fs}px Arial`;
+        while (ctx.measureText(lb).width > maxW && fs > 6) ctx.font = `bold ${--fs}px Arial`;   // fit the gang
+        ctx.fillStyle = "#2b2b2b"; ctx.fillText(lb, cx, h * 0.93);
+      });
+    }, 256, Math.round(256 * H / W));
+    const pm = new THREE.Mesh(new THREE.BoxGeometry(W, H, 0.008), [ivory, ivory, ivory, ivory, new THREE.MeshLambertMaterial({ map: face }), ivory]);
+    pm.position.z = 0.004; g.add(pm);
+    zones.forEach((zn, i) => {
+      const cx = -W / 2 + 0.015 + GW * (i + 0.5), cy = H * (0.5 - 0.45);
+      const piv = new THREE.Group(); piv.position.set(cx, cy, 0.009); g.add(piv);
+      const lever = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.03), ivory); lever.position.z = 0.013; piv.add(lever);   // sticks out, tipped up (on) or down (off)
+      piv.rotation.x = zoneOn[zn] ? -0.32 : 0.32;
+      switchToggles.push({ mesh: piv, zone: zn });
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(GW, H, 0.04), pad); hit.position.set(cx, 0, 0.02); g.add(hit);
+      for (const m of [hit, lever]) { m.userData.lightZone = zn; aimables.push(m); }
+    });
+  };
+  // behind the register: the west wall, by the front window — the sales floor's three zones and the back hall
+  plate(WALL_L + 0.1, 1.22, 1.3, Math.PI / 2, ["front", "aisles", "lounge", "hall"]);
+  // just inside each back room, on the wall with the door, latch side (the doors hinge on their east side)
+  const inside = BOH.hallZ + WALL_T / 2;
+  plate(BOH_DOORS.breakroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["breakroom"]);
+  plate(BOH_DOORS.restroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["restroom"]);
 }
 
 // ---------------- player ----------------
@@ -3306,8 +3472,7 @@ let eyeY = 1.65;                            // eased toward standing/crouch heig
 camera.position.set(player.x, 1.65, player.z);
 camera.rotation.y = player.yaw;
 const keys = new Set();
-const HOLD_MS = 450;                       // tap L = overhead lights, hold L = both side lamps
-let lHoldTimer = null, lHeld = false;
+const HOLD_MS = 450;                       // hold E on the standee to lift it
 let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
@@ -3325,21 +3490,13 @@ addEventListener("keydown", e => {
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
   if (e.code === "Period") stepEpisode(1);
-  if (e.code === "KeyL" && !e.repeat) {
-    lHeld = false;
-    lHoldTimer = setTimeout(() => { lHeld = true; toggleBothLamps(); }, HOLD_MS);
-  }
+  if (e.code === "KeyL" && !e.repeat) nextTimeOfDay();   // the store lights are real switches now; L is the sky
   if (e.code === "KeyH") document.body.classList.toggle("nohud");
   if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
 addEventListener("keyup", e => {
   keys.delete(e.code);
   if (e.code === "KeyE") { clearTimeout(eHoldTimer); eHoldTimer = null; }   // let go before it's lifted: nothing happens
-  if (posTerm?.isOpen() || document.pointerLockElement !== canvas) return;   // no light toggles from the pause menu either
-  if (e.code === "KeyL") {
-    clearTimeout(lHoldTimer);
-    if (!lHeld) setLights(!lightsOut);       // released before the hold threshold: a plain tap
-  }
 });
 let seatFov = 70;
 canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoom a held-up cover
@@ -3398,7 +3555,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -3612,7 +3769,7 @@ function custSpawn(member = custPickMember()) {
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   const c = cust.c = VaultCustomers.build(who.outfit);
   c.parts.forEach(m => { m.userData.customer = true; aimables.push(m); });
-  glow(c.screen);
+  c.glows.forEach(glow);
   c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); c.group.rotation.y = cust.ry = cust.face = 0;
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
@@ -3656,7 +3813,12 @@ function custDecide() {                           // done browsing this shelf: t
   else if (cust.holding && rnd() < 0.2) cust.reach = "swap";      // saw something better: put theirs back, take this
   else if (cust.holding && rnd() < 0.12) cust.reach = "return";   // second thoughts
   else cust.reach = null;
-  if (cust.reach) { cust.c.setPose("reach"); cust.c.setMood(cust.reach === "return" ? "meh" : likes > 0.4 ? "love" : "happy"); cust.state = "reach"; cust.t = 1.3; }
+  if (cust.reach) {
+    cust.reachCopy = cust.reach === "return" ? null : custPickCopy();   // decided now, so the hand goes to the copy they'll take
+    const aim = cust.reachCopy || cust.tapes[cust.tapes.length - 1];   // ...or the slot theirs goes back into
+    if (aim?.pos) cust.c.reachTo(aim.pos); else cust.c.setPose("reach");
+    cust.c.setMood(cust.reach === "return" ? "meh" : likes > 0.4 ? "love" : "happy"); cust.state = "reach"; cust.t = 1.3;
+  }
   else { cust.c.setMood(cust.holding ? "happy" : "neutral"); cust.stopsLeft > 0 ? custNextStop() : custDone(); }
 }
 function custPickCopy() {                        // a copy still on this shelf, favoring their kind of thing
@@ -3707,7 +3869,7 @@ function custTick(dt) {
     cust.t -= dt;
     switch (cust.state) {
       case "boot": if (cust.t <= 0) { c.setMood("neutral"); cust.returning.length ? custGo("dropoff", custReturnsSpot()) : custNextStop(); } break;
-      case "dropoff": c.setPose("reach"); cust.state = "dropping"; cust.t = 1.2; break;   // tapes in the slot...
+      case "dropoff": c.reachTo(returnSlotMesh.getWorldPosition(new THREE.Vector3())); cust.state = "dropping"; cust.t = 1.2; break;   // tapes in the slot...
       case "dropping": if (cust.t <= 0) {                                               // ...and checked back in
         for (const copy of cust.returning) {
           posTerm.checkIn(copy);
@@ -3715,24 +3877,29 @@ function custTick(dt) {
           const k = rentedCopies.indexOf(copy); if (k >= 0) rentedCopies.splice(k, 1);
           returnBin.push(copy);
         }
-        refreshReturnsBin(); cust.returning = []; c.holdTape(0); c.setPose("idle"); c.setMood("happy");
+        refreshReturnsBin(); cust.returning = []; c.holdTape(0); c.setPose("idle"); c.reachTo(null); c.setMood("happy");
         if (Math.random() < 0.5) custNextStop(); else custGo("leave", CUST_DOOR);   // stay and browse, or just a drop-off
       } break;
       case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = 3 + cust.who.rnd() * 4; break;
       case "browse": if (cust.t <= 0) custDecide(); break;
       case "snack":                               // reach in (the cooler door swings open for it), take one if any are left
-        c.setPose("reach"); c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
+        { const left = cust.spot.units.filter(u => u.visible && u !== heldSnack); cust.snackUnit = left[Math.floor(Math.random() * left.length)] || null; }
+        if (cust.snackUnit) c.reachTo(cust.snackUnit.getWorldPosition(new THREE.Vector3())); else c.setPose("reach");   // hand to the one they're taking
+        c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
         if (cust.spot.drinks && !coolerOpen) { coolerOpen = true; cust.openedCooler = true; }
         break;
       case "snacking": if (cust.t <= 0) {
-        const left = cust.spot.units.filter(u => u.visible && u !== heldSnack);
-        if (left.length) { const u = left[Math.floor(Math.random() * left.length)]; u.visible = false; cust.snacks.push(u); }
+        const u = cust.snackUnit?.visible && cust.snackUnit !== heldSnack ? cust.snackUnit : null;
+        if (u) { u.visible = false; cust.snacks.push(u); }
+        c.reachTo(null);
         if (cust.openedCooler) { coolerOpen = false; cust.openedCooler = false; }
         c.setPose(cust.holding ? "hold" : "idle"); custDone();
       } break;
       case "reach": if (cust.t <= 0) {
         if (cust.reach !== "take") setOnShelf(cust.tapes.pop(), true);   // put back (a swap trades one for one)
-        if (cust.reach !== "return") { const c = custPickCopy(); if (c) { setOnShelf(c, false); cust.tapes.push(c); } }   // an actual copy off this shelf
+        const got = cust.reachCopy && !cust.reachCopy.offShelf ? cust.reachCopy : cust.reach !== "return" && custPickCopy();   // the one they reached for (unless someone beat them to it)
+        if (cust.reach !== "return" && got) { setOnShelf(got, false); cust.tapes.push(got); }   // an actual copy off this shelf
+        c.reachTo(null);
         cust.holding = cust.tapes.length;
         c.holdTape(cust.holding); c.setPose(cust.holding ? "hold" : "idle");
         cust.stopsLeft > 0 ? custNextStop() : custDone();
@@ -3769,7 +3936,7 @@ function empSpawn() {
     pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#8fe8ff" };
   const c = emp.c = VaultCustomers.build(outfit);
   c.parts.forEach(m => { m.userData.employee = true; aimables.push(m); });
-  glow(c.screen); scene.add(c.group); colliders.push(emp.box);
+  c.glows.forEach(glow); scene.add(c.group); colliders.push(emp.box);
   c.group.position.set(EMP_POST.x, 0, EMP_POST.z); emp.ry = emp.face = EMP_POST.ry;
   c.setMood("neutral"); emp.state = "post";
 }
@@ -3782,6 +3949,7 @@ function empGo(state, spot, avoidPlayer = false) {
 const shelfSpot = copy => ({ x: copy.pos.x + Math.cos(copy.ry) * 0.8, z: copy.pos.z - Math.sin(copy.ry) * 0.8, ry: Math.atan2(-Math.cos(copy.ry), Math.sin(copy.ry)) });
 function empNext() {                              // processing returns: what's next with what she's carrying
   const c = emp.c;
+  c.reachTo(null);
   c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
   if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", EMP_REWIND);
   if (emp.carry.length) {                         // nearest slot next: one loop through the floor, not a trip per tape
@@ -3808,7 +3976,7 @@ function empBackToRegister(msg) {
   const c = emp.c;
   returnBin.push(...emp.carry); emp.carry = []; refreshReturnsBin();   // anything still in hand goes back in the tote
   emp.rewinding = null;                            // (a tape in the rewinder stays there for whoever's next)
-  c.holdTape(0); c.setPose("idle"); c.setMood(msg ? "happy" : "neutral");
+  c.holdTape(0); c.setPose("idle"); c.reachTo(null); c.setMood(msg ? "happy" : "neutral");
   emp.task = "register"; empGo("toPost", EMP_POST);
   if (msg) toast(msg, true);
 }
@@ -3878,9 +4046,10 @@ function empTick(dt) {
       case "post":                                // ring up whoever's waiting; shut the gates up
         if (cust.c && ["wait", "impatient", "angry"].includes(cust.state)) {
           c.setMood("happy");
-          if ((emp.ringT += dt) > 1.5) { emp.ringT = 0; c.setPose("reach"); emp.t = 0.8; custInteract(); }
+          if ((emp.ringT += dt) > 1.5) { emp.ringT = 0; c.reachTo(new THREE.Vector3(EMP_POST.x + 0.1, 1.14, 4.25)); emp.t = 0.8; custInteract(); }   // across the counter to them
         } else emp.ringT = 0;
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 2.5) { emp.alarmT = 0; silenceGateAlarm(); } } else emp.alarmT = 0;
+        if (emp.t <= 0) c.reachTo(null);
         if (emp.t <= 0 && c.mood === "happy" && !(cust.c && ["wait", "impatient", "angry"].includes(cust.state))) { c.setPose("idle"); c.setMood("neutral"); }
         if (emp.paused && emp.t <= 0 && !(cust.c && ["counter", "wait", "impatient", "angry"].includes(cust.state))) { emp.paused = false; empNext(); break; }   // served: back to the returns
         if (empCanWatch()) {                       // closed up and you're on the couch: take the next cushion over
@@ -3906,7 +4075,7 @@ function empTick(dt) {
       case "standUp": if (emp.t <= 0) { p.z = TV.z - 2.425; c.lookAt(null); empGo("toPost", EMP_POST); } break;
       case "toTote":
         if (!returnBin.length) { empBackToRegister("Dana: returns are all put away"); break; }
-        c.setPose("reach"); emp.state = "grab"; emp.t = 0.9; break;
+        c.reachTo(new THREE.Vector3(EMP_TOTE.x + 0.55, 0.8, EMP_TOTE.z)); emp.state = "grab"; emp.t = 0.9; break;   // down into the tote
       case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-EMP_ARMFUL); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
       case "toRewinder": emp.state = "rewind"; break;
       case "rewind": {
@@ -3917,15 +4086,15 @@ function empTick(dt) {
         if (!emp.rewinding) {
           if (!t) { empNext(); break; }
           if (rewinder.tape) { c.setMood("impatient"); break; }   // somebody's tape is in there: wait for it
-          rewinderLoad(t); emp.rewinding = t; c.setPose("reach"); c.setMood("wait");
+          rewinderLoad(t); emp.rewinding = t; c.reachTo(rewinder.tapeMesh.getWorldPosition(new THREE.Vector3())); emp.t = 0.8; c.setMood("wait");
           c.holdTape(Math.min(3, emp.carry.length - 1));
         } else if (rewinder.done) {                // out it comes, rewound
           rewinderSound(false); rewinder.tape = null; rewinder.tapeMesh.visible = false; rewinder.led.material.color.set(0x222222);
           emp.rewinding = null; c.setMood("neutral"); empNext();
-        } else c.setPose("hold");
+        } else if (emp.t <= 0) { c.reachTo(null); c.setPose("hold"); }
         break;
       }
-      case "toShelf": c.setPose("reach"); emp.state = "shelve"; emp.t = 0.9; break;
+      case "toShelf": c.reachTo(emp.target.pos); emp.state = "shelve"; emp.t = 0.9; break;   // into its own slot
       case "shelve": if (emp.t <= 0) { const t = emp.target; emp.carry.splice(emp.carry.indexOf(t), 1); t.desens = false; setOnShelf(t, true); empNext(); } break;   // back in its slot, tag re-armed
     }
   }
@@ -3945,7 +4114,7 @@ function setFrontLock(on) {
   frontLock.signs.forEach(sg => sg.visible = sg.userData.open !== on);
 }
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false;
+  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cutout.carried) {                      // arms full: the standee is the only thing E does
@@ -3998,6 +4167,7 @@ function pickHover() {
     else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || rewinder.tape)) aimRewinder = true;
     else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
     else if (aim?.object.userData.frontLock && aim.distance < 2.2) aimLock = true;
+    else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = true;
     else if (aim?.object.userData.customer && aim.distance < 2.6 && cust.c && !cust.path.length) aimCustomer = true;
     const tip = $("hoverTip");
@@ -4017,6 +4187,7 @@ function pickHover() {
     else if (aimEmp) tip.innerHTML = emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
       ? (returnBin.length ? `E — ask Dana to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `Dana<div class="cat">On the register · returns bin is empty</div>`)
       : `E — send Dana back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`;
+    else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`;
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimCustomer) tip.innerHTML = `${["wait", "impatient", "angry"].includes(cust.state) ? "E — ring them up" : "E — say hi"}<div class="cat">${memberName(cust.member)} · #${cust.member.num}</div>`;
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
@@ -4411,10 +4582,6 @@ function setLamp(l, on) {
   const b = l.userData.bulbMat; b.color.copy(on ? b.userData.onColor : b.userData.offColor);
   l.userData.pool.visible = on;
 }
-function toggleBothLamps() {              // holding L: if either's off, turn both on; otherwise both off
-  const on = lamps.some(l => !l.userData.on);
-  lamps.forEach(l => setLamp(l, on));
-}
 function onE() {
   if (seated) {                             // E always stands you up
     player.x = stoodAt.x; player.z = stoodAt.z; player.yaw = stoodAt.yaw; seated = false; return;
@@ -4427,6 +4594,7 @@ function onE() {
   }
   if (cutout.carried) { cutoutPutDown(); return; }
   if (aimCustomer) { custInteract(); return; }
+  if (aimSwitch) { flipSwitch(aimSwitch); return; }
   if (aimEmp) { empToggle(); return; }
   if (aimLock) { setFrontLock(!frontLock.locked); toast(frontLock.locked ? "Front doors locked — no new customers" : "Front doors unlocked — open for business", true); return; }   // stays in your arms if it won't fit there
   if (aimPOS) { openPOS(); return; }
@@ -4588,7 +4756,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
-    lightsOut, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
+    lights: zoneOn, timeOfDay: tod.i, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
     lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
@@ -4603,7 +4771,9 @@ function loadState(S) {
   if (S?.v !== SAVE_V) return;
   try {
     if (S.player) Object.assign(player, S.player);
-    if (S.lightsOut) setLights(true);
+    if (S.lights) for (const z of LIGHT_ZONES) { if (S.lights[z] === false) setZone(z, false); }
+    else if (S.lightsOut) for (const z of ["front", "aisles", "lounge"]) setZone(z, false);   // an older save: lights out = the sales floor dark...
+    if (S.timeOfDay != null) setTimeOfDay(S.timeOfDay, true); else if (S.lightsOut) setTimeOfDay(2, true);   // ...at night
     if (S.gatesArmed === false) armGates(false);
     if (S.frontLocked) setFrontLock(true);
     S.lamps?.forEach((on, i) => lamps[i] && setLamp(lamps[i], on));
@@ -4691,19 +4861,8 @@ renderer.setAnimationLoop(() => {
     const hit = tvScreenHit();
     tvHover = hit ? tvMenuHit(hit.x, hit.y) : null;
   }   // pauses while a tape's actually in, like a real screensaver would
-  if (warmup) {                           // fluorescents restriking after lights-on
-    warmup.t += dt;
-    const done = warmup.t >= warmup.duration;
-    let litCount = 0;
-    panelMats.forEach((m, i) => {
-      const lit = done || flickerLit(warmup.schedules[i], warmup.t);
-      if (lit) litCount++;
-      m.color.set(lit ? 0xf8fbff : 0x30343d);
-    });
-    const frac = litCount / panelMats.length;
-    for (const l of allLights) l.intensity = l.userData.on * frac;
-    if (done) warmup = null;
-  }
+  lightingTick(dt);
+  for (const t of switchToggles) t.mesh.rotation.x += ((zoneOn[t.zone] ? -0.32 : 0.32) - t.mesh.rotation.x) * Math.min(1, dt * 25);   // rocker snaps up/down
   // the TV(s) read as real light sources reaching the couch/floor/shelves
   // nearby — not just bloom's screen-only glow, which doesn't light anything
   // kept fairly short: this is what lights the table's near/top faces up

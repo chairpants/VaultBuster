@@ -18,6 +18,7 @@
 //     setPose(name),      walk idle reach hold wait sit
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
+//     reachTo(point|null, arm),  put a hand on a world point (eased); null lets go
 //     tick(dt, speed),    animate; speed = m/s along the ground (0 = standing)
 //     dispose(),          frees the face canvas texture (materials are shared: kept)
 //   }
@@ -48,13 +49,45 @@ window.VaultCustomers = (() => {
   }
 
   // ---- shared geometry + a material cache keyed by what it looks like ----
-  let BOX, CYL, SPH;
+  let BOX, CYL, SPH, BALL, SOFT, ROUND, CASE, TORSO, SHADOW, SHEEN, GRILLE;
   const mats = new Map();
+  // a unit box with its edges rounded off (r = corner radius, in unit-box
+  // terms): each vertex is pulled onto a rounded shell around a smaller core.
+  // Built once and shared, then scaled per part, so a limb reads as a soft
+  // pill and a TV case as a molded cabinet — at no per-character cost
+  function roundBox(r, seg = 4, taper = 0) {       // taper: how much narrower (x) the bottom is than the top
+    const g = new THREE.BoxGeometry(1, 1, 1, seg, seg, seg), p = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      c.set(Math.max(-0.5 + r, Math.min(0.5 - r, v.x)), Math.max(-0.5 + r, Math.min(0.5 - r, v.y)), Math.max(-0.5 + r, Math.min(0.5 - r, v.z)));
+      v.sub(c); if (v.lengthSq() > 0) v.setLength(r); v.add(c);
+      if (taper) v.x *= 1 - taper * (0.5 - v.y);
+      p.setXYZ(i, v.x, v.y, v.z);
+    }
+    g.computeVertexNormals(); return g;
+  }
+  const canvasTex = (w, h, draw) => { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
   function geo() {
     if (BOX) return;
     BOX = new THREE.BoxGeometry(1, 1, 1);
-    CYL = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
-    SPH = new THREE.SphereGeometry(0.5, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);   // a dome (cap crown)
+    CYL = new THREE.CylinderGeometry(0.5, 0.5, 1, 14);
+    SPH = new THREE.SphereGeometry(0.5, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2);   // a dome (cap crown)
+    BALL = new THREE.SphereGeometry(0.5, 10, 8);
+    SOFT = roundBox(0.3);                          // limbs, hands: very soft
+    ROUND = roundBox(0.18);                        // shoes, hips
+    CASE = roundBox(0.08, 3);                      // TV cabinets: molded plastic / veneer edges
+    TORSO = roundBox(0.2, 4, 0.22);                // shoulders broader than the waist
+    // a soft contact shadow on the floor under each person (the store has no
+    // real-time shadows; this is what keeps them from floating)
+    SHADOW = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, opacity: 0.55,
+      map: canvasTex(64, 64, (g, w) => { const r = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2); r.addColorStop(0, "rgba(0,0,0,.8)"); r.addColorStop(0.6, "rgba(0,0,0,.35)"); r.addColorStop(1, "rgba(0,0,0,0)"); g.fillStyle = r; g.fillRect(0, 0, w, w); }) });
+    // the CRT's glass: a faint curved reflection laid over the face
+    SHEEN = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      map: canvasTex(128, 96, (g, w, h) => {
+        const l = g.createLinearGradient(0, 0, w * 0.7, h); l.addColorStop(0, "rgba(255,255,255,.12)"); l.addColorStop(0.35, "rgba(255,255,255,.03)"); l.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = l; g.beginPath(); g.ellipse(w * 0.26, h * 0.18, w * 0.3, h * 0.16, -0.35, 0, 7); g.fill();
+      }) });
+    GRILLE = new THREE.MeshLambertMaterial({ map: canvasTex(64, 16, (g, w, h) => { g.fillStyle = "#15161a"; g.fillRect(0, 0, w, h); g.fillStyle = "#050506"; for (let x = 3; x < w; x += 5) g.fillRect(x, 3, 2, h - 6); }) });
   }
   const solid = color => mats.get(color) || mats.set(color, new THREE.MeshLambertMaterial({ color })).get(color);
   function patterned(key, draw) {                 // a 64px canvas pattern, drawn once per distinct look
@@ -205,40 +238,69 @@ window.VaultCustomers = (() => {
     const H = o.height, W = o.build;
     body.scale.set(W, H, 1);                          // taller/shorter, broader/slimmer: one scale, no new parts
 
-    // legs: hip -> thigh -> knee -> shin -> shoe
+    const collarM = o.top === "uniform" ? solid(o.topB) : sleeveM, sole = solid(o.shoes === "#eeeeee" ? "#d9d4c8" : "#f2f0ea");
+    // legs: hip -> thigh -> knee -> shin -> sneaker (upper + a contrasting sole)
     const legs = [-1, 1].map(s => {
       const hip = pivot(body, s * 0.1, 0.9, 0);
-      part(hip, BOX, pants, 0.15, 0.46, 0.17, 0, -0.23, 0);
+      part(hip, SOFT, pants, 0.155, 0.5, 0.175, 0, -0.23, 0);
       const knee = pivot(hip, 0, -0.45, 0);
-      part(knee, BOX, o.pants === "shorts" ? skin : pants, 0.13, 0.42, 0.15, 0, -0.21, 0);
-      part(knee, BOX, shoe, 0.15, 0.08, 0.27, 0, -0.41, 0.05);
+      part(knee, SOFT, o.pants === "shorts" ? skin : pants, 0.135, 0.46, 0.15, 0, -0.2, 0);
+      if (o.pants === "shorts") part(knee, SOFT, pants, 0.15, 0.1, 0.165, 0, -0.02, 0);   // the hem, just past the knee
+      part(knee, ROUND, shoe, 0.14, 0.085, 0.27, 0, -0.395, 0.045);
+      part(knee, ROUND, sole, 0.15, 0.035, 0.285, 0, -0.43, 0.045);
       return { hip, knee };
     });
-    part(body, BOX, pants, 0.36, 0.14, 0.21, 0, 0.93, 0);                         // seat of the pants
-    const torso = part(body, BOX, torsoM, 0.42, 0.56, 0.24, 0, 1.27, 0);
+    part(body, ROUND, pants, 0.35, 0.16, 0.22, 0, 0.93, 0);                        // seat of the pants
+    const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
+    const torso = part(upper, TORSO, torsoM, 0.43, 0.56, 0.245, 0, 0.37, 0);
+    part(upper, ROUND, solid("#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);           // belt
+    part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);         // buckle
     // arms: shoulder -> upper arm -> elbow -> forearm -> hand
     const arms = [-1, 1].map(s => {
-      const sh = pivot(body, s * 0.28, 1.5, 0);
-      part(sh, BOX, sleeveM, 0.12, 0.31, 0.13, 0, -0.14, 0);
+      const sh = pivot(upper, s * 0.28, 0.6, 0);
+      part(sh, SOFT, sleeveM, 0.125, 0.33, 0.135, 0, -0.13, 0);
       const el = pivot(sh, 0, -0.29, 0);
-      part(el, BOX, o.longSleeves ? sleeveM : skin, 0.11, 0.27, 0.12, 0, -0.13, 0);
-      const hand = part(el, BOX, skin, 0.1, 0.1, 0.1, 0, -0.31, 0);
+      part(el, SOFT, o.longSleeves ? sleeveM : skin, 0.105, 0.29, 0.115, 0, -0.12, 0);
+      if (o.longSleeves) part(el, SOFT, collarM, 0.115, 0.04, 0.125, 0, -0.255, 0);   // cuff
+      else part(sh, SOFT, collarM, 0.135, 0.04, 0.145, 0, -0.28, 0);                  // short-sleeve hem band
+      const hand = part(el, SOFT, skin, 0.1, 0.11, 0.08, 0, -0.32, 0.005);
+      part(hand, SOFT, skin, 0.35, 0.5, 0.6, s * -0.55, 0.05, 0.25);                  // thumb, tucked in toward the body
       return { sh, el, hand };
     });
-    part(body, CYL, skin, 0.1, 0.1, 0.1, 0, 1.6, 0);                              // neck
+    part(upper, CYL, skin, 0.1, 0.09, 0.1, 0, 0.69, 0);                              // neck
+    part(upper, CYL, collarM, 0.15, 0.04, 0.15, 0, 0.65, 0);                         // collar
 
     // the TV head, kept at true size (not stretched with the body)
-    const head = pivot(group, 0, 1.63 * H, 0);
+    const HEAD_Z = 0.05;                              // TV sits a touch forward, over the neck rather than hanging back
+    const head = pivot(group, 0, 1.63 * H, HEAD_Z);
     const { w: tw, h: th, d: td } = o.tv, caseM = solid(o.tv.color), dark = solid("#111214");
-    part(head, BOX, caseM, tw, th, td, 0, th / 2, -0.02);
-    part(head, BOX, dark, tw * 0.86, th * 0.8, 0.02, 0, th / 2, td / 2 - 0.01);                        // bezel
-    part(head, BOX, caseM, tw * 0.62, th * 0.62, 0.1, 0, th / 2, -td / 2 - 0.05);                      // the tube's back hump
+    const side = o.tv.knobs ? 0.09 : 0;                                            // a control strip down the right of the screen
+    part(head, CASE, caseM, tw, th, td, 0, th / 2, -0.02);
+    part(head, CASE, dark, tw * 0.84 - side, th * 0.8, 0.03, -side / 2, th / 2, td / 2 - 0.02);         // bezel, inset in the front
+    part(head, CASE, caseM, tw * 0.64, th * 0.64, 0.12, 0, th * 0.52, -td / 2 - 0.06);                 // the tube's back hump
+    part(head, CASE, caseM, tw * 0.34, th * 0.34, 0.06, 0, th * 0.52, -td / 2 - 0.14);                 // and the neck of the tube behind it
+    part(head, ROUND, dark, tw * 0.5, 0.03, td * 0.6, 0, -0.005, -0.03);                                // swivel base it sits on
+    // the screen: a gently bulged CRT face (its own geometry — sizes differ per set)
+    const sw = tw * 0.74 - side, sh = th * 0.66, sg = new THREE.PlaneGeometry(sw, sh, 8, 6), sp = sg.attributes.position;
+    for (let i = 0; i < sp.count; i++) { const x = sp.getX(i) / (sw / 2), y = sp.getY(i) / (sh / 2); sp.setZ(i, 0.018 * (1 - x * x * 0.8) * (1 - y * y * 0.8)); }
+    sg.computeVertexNormals();
     const fc = document.createElement("canvas"); fc.width = FW; fc.height = FH;
     const ftex = new THREE.CanvasTexture(fc); ftex.colorSpace = THREE.SRGBColorSpace;
-    const screen = new THREE.Mesh(new THREE.PlaneGeometry(tw * 0.76, th * 0.68), new THREE.MeshBasicMaterial({ map: ftex }));
-    screen.position.set(0, th / 2, td / 2 + 0.001); head.add(screen); parts.push(screen);
-    if (o.tv.knobs) for (const y of [0.35, 0.6]) part(head, CYL, dark, 0.035, 0.02, 0.035, tw * 0.5 - 0.035, th * y, td / 2 - 0.02).rotation.x = Math.PI / 2;
-    if (o.tv.antenna) for (const s of [-1, 1]) { const a = part(head, CYL, solid("#b8bcc2"), 0.008, 0.34, 0.008, s * 0.07, th + 0.15, -0.04); a.rotation.z = -s * 0.45; }
+    const screen = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ map: ftex }));
+    screen.position.set(-side / 2, th / 2, td / 2 - 0.004); head.add(screen); parts.push(screen);
+    const sheen = new THREE.Mesh(sg, SHEEN); sheen.position.copy(screen.position); sheen.position.z += 0.003; sheen.userData.clearToBloom = true; head.add(sheen);   // glass reflection (the store's bloom pass sees through it)
+    const led = new THREE.Mesh(BALL, new THREE.MeshBasicMaterial({ color: 0xff3b2f })); led.scale.setScalar(0.012);
+    led.position.set(tw / 2 - 0.035, th * 0.12, td / 2 - 0.01); head.add(led);                                     // power light
+    if (o.tv.knobs) {
+      for (const y of [0.62, 0.42]) part(head, CYL, solid("#2b2c30"), 0.04, 0.025, 0.04, tw / 2 - side / 2 - 0.015, th * y, td / 2 - 0.005).rotation.x = Math.PI / 2;
+      part(head, BOX, GRILLE, side * 0.7, th * 0.16, 0.004, tw / 2 - side / 2 - 0.015, th * 0.22, td / 2 - 0.004);  // speaker grille
+    } else part(head, BOX, GRILLE, tw * 0.4, 0.028, 0.004, 0, th * 0.08, td / 2 - 0.004);                          // a speaker slot under the screen
+    if (o.tv.antenna) for (const s of [-1, 1]) {
+      const a = pivot(head, s * 0.05, th, -0.05); a.rotation.z = -s * 0.45;
+      part(a, CYL, solid("#b8bcc2"), 0.008, 0.36, 0.008, 0, 0.18, 0);
+      part(a, BALL, solid("#d7dade"), 0.02, 0.02, 0.02, 0, 0.36, 0);                 // ball tip
+      part(head, ROUND, dark, 0.05, 0.02, 0.05, s * 0.05, th + 0.005, -0.05);       // its base
+    }
     if (o.hat) {                                                                  // a ball cap on a TV — forwards or backwards
       const hm = solid(o.hat.color), cap = pivot(head, 0, th, 0); cap.rotation.y = o.hat.back ? Math.PI : 0;
       part(cap, SPH, hm, tw * 0.62, 0.16, td * 0.8, 0, 0, -0.02);
@@ -246,54 +308,97 @@ window.VaultCustomers = (() => {
     }
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
 
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.7 * W, 0.55), SHADOW); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.006; group.add(shadow);
     const face = { mood: "off", color: o.phosphor, since: 0, blink: false, next: 0, drawnAt: -1 };
+    const UPPER = 0.29, FORE = 0.32;                   // shoulder->elbow, elbow->hand (body-space, before the height/build scale)
+    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1 }, st = { y: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
+    const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
     let t = 0, phase = 0, pose = "idle", look = null;   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
     drawFace(g2, face, 0); ftex.needsUpdate = true;
     const lerp = (obj, k, v, r) => { obj[k] += (v - obj[k]) * r; };
 
     return {
-      group, screen, parts, outfit: o,
+      group, screen, parts, outfit: o, glows: [screen, led],   // glows: what the store should mark to bloom
       get mood() { return face.mood; },
       setMood(m) { if (m !== face.mood) { face.mood = m; face.since = t; face.drawnAt = -1; } },
       setPose(p) { pose = p; },
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
+      // reach a hand to a point in the world (a tape slot, the returns slot, the
+      // rewinder...) — eased in and out. arm: 1 = the tape hand (default), 0 = the other, "auto" = nearer
+      reachTo(point, arm = 1) { if (point) { reach.target.copy(point); reach.on = true; reach.arm = arm; } else reach.on = false; },
       tick(dt, speed = 0) {
         t += dt;
         // walk cycle: stride advances with ground speed, so feet don't skate
         if (speed > 0.01) phase += dt * speed * 6;
         const walking = speed > 0.01, sw = walking ? Math.sin(phase) : 0, r = Math.min(1, dt * 10), sit = pose === "sit";
+        const ease = (k, v, rate = r) => { st[k] += (v - st[k]) * rate; return st[k]; };   // eased pose channels (kept apart from the rig, so reaching can layer on top)
+        reach.w += ((reach.on ? 1 : 0) - reach.w) * Math.min(1, dt * 5);
+        const w = reach.w < 0.002 ? 0 : reach.w;
+        // where the target sits relative to an unbent shoulder decides how much to bend at the waist / crouch / step in
+        let ik = null;
+        if (w) {
+          group.updateMatrixWorld(true);
+          const g = group.worldToLocal(tmp.copy(reach.target));
+          const armI = reach.arm === "auto" ? (g.x > 0 ? 1 : 0) : reach.arm;
+          const d = g.sub(tmp2.set((armI ? 0.28 : -0.28) * W, 1.5 * H, 0));
+          ik = { armI, flat: Math.hypot(d.x, d.z), dy: d.y };
+        }
+        const low = ik ? Math.max(0, -ik.dy - 0.35) : 0, far = ik ? Math.max(0, ik.flat - 0.4) : 0;
+        const lean = ease("lean", Math.min(1.0, far * 1.4 + low * 0.9), Math.min(1, dt * 5)) * w;   // bend at the waist toward it
+        const crouch = ease("crouch", Math.max(0, Math.min(1, (low - 0.35) / 0.5)), Math.min(1, dt * 5)) * w;   // really low: bend the knees too
+        const step = ease("step", Math.max(0, Math.min(0.15, far - 0.35)), Math.min(1, dt * 5)) * w;           // really far: a half step in
         legs.forEach(({ hip, knee }, i) => {
           const s = i ? -sw : sw;
-          if (sit) { lerp(hip.rotation, "x", -Math.PI / 2, r); lerp(knee.rotation, "x", Math.PI / 2, r); return; }   // thighs on the cushion, shins down
-          lerp(hip.rotation, "x", -s * 0.38, r);
-          lerp(knee.rotation, "x", walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0, r);   // knee lifts as the leg swings through
+          const hx = sit ? -Math.PI / 2 : -s * 0.38, kx = sit ? Math.PI / 2 : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
+          hip.rotation.x = ease("h" + i, hx) - crouch * 1.05;
+          knee.rotation.x = ease("k" + i, kx) + crouch * 1.9;
         });
         const seatY = sit ? 0.5 - 0.9 * o.height : 0;            // hips down to cushion height
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
-        const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.035 : Math.sin(t * 1.6) * 0.004);
-        body.position.y += (bodyY - body.position.y) * (Math.abs(bodyY - body.position.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
-        const [L, R] = arms;
-        let lx = walking ? sw * 0.4 : 0, rx = walking ? -sw * 0.4 : 0, le = -0.15, re = -0.15;
+        const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.03 : 0);
+        st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
+        body.position.y = st.y - crouch * 0.4;
+        body.position.z = step;
+        upper.rotation.x = lean;
+        torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
+        body.rotation.y = ease("ry", walking ? sw * 0.07 : 0);                                  // shoulders counter-twist the stride
+        body.rotation.z = ease("rz", walking || sit ? 0 : Math.sin(t * 0.45) * 0.018, r * 0.3);  // idle weight shift, hip to hip
+        body.rotation.x = ease("rx", walking ? Math.min(0.08, speed * 0.05) : 0, r * 0.5);   // lean into the walk
+        let lx = walking ? sw * 0.4 : 0, rx = walking ? -sw * 0.4 : 0;
+        let le = walking ? -0.2 - Math.max(0, -sw) * 0.35 : -0.12, re = walking ? -0.2 - Math.max(0, sw) * 0.35 : -0.12;   // elbows bend on the forward swing
         if (pose === "reach") { rx = -1.45 - Math.sin(t * 3) * 0.05; re = -0.2; }
         if (pose === "hold") { rx = walking ? -0.35 : -0.45; re = -1.0; }
         if (sit) { lx = rx = face.mood === "shock" ? -1.1 : -0.45; le = re = face.mood === "shock" ? -0.9 : -0.8; }   // hands in the lap (up when startled)
         if (pose === "wait") { lx = -0.25; le = -1.2; if (!tapes[0].visible) { rx = -0.25; re = -1.25; } }   // hands up on the counter
-        lerp(L.sh.rotation, "x", lx, r); lerp(R.sh.rotation, "x", rx, r);
-        lerp(L.el.rotation, "x", le, r); lerp(R.el.rotation, "x", re, r);
-        L.sh.rotation.z = 0.06; R.sh.rotation.z = -0.06;
+        const pose2 = [[ease("ax0", lx), ease("ae0", le)], [ease("ax1", rx), ease("ae1", re)]];
+        arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0], 0, i ? -0.06 : 0.06); el.rotation.x = pose2[i][1]; });
+        if (ik) {                                        // two-bone IK: elbow from the law of cosines, shoulder swung to aim the chain
+          const { sh, el } = arms[ik.armI];
+          upper.updateMatrixWorld(true);
+          const d = upper.worldToLocal(tmp.copy(reach.target)).sub(sh.position), D = Math.max(0.12, Math.min(UPPER + FORE - 0.01, d.length()));
+          const inner = Math.acos(Math.max(-1, Math.min(1, (UPPER * UPPER + FORE * FORE - D * D) / (2 * UPPER * FORE))));
+          const e = -(Math.PI - inner);                          // negative = forearm folds forward
+          const hand0 = tmp2.set(0, -UPPER - FORE * Math.cos(e), -FORE * Math.sin(e)).normalize();
+          qIK.setFromUnitVectors(hand0, d.normalize());
+          sh.quaternion.slerp(qIK, w);
+          el.rotation.x += (e - el.rotation.x) * w;
+        }
         // head: browsing scans, impatience tilts, otherwise a slow idle drift
         const yaw = look != null ? look : face.mood === "browse" ? Math.sin(t * 1.3) * 0.25 : Math.sin(t * 0.4) * 0.05;
         lerp(head.rotation, "y", yaw, r * 0.6); lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : 0, r * 0.5);
-        head.position.y = 1.63 * o.height + body.position.y;
+        head.rotation.x = ease("nod", walking ? Math.cos(phase * 2) * 0.025 : face.mood === "watch" ? -0.06 : 0)   // nods with the step; tips up at the screen
+          + lean * 0.85;                                  // plus bowing with the upper body (added after easing, so it never feeds back)
+        upper.updateMatrixWorld(true);                    // the head rides the top of the neck, wherever the waist has put it
+        head.position.copy(group.worldToLocal(upper.localToWorld(tmp.set(0, 0.73, HEAD_Z / H))));
 
         // face: blink now and then, redraw at ~15 fps while animating
         if (t > face.next) { face.blink = !face.blink; face.next = t + (face.blink ? 0.12 : 2 + Math.random() * 3); face.drawnAt = -1; }
         const animated = !["off", "neutral", "happy", "watch"].includes(face.mood) || t - face.since < 0.4;
         if (face.drawnAt < 0 || (animated && t - face.drawnAt > 1 / 15)) { drawFace(g2, face, t); ftex.needsUpdate = true; face.drawnAt = t; }
       },
-      dispose() { ftex.dispose(); screen.geometry.dispose(); screen.material.dispose(); },
+      dispose() { ftex.dispose(); sg.dispose(); screen.material.dispose(); led.material.dispose(); shadow.geometry.dispose(); },
     };
   }
 
