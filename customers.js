@@ -18,7 +18,9 @@
 //     setPose(name),      walk idle reach hold wait sit
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
-//     reachTo(point|null, arm),  put a hand on a world point (eased); null lets go
+//     holdProp(name),     "card" / "cash" in the other hand, or null
+//     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
+//     talk(bool),         conversational head motion
 //     tick(dt, speed),    animate; speed = m/s along the ground (0 = standing)
 //     dispose(),          frees the face canvas texture (materials are shared: kept)
 //   }
@@ -306,12 +308,18 @@ window.VaultCustomers = (() => {
       part(cap, SPH, hm, tw * 0.62, 0.16, td * 0.8, 0, 0, -0.02);
       part(cap, BOX, hm, tw * 0.5, 0.015, 0.16, 0, 0.01, td * 0.4 + 0.06);
     }
+    // the free hand's props at the counter: a membership card, or the cash they pay with
+    const cardM = patterned("memberCard", (g, n) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, n, n); g.fillStyle = "#ffd400"; g.fillRect(0, n * 0.62, n, n * 0.14); g.fillStyle = "#fff"; g.fillRect(n * 0.08, n * 0.12, n * 0.5, n * 0.1); });
+    const cashM = patterned("cash", (g, n) => { g.fillStyle = "#8fbf8a"; g.fillRect(0, 0, n, n); g.strokeStyle = "#3d6b3a"; g.lineWidth = 4; g.strokeRect(4, 4, n - 8, n - 8); g.fillStyle = "#3d6b3a"; g.beginPath(); g.arc(n / 2, n / 2, n * 0.18, 0, 7); g.fill(); });
+    const props = { card: part(arms[0].el, BOX, cardM, 0.006, 0.054, 0.086, 0, -0.37, 0.05), cash: part(arms[0].el, BOX, cashM, 0.004, 0.066, 0.156, 0, -0.37, 0.07) };
+    for (const m of Object.values(props)) m.visible = false;
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
 
     const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.7 * W, 0.55), SHADOW); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.006; group.add(shadow);
     const face = { mood: "off", color: o.phosphor, since: 0, blink: false, next: 0, drawnAt: -1 };
     const UPPER = 0.29, FORE = 0.32;                   // shoulder->elbow, elbow->hand (body-space, before the height/build scale)
-    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1 }, st = { y: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
+    let talking = false;
+    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, st = { y: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
     let t = 0, phase = 0, pose = "idle", look = null;   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
@@ -320,19 +328,29 @@ window.VaultCustomers = (() => {
 
     return {
       group, screen, parts, outfit: o, glows: [screen, led],   // glows: what the store should mark to bloom
+      rig: { legs, arms, head, upper },                         // joints, for tools/tests
       get mood() { return face.mood; },
       setMood(m) { if (m !== face.mood) { face.mood = m; face.since = t; face.drawnAt = -1; } },
       setPose(p) { pose = p; },
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
+      holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | null, in the free (left) hand
       // reach a hand to a point in the world (a tape slot, the returns slot, the
       // rewinder...) — eased in and out. arm: 1 = the tape hand (default), 0 = the other, "auto" = nearer
-      reachTo(point, arm = 1) { if (point) { reach.target.copy(point); reach.on = true; reach.arm = arm; } else reach.on = false; },
+      // opts.lean: false = arm only (counter work: no bowing; out-of-reach just points the arm)
+      reachTo(point, arm = 1, opts = {}) { if (point) { reach.target.copy(point); reach.on = true; reach.arm = arm; reach.lean = opts.lean !== false; } else reach.on = false; },
+      talk(on) { talking = on; },                    // chatting across the counter: small nods and tilts
       tick(dt, speed = 0) {
         t += dt;
         // walk cycle: stride advances with ground speed, so feet don't skate
-        if (speed > 0.01) phase += dt * speed * 6;
+        // the legs lead: step rate follows ground speed, but a faster walker also
+        // lengthens their stride, so cadence climbs slower than speed (feet still plant)
+        const stride = 0.34 + 0.12 * Math.min(1, Math.max(0, speed - 1));   // radians of hip swing
+        if (speed > 0.01) phase += dt * speed * 6 * (0.38 / (stride + 0.04));
         const walking = speed > 0.01, sw = walking ? Math.sin(phase) : 0, r = Math.min(1, dt * 10), sit = pose === "sit";
+        // upper body: the same rhythm, but trailing the legs by ~1/12 of a cycle and
+        // eased, so arms swing through rather than snap, and the head stays level
+        const swU = walking ? Math.sin(phase - 0.5) : 0, soft = Math.min(1, dt * 6);
         const ease = (k, v, rate = r) => { st[k] += (v - st[k]) * rate; return st[k]; };   // eased pose channels (kept apart from the rig, so reaching can layer on top)
         reach.w += ((reach.on ? 1 : 0) - reach.w) * Math.min(1, dt * 5);
         const w = reach.w < 0.002 ? 0 : reach.w;
@@ -345,34 +363,37 @@ window.VaultCustomers = (() => {
           const d = g.sub(tmp2.set((armI ? 0.28 : -0.28) * W, 1.5 * H, 0));
           ik = { armI, flat: Math.hypot(d.x, d.z), dy: d.y };
         }
-        const low = ik ? Math.max(0, -ik.dy - 0.35) : 0, far = ik ? Math.max(0, ik.flat - 0.4) : 0;
+        const bend = ik && reach.lean;                   // may the body help? (shelves yes, counter work no)
+        const low = bend ? Math.max(0, -ik.dy - 0.35) : 0, far = bend ? Math.max(0, ik.flat - 0.4) : 0;
         const lean = ease("lean", Math.min(1.0, far * 1.4 + low * 0.9), Math.min(1, dt * 5)) * w;   // bend at the waist toward it
         const crouch = ease("crouch", Math.max(0, Math.min(1, (low - 0.35) / 0.5)), Math.min(1, dt * 5)) * w;   // really low: bend the knees too
-        const step = ease("step", Math.max(0, Math.min(0.15, far - 0.35)), Math.min(1, dt * 5)) * w;           // really far: a half step in
+        const reachFar = ik ? Math.max(0, ik.flat - 0.4) : 0;   // a half step in is fine even when bowing isn't
+        const step = ease("step", Math.max(0, Math.min(0.2, reachFar - (bend ? 0.35 : 0.2))), Math.min(1, dt * 5)) * w;   // really far: a half step in
         legs.forEach(({ hip, knee }, i) => {
           const s = i ? -sw : sw;
-          const hx = sit ? -Math.PI / 2 : -s * 0.38, kx = sit ? Math.PI / 2 : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
+          const hx = sit ? -Math.PI / 2 : -s * stride, kx = sit ? Math.PI / 2 : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
           hip.rotation.x = ease("h" + i, hx) - crouch * 1.05;
           knee.rotation.x = ease("k" + i, kx) + crouch * 1.9;
         });
         const seatY = sit ? 0.5 - 0.9 * o.height : 0;            // hips down to cushion height
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
-        const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.03 : 0);
+        const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.022 : 0);   // hips rise over each planted foot
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
         body.position.y = st.y - crouch * 0.4;
         body.position.z = step;
         upper.rotation.x = lean;
         torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
-        body.rotation.y = ease("ry", walking ? sw * 0.07 : 0);                                  // shoulders counter-twist the stride
+        body.rotation.y = ease("ry", walking ? swU * 0.06 : 0, soft);                            // shoulders counter-twist the stride, a beat behind
         body.rotation.z = ease("rz", walking || sit ? 0 : Math.sin(t * 0.45) * 0.018, r * 0.3);  // idle weight shift, hip to hip
         body.rotation.x = ease("rx", walking ? Math.min(0.08, speed * 0.05) : 0, r * 0.5);   // lean into the walk
-        let lx = walking ? sw * 0.4 : 0, rx = walking ? -sw * 0.4 : 0;
-        let le = walking ? -0.2 - Math.max(0, -sw) * 0.35 : -0.12, re = walking ? -0.2 - Math.max(0, sw) * 0.35 : -0.12;   // elbows bend on the forward swing
+        let lx = walking ? swU * 0.3 : 0, rx = walking ? -swU * 0.3 : 0;                   // arms: smaller than the legs, trailing them
+        let le = walking ? -0.22 - Math.max(0, -swU) * 0.22 : -0.12, re = walking ? -0.22 - Math.max(0, swU) * 0.22 : -0.12;   // elbows bend on the forward swing
         if (pose === "reach") { rx = -1.45 - Math.sin(t * 3) * 0.05; re = -0.2; }
         if (pose === "hold") { rx = walking ? -0.35 : -0.45; re = -1.0; }
         if (sit) { lx = rx = face.mood === "shock" ? -1.1 : -0.45; le = re = face.mood === "shock" ? -0.9 : -0.8; }   // hands in the lap (up when startled)
         if (pose === "wait") { lx = -0.25; le = -1.2; if (!tapes[0].visible) { rx = -0.25; re = -1.25; } }   // hands up on the counter
-        const pose2 = [[ease("ax0", lx), ease("ae0", le)], [ease("ax1", rx), ease("ae1", re)]];
+        const ar = walking ? soft : r;                    // arms carry some momentum while walking; poses (reach, hold) still settle promptly
+        const pose2 = [[ease("ax0", lx, ar), ease("ae0", le, ar)], [ease("ax1", rx, ar), ease("ae1", re, ar)]];
         arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0], 0, i ? -0.06 : 0.06); el.rotation.x = pose2[i][1]; });
         if (ik) {                                        // two-bone IK: elbow from the law of cosines, shoulder swung to aim the chain
           const { sh, el } = arms[ik.armI];
@@ -387,8 +408,9 @@ window.VaultCustomers = (() => {
         }
         // head: browsing scans, impatience tilts, otherwise a slow idle drift
         const yaw = look != null ? look : face.mood === "browse" ? Math.sin(t * 1.3) * 0.25 : Math.sin(t * 0.4) * 0.05;
-        lerp(head.rotation, "y", yaw, r * 0.6); lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : 0, r * 0.5);
-        head.rotation.x = ease("nod", walking ? Math.cos(phase * 2) * 0.025 : face.mood === "watch" ? -0.06 : 0)   // nods with the step; tips up at the screen
+        lerp(head.rotation, "y", yaw + (talking ? Math.sin(t * 0.9) * 0.06 : 0), r * 0.6);
+        lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : talking ? Math.sin(t * 1.3) * 0.05 : 0, r * 0.5);
+        head.rotation.x = ease("nod", walking ? Math.cos(phase * 2 - 0.8) * 0.008 : face.mood === "watch" ? -0.06 : talking ? Math.max(0, Math.sin(t * 2.4)) * 0.05 : 0, soft)   // talking: little agreeing nods   // eyes-level: only a whisper of nod, lagging the step; tips up at the screen
           + lean * 0.85;                                  // plus bowing with the upper body (added after easing, so it never feeds back)
         upper.updateMatrixWorld(true);                    // the head rides the top of the neck, wherever the waist has put it
         head.position.copy(group.worldToLocal(upper.localToWorld(tmp.set(0, 0.73, HEAD_Z / H))));

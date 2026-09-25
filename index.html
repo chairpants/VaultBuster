@@ -53,6 +53,10 @@
     color: #fff; border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 14px;
     font-size: 13px; font-weight: bold; display: none; max-width: 320px; }
   #holdingTag .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
+  #checkoutTag { position: fixed; z-index: 10; left: 14px; top: 14px; background: var(--bb-blue); color: #fff;
+    border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 14px; font-size: 13px; font-weight: bold; display: none; max-width: 340px; }
+  #checkoutTag .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
+  #checkoutTag .next { margin-top: 4px; font-weight: normal; color: #ffe98a; }
   #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 64px; transform: translateX(-50%);
     color: #fff; background: var(--bb-blue); border: 2px solid var(--bb-yellow); border-radius: 4px;
     padding: 8px 16px; font-size: 13px; font-weight: bold; display: none; }
@@ -94,7 +98,7 @@
 
   /* ---------- H toggles every HUD overlay off ---------- */
   body.nohud #nowPlaying, body.nohud #tvHint,
-  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #invBar, body.nohud #crosshair { display: none !important; }
+  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #checkoutTag, body.nohud #invBar, body.nohud #crosshair { display: none !important; }
 
   /* ---------- now playing: quiet corner caption ---------- */
   #nowPlaying { position: fixed; z-index: 10; right: 16px; bottom: 12px; display: none;
@@ -123,6 +127,7 @@
 <div id="crosshair" hidden></div>
 <div id="hoverTip"></div>
 <div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
+<div id="checkoutTag"></div>
 <div id="invBar"></div>
 <div id="toast"></div>
 <div id="tvHint"></div>
