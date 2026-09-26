@@ -15,13 +15,14 @@
 //     screen,             the face mesh (store.js marks it to glow)
 //     parts,              every mesh, for aiming at
 //     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks off on
-//     setPose(name),      walk idle reach hold wait sit
+//     setPose(name),      walk idle reach hold wait sit crouch
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
 //     holdProp(name),     "card" / "cash" in the other hand, or null
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
 //     talk(bool),         conversational head motion
 //     tick(dt, speed),    animate; speed = m/s along the ground (0 = standing)
+//     walkLean,           true: tip forward into the walk (the player's own body turns it off)
 //     dispose(),          frees the face canvas texture (materials are shared: kept)
 //   }
 // }
@@ -36,6 +37,7 @@ window.VaultCustomers = (() => {
   const SHOES = ["#eeeeee", "#eeeeee", "#1e1e1e", "#b3242c", "#2d4fa3"];
   const CASES = [["wood", "#6b4424"], ["black", "#1c1c1e"], ["beige", "#cfc6a8"], ["silver", "#9aa0a6"], ["red", "#a8262b"], ["white", "#e4e2dc"]];
 
+  const SHOULDER_X = 0.255;                    // shoulder joints off center (body-space): the sleeves just overlap the torso
   const pick = (a, rnd) => a[Math.floor(rnd() * a.length)];
   function randomOutfit(rnd = Math.random) {
     const top = pick(TOPS, rnd), [pants, pantsColor] = pick(PANTS, rnd), [tvKind, tvColor] = pick(CASES, rnd);
@@ -141,12 +143,14 @@ window.VaultCustomers = (() => {
       });
       return [m, m];
     }
-    if (top === "uniform") {                      // store polo: VaultBuster blue, yellow collar band, a name tag
+    if (top === "uniform") {                      // store polo: VaultBuster blue, yellow collar band, a name tag (if it has one)
       const body = patterned(`${key}|${o.nameTag}`, (g, n) => {
         g.fillStyle = a; g.fillRect(0, 0, n, n);
         g.fillStyle = b; g.fillRect(0, 0, n, 7);
-        g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.56, 16, 22, 9);
-        g.fillStyle = "#1a1a1a"; g.font = "bold 7px Arial"; g.textAlign = "center"; g.fillText(o.nameTag || "", n * 0.56 + 11, 23);
+        if (o.nameTag) {                            // no nameTag: a plain polo
+          g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.56, 16, 22, 9);
+          g.fillStyle = "#1a1a1a"; g.font = "bold 7px Arial"; g.textAlign = "center"; g.fillText(o.nameTag, n * 0.56 + 11, 23);
+        }
       });
       return [body, solid(a)];
     }
@@ -257,9 +261,10 @@ window.VaultCustomers = (() => {
     const torso = part(upper, TORSO, torsoM, 0.43, 0.56, 0.245, 0, 0.37, 0);
     part(upper, ROUND, solid("#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);           // belt
     part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);         // buckle
-    // arms: shoulder -> upper arm -> elbow -> forearm -> hand
+    // arms: shoulder -> upper arm -> elbow -> forearm -> hand. Tucked in so the
+    // sleeve overlaps the torso's rounded edge instead of hanging off beside it
     const arms = [-1, 1].map(s => {
-      const sh = pivot(upper, s * 0.28, 0.6, 0);
+      const sh = pivot(upper, s * SHOULDER_X, 0.6, 0);
       part(sh, SOFT, sleeveM, 0.125, 0.33, 0.135, 0, -0.13, 0);
       const el = pivot(sh, 0, -0.29, 0);
       part(el, SOFT, o.longSleeves ? sleeveM : skin, 0.105, 0.29, 0.115, 0, -0.12, 0);
@@ -269,7 +274,7 @@ window.VaultCustomers = (() => {
       part(hand, SOFT, skin, 0.35, 0.5, 0.6, s * -0.55, 0.05, 0.25);                  // thumb, tucked in toward the body
       return { sh, el, hand };
     });
-    part(upper, CYL, skin, 0.1, 0.09, 0.1, 0, 0.69, 0);                              // neck
+    const neck = part(upper, CYL, skin, 0.1, 0.09, 0.1, 0, 0.69, 0);                // neck
     part(upper, CYL, collarM, 0.15, 0.04, 0.15, 0, 0.65, 0);                         // collar
 
     // the TV head, kept at true size (not stretched with the body)
@@ -319,7 +324,7 @@ window.VaultCustomers = (() => {
     const face = { mood: "off", color: o.phosphor, since: 0, blink: false, next: 0, drawnAt: -1 };
     const UPPER = 0.29, FORE = 0.32;                   // shoulder->elbow, elbow->hand (body-space, before the height/build scale)
     let talking = false;
-    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, st = { y: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
+    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
     let t = 0, phase = 0, pose = "idle", look = null;   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
@@ -328,7 +333,8 @@ window.VaultCustomers = (() => {
 
     return {
       group, screen, parts, outfit: o, glows: [screen, led],   // glows: what the store should mark to bloom
-      rig: { legs, arms, head, upper },                         // joints, for tools/tests
+      walkLean: true,                                           // tip forward into the stride (off for the player: the camera doesn't tip with it)
+      rig: { legs, arms, head, upper, neck },                   // joints, for tools/tests (and the player's own body, which hides head + neck)
       get mood() { return face.mood; },
       setMood(m) { if (m !== face.mood) { face.mood = m; face.since = t; face.drawnAt = -1; } },
       setPose(p) { pose = p; },
@@ -352,6 +358,7 @@ window.VaultCustomers = (() => {
         // eased, so arms swing through rather than snap, and the head stays level
         const swU = walking ? Math.sin(phase - 0.5) : 0, soft = Math.min(1, dt * 6);
         const ease = (k, v, rate = r) => { st[k] += (v - st[k]) * rate; return st[k]; };   // eased pose channels (kept apart from the rig, so reaching can layer on top)
+        const squat = ease("squat", pose === "crouch" ? 1 : 0, Math.min(1, dt * 10));   // a deep knees-bent crouch: hips drop ~0.6 toward the heels
         reach.w += ((reach.on ? 1 : 0) - reach.w) * Math.min(1, dt * 5);
         const w = reach.w < 0.002 ? 0 : reach.w;
         // where the target sits relative to an unbent shoulder decides how much to bend at the waist / crouch / step in
@@ -360,7 +367,7 @@ window.VaultCustomers = (() => {
           group.updateMatrixWorld(true);
           const g = group.worldToLocal(tmp.copy(reach.target));
           const armI = reach.arm === "auto" ? (g.x > 0 ? 1 : 0) : reach.arm;
-          const d = g.sub(tmp2.set((armI ? 0.28 : -0.28) * W, 1.5 * H, 0));
+          const d = g.sub(tmp2.set((armI ? SHOULDER_X : -SHOULDER_X) * W, 1.5 * H, 0));
           ik = { armI, flat: Math.hypot(d.x, d.z), dy: d.y };
         }
         const bend = ik && reach.lean;                   // may the body help? (shelves yes, counter work no)
@@ -372,20 +379,20 @@ window.VaultCustomers = (() => {
         legs.forEach(({ hip, knee }, i) => {
           const s = i ? -sw : sw;
           const hx = sit ? -Math.PI / 2 : -s * stride, kx = sit ? Math.PI / 2 : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
-          hip.rotation.x = ease("h" + i, hx) - crouch * 1.05;
-          knee.rotation.x = ease("k" + i, kx) + crouch * 1.9;
+          hip.rotation.x = ease("h" + i, hx) - crouch * 1.05 - squat * 1.6;
+          knee.rotation.x = ease("k" + i, kx) + crouch * 1.9 + squat * 2.4;
         });
         const seatY = sit ? 0.5 - 0.9 * o.height : 0;            // hips down to cushion height
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
         const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.022 : 0);   // hips rise over each planted foot
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
-        body.position.y = st.y - crouch * 0.4;
+        body.position.y = st.y - crouch * 0.4 - squat * 0.6;
         body.position.z = step;
         upper.rotation.x = lean;
         torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
         body.rotation.y = ease("ry", walking ? swU * 0.06 : 0, soft);                            // shoulders counter-twist the stride, a beat behind
         body.rotation.z = ease("rz", walking || sit ? 0 : Math.sin(t * 0.45) * 0.018, r * 0.3);  // idle weight shift, hip to hip
-        body.rotation.x = ease("rx", walking ? Math.min(0.08, speed * 0.05) : 0, r * 0.5);   // lean into the walk
+        body.rotation.x = ease("rx", walking && this.walkLean ? Math.min(0.08, speed * 0.05) : 0, r * 0.5);   // lean into the walk
         let lx = walking ? swU * 0.3 : 0, rx = walking ? -swU * 0.3 : 0;                   // arms: smaller than the legs, trailing them
         let le = walking ? -0.22 - Math.max(0, -swU) * 0.22 : -0.12, re = walking ? -0.22 - Math.max(0, swU) * 0.22 : -0.12;   // elbows bend on the forward swing
         if (pose === "reach") { rx = -1.45 - Math.sin(t * 3) * 0.05; re = -0.2; }

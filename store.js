@@ -3323,7 +3323,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   }
 }
 // one seat per couch cushion (cushion centers ±0.6 m in couch.js, × the 1.12 couch scale)
-const SEATS = [-0.672, 0, 0.672].map(x => ({ x, y: 1.12, z: TV.z - 3.3 }));   // eye point: sitting up, forward off the back cushion
+const SEATS = [-0.672, 0, 0.672].map(x => ({ x, z: TV.z - 3.3 }));   // the three cushions (your body sits there; the camera rides its head)
 let seatAt = SEATS[1], aimSeatX = 0;         // seat in use / world x where the couch was aimed at
 let seated = false, stoodAt = null;
 
@@ -3423,14 +3423,21 @@ function nextTimeOfDay() { setTimeOfDay(tod.i + 1); toast(`Outside: ${TOD[tod.i]
 // the light switches: a plate of toggles on the wall, one per zone. Built in
 // the world section below (lightSwitches), toggled with E
 const switchToggles = [];                         // { mesh, zone } — the rocker flips with its zone
+const switchPlate = {};                           // zone -> every zone on its plate, in order
 let switchAc = null;
-function flipSwitch(zone) {
-  setZone(zone, !zoneOn[zone]);
+function flipSwitch(zone) { setZone(zone, !zoneOn[zone]); switchSnap(zoneOn[zone]); }
+// hold E on a plate: the whole row goes the opposite of its first switch
+function flipPlate(zone) {
+  const zones = switchPlate[zone], on = !zoneOn[zones[0]];
+  for (const z of zones) if (zoneOn[z] !== on) setZone(z, on);
+  switchSnap(on);
+}
+function switchSnap(on) {
   try {                                           // a plastic snap
     const ac = switchAc ||= new AudioContext(), n = ac.sampleRate * 0.03, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
     for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (n * 0.12));
     const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
-    f.type = "bandpass"; f.frequency.value = zoneOn[zone] ? 2600 : 2100; g.gain.value = 0.35;
+    f.type = "bandpass"; f.frequency.value = on ? 2600 : 2100; g.gain.value = 0.35;
     src.buffer = b; src.connect(f).connect(g).connect(ac.destination); src.start();
   } catch {}
 }
@@ -3440,6 +3447,7 @@ function flipSwitch(zone) {
 {
   const ivory = new THREE.MeshLambertMaterial({ color: 0xece6d6 }), pad = new THREE.MeshBasicMaterial({ visible: false });
   const plate = (x, y, z, ry, zones) => {
+    for (const zn of zones) switchPlate[zn] = zones;
     const n = zones.length, GW = 0.07, W = GW * n + 0.03, H = 0.15;
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; scene.add(g);
     const face = makeTexture((ctx, w, h) => {                     // the plate's face: screw dots, lever slots, labels
@@ -3480,9 +3488,35 @@ const player = { x: 0, z: 2.6, yaw: Math.PI, pitch: 0, r: 0.32 };
 let eyeY = 1.65;                            // eased toward standing/crouch height
 camera.position.set(player.x, 1.65, player.z);
 camera.rotation.y = player.yaw;
+// your own body: a customer rig in the store uniform, with the TV head and neck hidden, since the
+// camera is where they'd be. It stands a little behind the eye so looking
+// down shows your chest, belly and feet; on the couch it takes Dana's sitting
+// pose and the camera rides its head
+const me = VaultCustomers.build({ ...VaultCustomers.randomOutfit(seeded(1985)), height: 1, build: 1, hat: null,
+  top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" });   // Dana's uniform, no name tag
+me.rig.head.visible = false; me.rig.neck.visible = false;
+me.walkLean = false;                        // the eye doesn't tip forward, so neither does the chest: the feet stay in view
+scene.add(me.group);
+const meLast = { x: player.x, z: player.z }, meEye = new THREE.Vector3();
+function meTick(dt) {
+  const g = me.group;
+  let speed = 0;
+  if (seated) {                               // on the cushion, a hair inboard like Dana so the elbows clear the arm
+    g.position.set(Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), 0, seatAt.z); g.rotation.y = 0;
+    me.setPose("sit");
+  } else {
+    speed = Math.hypot(player.x - meLast.x, player.z - meLast.z) / Math.max(dt, 1e-4);
+    g.position.set(player.x + Math.sin(player.yaw) * 0.21, 0, player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
+    g.rotation.y = player.yaw + Math.PI;      // the rig faces +z; yaw 0 looks down -z
+    me.setPose(keys.has("KeyC") ? "crouch" : "idle");
+  }
+  meLast.x = player.x; meLast.z = player.z;
+  me.tick(dt, speed);
+}
 const keys = new Set();
 const HOLD_MS = 450;                       // hold E on the standee to lift it
 let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
+let eHoldSwitch = null;                    // E went down on a multi-switch plate: a tap flips this one on release, a hold flips the plate
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
   if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
@@ -3493,6 +3527,10 @@ addEventListener("keydown", e => {
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat) {
     if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
+    else if (aimSwitch && switchPlate[aimSwitch].length > 1 && !seated && !aimCouch && !cutout.carried && !aimCustomer) {
+      eHoldSwitch = aimSwitch;
+      eHoldTimer = setTimeout(() => { eHoldTimer = null; flipPlate(eHoldSwitch); eHoldSwitch = null; }, HOLD_MS);
+    }
     else onE();                              // one press, one action — holding E doesn't machine-gun bites, doors, the flap
   }
   if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
@@ -3505,7 +3543,10 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => {
   keys.delete(e.code);
-  if (e.code === "KeyE") { clearTimeout(eHoldTimer); eHoldTimer = null; }   // let go before it's lifted: nothing happens
+  if (e.code === "KeyE") {
+    clearTimeout(eHoldTimer); eHoldTimer = null;   // let go before it's lifted: nothing happens
+    if (eHoldSwitch) { flipSwitch(eHoldSwitch); eHoldSwitch = null; }   // a tap on the plate: just the one switch
+  }
 });
 let seatFov = 70;
 canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoom a held-up cover
@@ -4373,7 +4414,8 @@ function pickHover() {
     else if (aimEmp) tip.innerHTML = emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
       ? (returnBin.length ? `E — ask Dana to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `Dana<div class="cat">On the register · returns bin is empty</div>`)
       : `E — send Dana back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`;
-    else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`;
+    else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
+      + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimCustomer) tip.innerHTML = `${co ? (co.by === "player" && coWants("customer") ? `E — ${coWants("customer").tip()}` : co.by === "dana" ? "Dana's ringing them up" : `Next: ${coStep().tip()}`)
       : ["wait", "impatient", "angry"].includes(cust.state) ? "E — take their member card" : "E — say hi"}<div class="cat">${memberName(cust.member)} · #${cust.member.num}</div>`;
@@ -5092,9 +5134,10 @@ renderer.setAnimationLoop(() => {
   if (inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
-  if (seated) camera.position.set(seatAt.x, seatAt.y, seatAt.z);
+  meTick(dt);
+  if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
   else {
-    eyeY += ((keys.has("KeyC") ? 0.95 : 1.65) - eyeY) * Math.min(1, dt * 10);
+    eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
     camera.position.set(player.x, eyeY, player.z);
   }
   if (!seated) seatFov = 70;                     // walking resets the couch zoom
@@ -5136,5 +5179,6 @@ window.__t = {
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
+  me, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
   emp, cust, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
