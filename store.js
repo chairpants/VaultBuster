@@ -3501,7 +3501,10 @@ const meLast = { x: player.x, z: player.z }, meEye = new THREE.Vector3();
 function meTick(dt) {
   const g = me.group;
   let speed = 0;
-  if (seated) {                               // on the cushion, a hair inboard like Dana so the elbows clear the arm
+  if (onStool) {
+    g.position.set(stool.x, 0, stool.z); g.rotation.y = stool.angle + Math.PI;
+    me.setPose("sit", STOOL_SIT);
+  } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
     g.position.set(Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), 0, seatAt.z); g.rotation.y = 0;
     me.setPose("sit");
   } else {
@@ -3513,9 +3516,89 @@ function meTick(dt) {
   meLast.x = player.x; meLast.z = player.z;
   me.tick(dt, speed);
 }
+
+// ---- the spinning stool (starts behind the counter; hold E to carry it off
+// like the standee): E sits; seated, each E is a
+// shove that adds spin (up to a hard cap), and bearing friction winds it
+// down — a constant drag plus a little that grows with speed, so a hard spin
+// coasts a few turns and a nudge dies in a couple of seconds. You turn with
+// the seat: the body stays put under you while the store goes round. Any
+// move key gets you up; an empty seat coasts to a stop on its own ----
+const STOOL = { SEAT: 0.72, R: 0.26, CARRY_D: 0.95,          // seat top height, footprint half-width, how far ahead it's carried
+  PUSH: 2.4, MAX: 14,                                           // rad/s per shove, hard cap (~2.2 turns a second)
+  DRAG: 0.9, VISC: 0.25, EMPTY: 2.5 };                          // rad/s² constant, 1/s per rad/s, x friction with nobody on it
+const STOOL_SIT = { hipY: STOOL.SEAT + 0.05, tuck: 0.5 };       // up on the seat, feet pulled back onto the footring
+const stool = { x: -4.5, z: 2.0, angle: 0, vel: 0, g: null, top: null, carried: false, spot: null, by: null, danaCarry: false };   // by: "dana" while she has it
+const stoolFit = (x, z, b) => Object.assign(b, { x0: x - STOOL.R, x1: x + STOOL.R, z0: z - STOOL.R, z1: z + STOOL.R });
+stool.box = stoolFit(stool.x, stool.z, { y1: STOOL.SEAT, shadow: false });
+let onStool = false;
+{
+  const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
+  const black = new THREE.MeshPhongMaterial({ color: 0x18181a, specular: 0x444444, shininess: 30 });
+  const vinyl = new THREE.MeshPhongMaterial({ color: 0xb3161f, specular: 0x552222, shininess: 45 });   // diner-red seat
+  const g = stool.g = new THREE.Group(); g.position.set(stool.x, 0, stool.z); scene.add(g);
+  const add = (geo, m, x, y, z, parent = g) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); o.userData.stool = true; aimables.push(o); return o; };
+  for (let i = 0; i < 5; i++) {                                 // five-star base on casters
+    const a = i / 5 * Math.PI * 2, arm = new THREE.Group(); arm.rotation.y = a; g.add(arm);
+    add(new THREE.BoxGeometry(0.04, 0.03, 0.27), chrome, 0, 0.075, 0.15, arm).rotation.x = 0.12;   // sloping down to the wheel
+    add(new THREE.CylinderGeometry(0.012, 0.012, 0.04, 8), chrome, 0, 0.055, 0.27, arm);           // caster stem
+    add(new THREE.CylinderGeometry(0.028, 0.028, 0.025, 14), black, 0, 0.028, 0.285, arm).rotation.z = Math.PI / 2;   // the wheel
+  }
+  add(new THREE.CylinderGeometry(0.055, 0.065, 0.06, 18), chrome, 0, 0.09, 0);                    // hub
+  add(new THREE.CylinderGeometry(0.036, 0.036, 0.26, 18), black, 0, 0.24, 0);                      // gas-lift sleeve
+  add(new THREE.CylinderGeometry(0.024, 0.024, STOOL.SEAT - 0.4, 14), chrome, 0, (STOOL.SEAT + 0.3) / 2, 0);   // the column
+  const ring = add(new THREE.TorusGeometry(0.23, 0.011, 8, 40), chrome, 0, 0.34, 0); ring.rotation.x = Math.PI / 2;   // footring
+  for (let i = 0; i < 3; i++) {                                 // its spokes back to the sleeve
+    const a = i / 3 * Math.PI * 2, sp = add(new THREE.CylinderGeometry(0.007, 0.007, 0.2, 6), chrome, Math.sin(a) * 0.13, 0.34, Math.cos(a) * 0.13);
+    sp.rotation.set(Math.PI / 2, 0, 0); sp.rotation.order = "YXZ"; sp.rotation.y = a;
+  }
+  const top = stool.top = new THREE.Group(); top.position.y = STOOL.SEAT; g.add(top);   // everything that turns
+  add(new THREE.CylinderGeometry(0.19, 0.19, 0.075, 32), vinyl, 0, -0.04, 0, top);                  // cushion
+  add(new THREE.CylinderGeometry(0.185, 0.19, 0.012, 32), vinyl, 0, -0.001, 0, top);                // its slightly domed top
+  const band = add(new THREE.TorusGeometry(0.19, 0.012, 8, 40), chrome, 0, -0.06, 0, top); band.rotation.x = Math.PI / 2;   // chrome edge band
+  add(new THREE.CylinderGeometry(0.12, 0.08, 0.04, 20), black, 0, -0.1, 0, top);                   // the mechanism under the seat
+  const lever = add(new THREE.BoxGeometry(0.018, 0.012, 0.14), chrome, 0.09, -0.11, 0.1, top); lever.rotation.y = -0.6;   // height paddle (and how you can tell it's turning)
+  add(new THREE.BoxGeometry(0.03, 0.02, 0.04), black, 0.13, -0.11, 0.155, top).rotation.y = -0.6;  // its grip
+  colliders.push(stool.box);
+}
+let stoolAc = null;
+function stoolPush() {
+  stool.vel = Math.min(STOOL.MAX, stool.vel + STOOL.PUSH);
+  try {                                           // the bearing's dry swish as it goes
+    const ac = stoolAc ||= new AudioContext(), n = ac.sampleRate * 0.25, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / n) ** 2;
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), gn = ac.createGain();
+    f.type = "bandpass"; f.frequency.value = 500 + stool.vel * 40; f.Q.value = 2; gn.gain.value = 0.12;
+    src.buffer = b; src.connect(f).connect(gn).connect(ac.destination); src.start();
+  } catch {}
+}
+function stoolSit() {
+  stoodAt = { x: player.x, z: player.z, yaw: player.yaw };
+  player.x = stool.x; player.z = stool.z;                       // you're where the stool is now (NPCs step round you, the gates know where you are)
+  stool.angle = player.yaw; onStool = true;                     // sit facing the way you were looking
+}
+function stoolStand() {                           // step off toward where you're facing, or anywhere clear, or back where you came from
+  onStool = false;
+  for (const da of [0, 1.2, -1.2, 2.4, -2.4, Math.PI]) {
+    const a = player.yaw + da, x = stool.x - Math.sin(a) * 0.62, z = stool.z - Math.cos(a) * 0.62;
+    if (!blocked(x, z)) { player.x = x; player.z = z; return; }
+  }
+  player.x = stoodAt.x; player.z = stoodAt.z;
+}
+function stoolTick(dt) {
+  if (stool.vel) {
+    const sat = onStool || stool.by === "dana";
+    const drag = (STOOL.DRAG + STOOL.VISC * stool.vel) * (sat ? 1 : STOOL.EMPTY) * dt;
+    const v = Math.max(0, stool.vel - drag), d = (stool.vel + v) / 2 * dt;   // averaged over the step, so a stop lands smoothly
+    stool.vel = v; stool.angle += d;
+    if (onStool) player.yaw += d;                 // you turn with it; your look stays where it was relative to your body
+  }
+  stool.top.rotation.y = stool.angle;             // (Dana scoots it round by hand, too)
+}
 const keys = new Set();
 const HOLD_MS = 450;                       // hold E on the standee to lift it
 let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
+let eHoldStool = false;                    // E went down on the stool: a tap sits on release, a hold picks it up
 let eHoldSwitch = null;                    // E went down on a multi-switch plate: a tap flips this one on release, a hold flips the plate
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
@@ -3527,7 +3610,8 @@ addEventListener("keydown", e => {
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat) {
     if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
-    else if (aimSwitch && switchPlate[aimSwitch].length > 1 && !seated && !aimCouch && !cutout.carried && !aimCustomer) {
+    else if (aimStool && !stool.by) { eHoldStool = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldStool = false; stoolPickUp(); }, HOLD_MS); }
+    else if (aimSwitch && switchPlate[aimSwitch].length > 1 && !seated && !aimCouch && !cutout.carried && !stool.carried && !aimCustomer) {
       eHoldSwitch = aimSwitch;
       eHoldTimer = setTimeout(() => { eHoldTimer = null; flipPlate(eHoldSwitch); eHoldSwitch = null; }, HOLD_MS);
     }
@@ -3546,6 +3630,7 @@ addEventListener("keyup", e => {
   if (e.code === "KeyE") {
     clearTimeout(eHoldTimer); eHoldTimer = null;   // let go before it's lifted: nothing happens
     if (eHoldSwitch) { flipSwitch(eHoldSwitch); eHoldSwitch = null; }   // a tap on the plate: just the one switch
+    if (eHoldStool) { eHoldStool = false; stoolSit(); }                  // a tap on the stool: sit
   }
 });
 let seatFov = 70;
@@ -3578,6 +3663,10 @@ function move(dt) {
   const rt = new THREE.Vector3(-f.z, 0, f.x);
   let ix = 0, iz = 0;
   if (document.pointerLockElement !== canvas) return;
+  if (onStool) {                            // E spins you; a move key gets you up
+    if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) stoolStand();
+    return;
+  }
   if (seated || inspecting) return;         // stand up with E first
   if (keys.has("KeyW") || keys.has("ArrowUp")) iz += 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) iz -= 1;
@@ -3605,6 +3694,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
+let aimStool = false;
 let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false;
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
@@ -3638,9 +3728,10 @@ function toggleDoor(d) {
 // between you and the spot; otherwise it tints red and stays in your arms ----
 const CARRY_D = 1.3, cutoutTint = new THREE.Color();
 let cutoutSpot = null;                       // where it'd land this frame, or null if it won't fit there
-function cutoutSpotAhead() {
-  const x = player.x - Math.sin(player.yaw) * CARRY_D, z = player.z - Math.cos(player.yaw) * CARRY_D, ry = player.yaw;
-  const b = cutoutFit(x, z, ry, {});
+function cutoutSpotAhead() { return carrySpotAhead(CARRY_D, (x, z, ry) => cutoutFit(x, z, ry, {})); }
+function carrySpotAhead(dist, fit) {           // a spot `dist` ahead for something carried: its footprint clear, and reachable
+  const x = player.x - Math.sin(player.yaw) * dist, z = player.z - Math.cos(player.yaw) * dist, ry = player.yaw;
+  const b = fit(x, z, ry);
   const clear = !colliders.some(c => c.x0 < b.x1 && c.x1 > b.x0 && c.z0 < b.z1 && c.z1 > b.z0) && !playerIn(b);
   const inside = (px, pz) => colliders.some(c => px > c.x0 && px < c.x1 && pz > c.z0 && pz < c.z1);
   let reach = true;
@@ -3661,6 +3752,32 @@ function cutoutCarryTick() {
 }
 function cutoutSeeThrough(on) {                // life-size and facing you: see-through while carried so you can see where you're going
   cutout.g.traverse(o => { if (o.isMesh) { o.material.transparent = on; o.material.opacity = on ? 0.45 : 1; o.material.depthWrite = !on; o.material.needsUpdate = true; } });
+}
+// the stool, carried the same way: held just ahead of you, a little off the
+// floor, red where it won't fit; E sets it down
+const stoolTint = new THREE.Color();
+function stoolCarryTick() {
+  if (!stool.carried) return;
+  const s = carrySpotAhead(STOOL.CARRY_D, (x, z) => stoolFit(x, z, {}));
+  stool.spot = s.ok ? s : null;
+  stool.g.position.set(s.x, 0.08, s.z);
+  stoolTint.set(s.ok ? 0xffffff : 0xff5a5a);
+  stool.g.traverse(o => {                       // its materials are shared between parts: keep the base color on the material
+    if (!o.isMesh) return;
+    o.material.userData.baseColor ??= o.material.color.clone();
+    o.material.color.copy(o.material.userData.baseColor).multiply(stoolTint);
+  });
+}
+function stoolPickUp() {
+  stool.carried = true; stool.vel = 0;
+  colliders.splice(colliders.indexOf(stool.box), 1);
+}
+function stoolPutDown() {
+  if (!stool.spot) return;
+  Object.assign(stool, { x: stool.spot.x, z: stool.spot.z, carried: false });
+  stool.g.position.set(stool.x, 0, stool.z);
+  stool.g.traverse(o => { if (o.isMesh && o.material.userData.baseColor) o.material.color.copy(o.material.userData.baseColor); });
+  colliders.push(stoolFit(stool.x, stool.z, stool.box));
 }
 function cutoutPickUp() {
   cutout.carried = true; cutoutSeeThrough(true);
@@ -4030,6 +4147,7 @@ function empSpawn() {
   c.setMood("neutral"); emp.state = "post";
 }
 function empGo(state, spot, avoidPlayer = false) {
+  if (STOOL_STATES.includes(emp.state) && !STOOL_STATES.includes(state)) empLeaveStool();
   const p = emp.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
   const grid = navGrid([emp.box, flapCollider], you); spot = spotBesideYou(spot, grid);
@@ -4115,6 +4233,61 @@ function empWatch(dt) {                           // on the couch: pick a face f
     : w.quiet > 6 ? "sleep" : w.loud > 3 ? "happy" : "watch");
   if (playing) w.idle = 0;
 }
+// ---- Dana and the stool: when nothing's going on at the register for a bit,
+// she fetches the stool (wherever you left it, if she can walk there), parks
+// it beside the register and sits. Up there she does as she likes: a lazy
+// spin now and then, a look around, and she scoots back to face the counter
+// once it stops. Sit long enough and she gets bored: a sigh, then a real
+// spin, a run of quick shoves like you tapping E. Anything happening — a customer, the bell, a sale, the gate
+// alarm, you asking her to do returns, you on the couch — and she's up.
+// While she has it, it's hers: you can't sit on it or pick it up ----
+const EMP_STOOL = { x: -4.75, z: 2.7 };          // where she parks it: beside the register, clear of her shuffle to the pad
+const EMP_STOOL_WAIT = 8;                        // seconds of nothing going on before she goes for it
+const EMP_BORED_AT = 25;                         // seconds up there before she's bored enough to really spin
+const STOOL_STATES = ["toStool", "stoolGrab", "stoolCarry", "stoolSitDown", "stoolSit", "stoolStandUp"];
+const empIdle = () => emp.task === "register" && !emp.paused && !cust.c && !co && !gateAlarm.on && !empCanWatch();
+const stoolFree = () => !stool.carried && !onStool && !stool.by && !eHoldStool;
+const clearFor = (x, z, r, skip) => !colliders.some(c => !skip.includes(c) && x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
+function stoolSide(fx, fz) {                      // a clear spot to stand beside the stool, on the side nearest (fx, fz), facing it
+  const a0 = Math.atan2(fx - stool.x, fz - stool.z);
+  for (const da of [0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, Math.PI]) {
+    const a = a0 + da, x = stool.x + Math.sin(a) * 0.6, z = stool.z + Math.cos(a) * 0.6;
+    if (clearFor(x, z, 0.22, [emp.box, stool.box])) return { x, z, ry: a + Math.PI };
+  }
+  return null;
+}
+function empFetchStool() {
+  const p = emp.c.group.position, home = Math.hypot(stool.x - EMP_STOOL.x, stool.z - EMP_STOOL.z) < 0.3;
+  if (!home) {                                    // its parking spot has to be free, and somewhere to stand behind it
+    const b = stoolFit(EMP_STOOL.x, EMP_STOOL.z, {});
+    if (colliders.some(c => c !== stool.box && c !== emp.box && c.x0 < b.x1 && c.x1 > b.x0 && c.z0 < b.z1 && c.z1 > b.z0) || playerIn(b)) return;
+    if (!clearFor(EMP_STOOL.x, EMP_STOOL.z - 0.5, 0.22, [emp.box, stool.box])) return;
+  }
+  const side = stoolSide(p.x, p.z);
+  if (!side || !navPath(navGrid([emp.box, flapCollider]), p.x, p.z, side.x, side.z)) return;   // can't get to it (a closed door, boxed in)
+  stool.by = "dana"; emp.stoolPlan = home ? "sit" : "carry";
+  emp.c.setMood("happy"); empGo("toStool", side);
+}
+function empStoolSit() {                         // back onto the seat from wherever she's standing
+  const c = emp.c, p = c.group.position;
+  c.reachTo(null); c.setPose("sit", STOOL_SIT);
+  emp.state = "stoolSitDown"; emp.t = 0.7; emp.from = { x: p.x, z: p.z };
+}
+function empLeaveStool() {                       // dropped mid-whatever (you called her away): let go of it right now
+  if (stool.by !== "dana") return;
+  const c = emp.c, p = c.group.position;
+  if (stool.danaCarry) {                          // set it down where it is if it fits, else back where she got it
+    const q = stool.g.position, b = stoolFit(q.x, q.z, {});
+    const fits = !colliders.some(k => k !== emp.box && k.x0 < b.x1 && k.x1 > b.x0 && k.z0 < b.z1 && k.z1 > b.z0) && !playerIn(b);
+    if (fits) { stool.x = q.x; stool.z = q.z; }
+    stool.danaCarry = false; stool.g.position.set(stool.x, 0, stool.z);
+    colliders.push(stoolFit(stool.x, stool.z, stool.box));
+  } else if (["stoolSitDown", "stoolSit", "stoolStandUp"].includes(emp.state)) {
+    const side = stoolSide(EMP_POST.x, EMP_POST.z); if (side) { p.x = side.x; p.z = side.z; }   // off the seat
+  }
+  c.setPose("idle"); c.reachTo(null); c.lookAt(null);
+  stool.by = null;
+}
 function empTick(dt) {
   if (!emp.c) { if (window.VaultCustomers && posTerm) empSpawn(); else return; }
   const c = emp.c, p = c.group.position;
@@ -4164,7 +4337,62 @@ function empTick(dt) {
           emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
           empGo("toCouch", { x: emp.seat.x, z: TV.z - 2.425, ry: 0 });   // the strip between the couch and the coffee table
         }
+        if (emp.state === "post" && empIdle() && emp.t <= 0 && stoolFree()) { if ((emp.idleT = (emp.idleT || 0) + dt) > EMP_STOOL_WAIT) { emp.idleT = 0; empFetchStool(); } }
+        else emp.idleT = 0;
         break;
+      case "toStool":
+        if (!empIdle()) { empGo("toPost", EMP_POST); break; }
+        if (emp.stoolPlan === "sit") { empStoolSit(); break; }
+        c.reachTo(new THREE.Vector3(stool.x, STOOL.SEAT, stool.z), 1, { lean: true }); emp.state = "stoolGrab"; emp.t = 0.7; break;   // a hand on the seat
+      case "stoolGrab":
+        if (emp.t > 0) break;
+        colliders.splice(colliders.indexOf(stool.box), 1); stool.danaCarry = true; stool.vel = 0;
+        c.setPose("hold"); empGo("stoolCarry", { x: EMP_STOOL.x, z: EMP_STOOL.z - 0.5, ry: 0 });   // behind its spot, facing the counter
+        break;
+      case "stoolCarry":                          // there: down it goes, and she's straight onto it
+        stool.danaCarry = false; stool.x = EMP_STOOL.x; stool.z = EMP_STOOL.z;
+        stool.g.position.set(stool.x, 0, stool.z); colliders.push(stoolFit(stool.x, stool.z, stool.box));
+        empStoolSit(); break;
+      case "stoolSitDown": {
+        const k = 1 - Math.max(0, emp.t) / 0.7;
+        p.x = emp.from.x + (stool.x - emp.from.x) * k; p.z = emp.from.z + (stool.z - emp.from.z) * k;
+        if (emp.t <= 0) { stool.angle = emp.face - Math.PI; emp.stoolHome = emp.face; emp.state = "stoolSit"; emp.t = 3 + Math.random() * 5; emp.bored = 0; emp.spins = 0; c.setMood("neutral"); }
+        break;
+      }
+      case "stoolSit": {
+        if (!empIdle() || onStool) {               // something's up: off she gets
+          emp.side = stoolSide(EMP_POST.x, EMP_POST.z) || { x: p.x, z: p.z - 0.6 };
+          emp.from = { x: p.x, z: p.z }; emp.state = "stoolStandUp"; emp.t = 0.5;
+          c.setPose("idle"); c.lookAt(null); c.setMood("neutral"); break;
+        }
+        emp.bored += dt;
+        if (emp.spins > 0) {                       // bored stiff: shove after shove, same as you tapping E
+          if ((emp.spinT -= dt) <= 0) { emp.spins--; emp.spinT = 0.22 + Math.random() * 0.12; stool.vel = Math.min(STOOL.MAX, stool.vel + STOOL.PUSH); }
+          if (!emp.spins) c.setMood("love");       // wheeeee
+        }
+        if (!stool.vel) {                          // stopped facing who-knows-where: scoot back round to the counter
+          const d = Math.atan2(Math.sin(emp.stoolHome - Math.PI - stool.angle), Math.cos(emp.stoolHome - Math.PI - stool.angle));
+          stool.angle += Math.sign(d) * Math.min(Math.abs(d), 0.9 * dt);
+        }
+        emp.ry = emp.face = stool.angle + Math.PI;
+        if (emp.t <= 0 && !stool.vel) {            // a whim — the longer nothing happens, the more bored she gets
+          const r = Math.random();
+          if (emp.bored > EMP_BORED_AT) {          // that's it: a real spin
+            emp.bored = 0; emp.spins = 4 + Math.floor(Math.random() * 4); emp.spinT = 0; c.lookAt(null); c.setMood("happy");
+          }
+          else if (r < 0.2) { stool.vel = Math.min(STOOL.MAX, 1.5 + Math.random() * 1.5); c.setMood("happy"); c.lookAt(null); }   // a lazy half turn
+          else if (r < 0.5) { c.lookAt((Math.random() * 2 - 1) * 1.1); c.setMood("browse"); }                                     // what's going on over there
+          else { c.lookAt(null); c.setMood(emp.bored > EMP_BORED_AT / 2 ? "meh" : "neutral"); }                                  // sigh
+          emp.t = 4 + Math.random() * 8;
+        }
+        break;
+      }
+      case "stoolStandUp": {
+        const k = 1 - Math.max(0, emp.t) / 0.5;
+        p.x = emp.from.x + (emp.side.x - emp.from.x) * k; p.z = emp.from.z + (emp.side.z - emp.from.z) * k;
+        if (emp.t <= 0) { stool.by = null; empGo("toPost", EMP_POST); }
+        break;
+      }
       case "toCouch": emp.state = "sitDown"; emp.t = 0.7; emp.from = { x: p.x, z: p.z }; c.setPose("sit"); break;
       case "sitDown": {                            // back onto the cushion, facing the TV
         const k = 1 - Math.max(0, emp.t) / 0.7;
@@ -4204,6 +4432,11 @@ function empTick(dt) {
       case "toShelf": c.reachTo(emp.target.pos); emp.state = "shelve"; emp.t = 0.9; break;   // into its own slot
       case "shelve": if (emp.t <= 0) { const t = emp.target; emp.carry.splice(emp.carry.indexOf(t), 1); t.desens = false; setOnShelf(t, true); empNext(); } break;   // back in its slot, tag re-armed
     }
+  }
+  if (stool.danaCarry) {                         // the stool rides just ahead of her, a hand on the seat
+    const sx = p.x + Math.sin(emp.face) * 0.5, sz = p.z + Math.cos(emp.face) * 0.5;
+    stool.g.position.set(sx, 0.12, sz);
+    c.reachTo(new THREE.Vector3(sx - Math.sin(emp.face) * 0.15, STOOL.SEAT + 0.12, sz - Math.cos(emp.face) * 0.15), 1, { lean: false });
   }
   // the counter pass-through: lift it to get by, drop it again behind her
   const fx = (flapCollider.x0 + flapCollider.x1) / 2, fz = (flapCollider.z0 + flapCollider.z1) / 2, fd = Math.hypot(p.x - fx, p.z - fz);
@@ -4340,9 +4573,14 @@ function posBeep(f) {
   } catch {}
 }
 function pickHover() {
-  hovered = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
-  if (inspecting || seated) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
+  if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
+  if (stool.carried) {                       // arms full: setting the stool down is the only thing E does
+    highlight.visible = false;
+    const tip = $("hoverTip"); tip.innerHTML = stool.spot ? "E — set the stool down" : "No room for the stool here"; tip.style.display = "block";
+    return;
+  }
   if (cutout.carried) {                      // arms full: the standee is the only thing E does
     highlight.visible = false;
     const tip = $("hoverTip"); tip.innerHTML = cutoutSpot ? "E — set the standee down" : "No room for the standee here"; tip.style.display = "block";
@@ -4395,6 +4633,7 @@ function pickHover() {
     else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
     else if (aim?.object.userData.frontLock && aim.distance < 2.2) aimLock = true;
     else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
+    else if (aim?.object.userData.stool && aim.distance < 2.2) aimStool = true;
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = true;
     else if (aim?.object.userData.customer && aim.distance < 2.6 && cust.c && !cust.path.length) aimCustomer = true;
     const tip = $("hoverTip");
@@ -4416,6 +4655,7 @@ function pickHover() {
       : `E — send Dana back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`;
     else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
       + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
+    else if (aimStool) tip.innerHTML = stool.by ? "Dana's using the stool" : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimCustomer) tip.innerHTML = `${co ? (co.by === "player" && coWants("customer") ? `E — ${coWants("customer").tip()}` : co.by === "dana" ? "Dana's ringing them up" : `Next: ${coStep().tip()}`)
       : ["wait", "impatient", "angry"].includes(cust.state) ? "E — take their member card" : "E — say hi"}<div class="cat">${memberName(cust.member)} · #${cust.member.num}</div>`;
@@ -4443,7 +4683,7 @@ canvas.addEventListener("mousedown", e => {
     else if (heldPopcorn && (heldPopcorn.kind === "kernel" || !heldPopcorn.used)) dropPopcorn();   // a used box only goes in the trash
     return;
   }
-  if (e.button !== 0 || cutout.carried) return;   // arms full carrying the standee
+  if (e.button !== 0 || cutout.carried || stool.carried) return;   // arms full carrying the standee
   if (tvMenu) { const hit = tvScreenHit(); if (hit) { tvMenuClick(hit.x, hit.y); return; } }
   if (held && inspecting) { inspecting = false; peek = null; return; }  // tuck the held-up tape back in hand (it's yours now)
   if (aimSlot) { putBack(); return; }                      // slotted back into its own spot on the shelf
@@ -4815,6 +5055,8 @@ function setLamp(l, on) {
   l.userData.pool.visible = on;
 }
 function onE() {
+  if (onStool) { stoolPush(); return; }
+  if (aimStool && !stool.by) { stoolSit(); return; }
   if (seated) {                             // E always stands you up
     player.x = stoodAt.x; player.z = stoodAt.z; player.yaw = stoodAt.yaw; seated = false; return;
   }
@@ -4825,6 +5067,7 @@ function onE() {
     return;
   }
   if (cutout.carried) { cutoutPutDown(); return; }
+  if (stool.carried) { stoolPutDown(); return; }
   if (aimCustomer) { custInteract(); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
   if (aimEmp) { empToggle(); return; }
@@ -4989,7 +5232,7 @@ function saveState() {
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
     : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, player: { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch },
+    v: SAVE_V, player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     lights: zoneOn, timeOfDay: tod.i, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
@@ -4997,6 +5240,7 @@ function saveState() {
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
+    stool: { x: stool.x, z: stool.z },                      // likewise
     wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
@@ -5015,6 +5259,7 @@ function loadState(S) {
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
     if (S.cutout) { Object.assign(cutout, S.cutout); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box); cutout.g?.position.set(cutout.x, 0, cutout.z); cutout.g?.rotation.set(0, cutout.ry, 0); }
+    if (S.stool) { Object.assign(stool, S.stool); stoolFit(stool.x, stool.z, stool.box); stool.g.position.set(stool.x, 0, stool.z); }
     payLedger.push(...(S.payLedger || []));
     for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
     for (const k of S.desens || []) { const c = copyByKey(k); if (c) c.desens = true; }
@@ -5134,8 +5379,10 @@ renderer.setAnimationLoop(() => {
   if (inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
+  stoolTick(dt);
   meTick(dt);
-  if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
+  if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
+  else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
   else {
     eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
     camera.position.set(player.x, eyeY, player.z);
@@ -5149,6 +5396,7 @@ renderer.setAnimationLoop(() => {
   camera.rotation.y = player.yaw; camera.rotation.x = player.pitch;
   invSync();
   cutoutCarryTick();
+  stoolCarryTick();
   custTick(dt);
   empTick(dt);
   pickHover();
@@ -5159,10 +5407,12 @@ renderer.setAnimationLoop(() => {
   $("inspect").style.display = inspecting ? "flex" : "none";
 
   const showTvHint = started && !inspecting
-    && (seated || aimTV || aimCouch)
+    && (seated || onStool || aimTV || aimCouch)
     && document.pointerLockElement === canvas;
   $("tvHint").style.display = showTvHint ? "block" : "none";
-  if (showTvHint) $("tvHint").textContent = tvMenu
+  if (showTvHint) $("tvHint").textContent = onStool
+    ? "Press E to spin · tap it fast to spin harder · WASD to get up"
+    : tvMenu
     ? "Click to choose · wheel adjusts a slider · right-click closes"
     : seated
     ? "Press E to stand up · right-click the screen for picture settings"
@@ -5179,6 +5429,6 @@ window.__t = {
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
-  me, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
+  setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
   emp, cust, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
