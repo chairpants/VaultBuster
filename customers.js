@@ -15,7 +15,8 @@
 //     screen,             the face mesh (store.js marks it to glow)
 //     parts,              every mesh, for aiming at
 //     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks off on
-//     setPose(name),      walk idle reach hold wait sit crouch
+//     setPose(name, opts), walk idle reach hold wait sit crouch; sit takes { hipY, tuck }:
+//                         hip height (couch: 0.5) and extra knee bend to pull the feet back (a stool's footring)
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
 //     holdProp(name),     "card" / "cash" in the other hand, or null
@@ -326,7 +327,7 @@ window.VaultCustomers = (() => {
     let talking = false;
     const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
-    let t = 0, phase = 0, pose = "idle", look = null;   // look: head yaw (relative to the body) someone asked for, or null
+    let t = 0, phase = 0, pose = "idle", look = null, sitAt = {};   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
     drawFace(g2, face, 0); ftex.needsUpdate = true;
     const lerp = (obj, k, v, r) => { obj[k] += (v - obj[k]) * r; };
@@ -337,7 +338,7 @@ window.VaultCustomers = (() => {
       rig: { legs, arms, head, upper, neck },                   // joints, for tools/tests (and the player's own body, which hides head + neck)
       get mood() { return face.mood; },
       setMood(m) { if (m !== face.mood) { face.mood = m; face.since = t; face.drawnAt = -1; } },
-      setPose(p) { pose = p; },
+      setPose(p, opts = {}) { pose = p; sitAt = opts; },
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
       holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | null, in the free (left) hand
@@ -378,11 +379,11 @@ window.VaultCustomers = (() => {
         const step = ease("step", Math.max(0, Math.min(0.2, reachFar - (bend ? 0.35 : 0.2))), Math.min(1, dt * 5)) * w;   // really far: a half step in
         legs.forEach(({ hip, knee }, i) => {
           const s = i ? -sw : sw;
-          const hx = sit ? -Math.PI / 2 : -s * stride, kx = sit ? Math.PI / 2 : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
+          const hx = sit ? -Math.PI / 2 : -s * stride, kx = sit ? Math.PI / 2 + (sitAt.tuck ?? 0) : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
           hip.rotation.x = ease("h" + i, hx) - crouch * 1.05 - squat * 1.6;
           knee.rotation.x = ease("k" + i, kx) + crouch * 1.9 + squat * 2.4;
         });
-        const seatY = sit ? 0.5 - 0.9 * o.height : 0;            // hips down to cushion height
+        const seatY = sit ? (sitAt.hipY ?? 0.5) - 0.9 * o.height : 0;   // hips down to the seat
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
         const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.022 : 0);   // hips rise over each planted foot
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly

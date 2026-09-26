@@ -69,7 +69,7 @@ Neither server has any dependencies.
 | **Click** again | Tuck it in your hand |
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
-| **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down |
+| **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down. On the stool behind the counter, each tap spins you (tap fast to spin harder) and WASD gets you up; hold E on it to carry it somewhere else |
 | **L** | Cycle the time of day outside: day, dusk, night, dawn. The store lights are real switches on the walls: E flips one, and holding E on the panel by the register turns the whole panel on or off |
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
 | **1–9** | Pick an inventory slot (carry up to 9 items; the bar appears once you hold 2+) |
