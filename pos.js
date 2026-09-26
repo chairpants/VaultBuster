@@ -65,8 +65,9 @@ window.createPOS = function createPOS(api) {
   const usedNums = new Set();
   for (let i = 0; i < 140; i++) {
     let num; do num = int(10001, 48999); while (usedNums.has(num)); usedNums.add(num);
+    const first = pick(FIRST);
     customers.push({
-      num, first: pick(FIRST), last: pick(LAST), phone: `555-${String(int(0, 9999)).padStart(4, "0")}`,
+      num, first, female: FIRST.indexOf(first) % 2 === 1, last: pick(LAST),   // FIRST alternates his / her names phone: `555-${String(int(0, 9999)).padStart(4, "0")}`,
       addr: `${int(12, 9870)} ${pick(STREETS)}`, since: int(1987, 1996), lifetime: int(3, 640),
       notes: pick(NOTES), heavy: rnd() < 0.2, rentals: [],
     });

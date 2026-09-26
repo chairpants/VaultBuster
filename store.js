@@ -3321,6 +3321,16 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
       scene.add(g);
     }
   }
+  // one more for the staff: up in the corner where the west wall meets the
+  // front glass, aimed back at the register bullpen
+  {
+    const x = WALL_L + 0.55, z = 0.55, g = new THREE.Group(); g.position.set(x, 2.75, z);
+    g.add(crt(Math.atan2(-4.5 - x, 2.4 - z)));             // toward the middle of the space behind the counter
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, STORE.h - 2.75), mat.dark);
+    pole.position.y = (STORE.h - 2.75) / 2; g.add(pole);
+    const cg = new THREE.PointLight(0x8899bb, 0, 4, 1.5); g.add(cg); crtGlows.push(cg);
+    scene.add(g);
+  }
 }
 // one seat per couch cushion (cushion centers ±0.6 m in couch.js, × the 1.12 couch scale)
 const SEATS = [-0.672, 0, 0.672].map(x => ({ x, z: TV.z - 3.3 }));   // the three cushions (your body sits there; the camera rides its head)
@@ -3492,7 +3502,7 @@ camera.rotation.y = player.yaw;
 // camera is where they'd be. It stands a little behind the eye so looking
 // down shows your chest, belly and feet; on the couch it takes Dana's sitting
 // pose and the camera rides its head
-const me = VaultCustomers.build({ ...VaultCustomers.randomOutfit(seeded(1985)), height: 1, build: 1, hat: null,
+const me = VaultCustomers.build({ ...VaultCustomers.randomOutfit(seeded(1985), false), height: 1, build: 1, hat: null,
   top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" });   // Dana's uniform, no name tag
 me.rig.head.visible = false; me.rig.neck.visible = false;
 me.walkLean = false;                        // the eye doesn't tip forward, so neither does the chest: the feet stay in view
@@ -3896,8 +3906,8 @@ const TASTES = [
   { name: "wanderer", cats: [] },                                 // no favorites: grabs whatever catches their eye
 ];
 function seeded(seed) { return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-function customerFor(seed) {
-  const rnd = seeded(seed), outfit = VaultCustomers.randomOutfit(rnd);
+function customerFor(seed, female) {
+  const rnd = seeded(seed), outfit = VaultCustomers.randomOutfit(rnd, female);
   const who = { seed, rnd, outfit, persona: {
     taste: TASTES[Math.floor(rnd() * TASTES.length)],
     patience: 0.6 + rnd() * 1.2,                  // scales how long they'll wait at the counter
@@ -3931,7 +3941,7 @@ function custPickMember() {
 }
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
 function custSpawn(member = custPickMember()) {
-  const who = cust.who = customerFor(Math.imul(member.num, 2654435761) >>> 0);   // member # -> the same person every time
+  const who = cust.who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   cust.member = cust.lastMember = member;
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   const c = cust.c = VaultCustomers.build(who.outfit);
@@ -4138,8 +4148,8 @@ function empCoTarget(at) {                     // where Dana's hand goes for eac
   const q = cust.c.group.position; return new THREE.Vector3(q.x, 1.2, 3.95);   // over the counter, where their hand meets hers
 }
 function empSpawn() {
-  const outfit = { ...VaultCustomers.randomOutfit(seeded(417)), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
-    pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#8fe8ff" };
+  const outfit = { ...VaultCustomers.randomOutfit(seeded(417), true), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
+    pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#c9a8ff" };   // lavender
   const c = emp.c = VaultCustomers.build(outfit);
   c.parts.forEach(m => { m.userData.employee = true; aimables.push(m); });
   c.glows.forEach(glow); scene.add(c.group); colliders.push(emp.box);
