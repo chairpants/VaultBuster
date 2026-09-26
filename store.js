@@ -199,6 +199,22 @@ finalComposer.addPass(renderScene);
 finalComposer.addPass(mixPass);
 finalComposer.addPass(new OutputPass());
 const clearMaterial = new THREE.MeshBasicMaterial({ visible: false });   // see-through overlays (screen glass) mustn't black out the glow behind them
+// a light at zero intensity still costs every lit pixel its full shading
+// loop, so switched-off lights (ceiling CRT glows with nothing playing, the
+// lot lights by day, a dark zone) leave the scene: hidden once they've been
+// off a second (so a flickering warm-up doesn't churn shader programs), back
+// the moment they come on
+let sceneLights = null;
+cullDarkLights.n = 0;
+function cullDarkLights(dt) {
+  if (!sceneLights || ++cullDarkLights.n % 120 === 0) {   // re-gathered now and then: some lights arrive after startup
+    sceneLights = []; scene.traverse(o => o.isLight && !o.isAmbientLight && !o.isHemisphereLight && sceneLights.push(o));
+  }
+  for (const l of sceneLights) {
+    if (l.intensity > 0) { l.userData.darkT = 0; l.visible = true; }
+    else if ((l.userData.darkT = (l.userData.darkT || 0) + dt) > 1) l.visible = false;
+  }
+}
 function renderWithBloom() {
   scene.traverse(o => {
     if (o.isMesh && !bloomLayer.test(o.layers)) { hiddenMaterials.set(o, o.material); o.material = o.userData.clearToBloom ? clearMaterial : darkMaterial; }
@@ -2019,6 +2035,13 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
 // ---------------- posters on the walls ----------------
 const marquee = [];   // flashing bulbs around the posters: { mat, phase }
 const posterMats = [];                     // lamps-out mode: posters glow faintly under their marquees
+// the marquee's warm spill on the wall around each poster: one shared soft
+// halo texture, additively blended — a real point light per poster (~21 of
+// them) made every lit pixel in the store pay for every poster
+const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false,
+  map: (() => { const c = document.createElement("canvas"); c.width = 64; c.height = 80; const g = c.getContext("2d");
+    const r = g.createRadialGradient(32, 40, 10, 32, 40, 40); r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.55, "rgba(255,255,255,.45)"); r.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = r; g.fillRect(0, 0, 64, 80); return new THREE.CanvasTexture(c); })() });
 {
   // chosen by fetch-covers.mjs: top movies + a few top non-cartoon shows
   const picks = (window.VAULT_POSTERS || []).map(art => ({ art }));
@@ -2042,10 +2065,8 @@ const posterMats = [];                     // lamps-out mode: posters glow faint
         const b = glow(new THREE.Mesh(bulbGeo, bm)); b.position.set(px, py, 0.04); g.add(b);
         marquee.push({ mat: bm, phase: i * 1.3 + j * 0.55 });
       });
-      // the marquee bulbs actually cast a bit of warm light now, not just an
-      // unlit color chase — modest range/intensity so ~24 of these stay cheap;
-      // not in allLights, so (like the couch lamps) they survive lights-out
-      const pl = new THREE.PointLight(0xffcf70, 0.4, 2.4, 2); pl.position.set(0, 0, 0.35); g.add(pl);
+      // the bulbs' warm spill on the wall around it (see haloMat)
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.1), haloMat); halo.position.z = -0.046; g.add(halo);
       scene.add(g);
     });
   }
@@ -3397,6 +3418,7 @@ function applyLighting() {
   if (dark === lightsOut && applyLighting.done) return;
   applyLighting.done = true; lightsOut = dark;
   for (const m of posterMats) m.emissiveIntensity = dark ? 0.22 : 0;   // marquees and screens glow on their own
+  haloMat.opacity = dark ? 0.4 : 0.22;        // the marquee spill shows more with the lights down
   bloomPass.strength = dark ? 0.55 : 0.28;    // barely-there with the lights on; a bit more presence in the dark
   // threshold raised from .2/.4 — screen whites (menus, bright scenes) were blooming
   // too readily; this only raises the bar for what counts as "glowing"
@@ -5431,6 +5453,7 @@ renderer.setAnimationLoop(() => {
       : held
         ? `Press E to insert “${held.title}” into the TV`
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
+  cullDarkLights(dt);
   renderWithBloom();
 });
 window.__t = {
