@@ -9,7 +9,8 @@
 // The only per-character allocations are the transforms and the face canvas.
 //
 // window.VaultCustomers = {
-//   randomOutfit(rnd = Math.random) -> outfit   (plain object: tweak any field)
+//   randomOutfit(rnd = Math.random, female?) -> outfit   (plain object: tweak any field;
+//                       female: true gets a bust, sized by o.bust ~0.75-1.25, and a warmer screen color)
 //   build(outfit) -> customer {
 //     group,              origin at the floor between the feet, facing +z
 //     screen,             the face mesh (store.js marks it to glow)
@@ -30,7 +31,8 @@
 window.VaultCustomers = (() => {
   // ---- wardrobe: every outfit is picked from these ----
   const SKIN = ["#f1c9a5", "#e3b48b", "#c98d62", "#9a6440", "#6b4128"];
-  const PHOSPHOR = ["#7dff9a", "#8fe8ff", "#ffc86a", "#f2f2f2", "#ff9ce6"];
+  const PHOSPHOR_M = ["#7dff9a", "#8fe8ff", "#ffc86a", "#f2f2f2"];   // green, cyan, amber, white
+  const PHOSPHOR_F = ["#ff9ce6", "#ff8fb1", "#c9a8ff", "#ffb58a"];   // pink, rose, lavender, peach
   const TOPS = ["tee", "tee", "flannel", "stripes", "windbreaker", "varsity", "sweater"];
   const BRIGHT = ["#1f7a8c", "#d1495b", "#edae49", "#00798c", "#6a4c93", "#2b9348", "#f25c54", "#3d5a80", "#e76f51", "#264653", "#8338ec", "#ff006e", "#118ab2"];
   const DULL = ["#3a3a3a", "#5b4636", "#2f4858", "#7d6b58", "#4a5d23", "#6d2e46", "#1d3557"];
@@ -38,23 +40,31 @@ window.VaultCustomers = (() => {
   const SHOES = ["#eeeeee", "#eeeeee", "#1e1e1e", "#b3242c", "#2d4fa3"];
   const CASES = [["wood", "#6b4424"], ["black", "#1c1c1e"], ["beige", "#cfc6a8"], ["silver", "#9aa0a6"], ["red", "#a8262b"], ["white", "#e4e2dc"]];
 
-  const SHOULDER_X = 0.255;                    // shoulder joints off center (body-space): the sleeves just overlap the torso
+  const SHOULDER_X = 0.255, SHOULDER_X_F = 0.235;   // shoulder joints off center (body-space): the sleeves just overlap the torso (hers is narrower)
   const pick = (a, rnd) => a[Math.floor(rnd() * a.length)];
-  function randomOutfit(rnd = Math.random) {
+  // female: true / false, or left out to roll it (after everything else, so a
+  // given rnd still dresses a person the same way either way)
+  function randomOutfit(rnd = Math.random, female) {
     const top = pick(TOPS, rnd), [pants, pantsColor] = pick(PANTS, rnd), [tvKind, tvColor] = pick(CASES, rnd);
-    return {
+    const o = {
       skin: pick(SKIN, rnd), height: 0.93 + rnd() * 0.14, build: 0.9 + rnd() * 0.25,
       top, topA: pick(BRIGHT, rnd), topB: rnd() < 0.5 ? pick(DULL, rnd) : pick(BRIGHT, rnd),
       longSleeves: top !== "tee" || rnd() < 0.2,
       pants, pantsColor, shoes: pick(SHOES, rnd),
       hat: rnd() < 0.3 ? { color: pick(BRIGHT.concat(DULL), rnd), back: rnd() < 0.5 } : null,
       tv: { kind: tvKind, color: tvColor, w: 0.42 + rnd() * 0.12, h: 0.32 + rnd() * 0.08, d: 0.3 + rnd() * 0.12, antenna: rnd() < 0.4, knobs: rnd() < 0.6 },
-      phosphor: pick(PHOSPHOR, rnd),
+      phosphor: pick(PHOSPHOR_M, rnd),
     };
+    o.female = female ?? rnd() < 0.5;
+    if (o.female) {
+      o.phosphor = PHOSPHOR_F[PHOSPHOR_M.indexOf(o.phosphor)];   // same roll, her palette
+      o.bust = 0.75 + (o.build - 0.9) * 2;          // 0.75..1.25, fuller on a broader build
+    }
+    return o;
   }
 
   // ---- shared geometry + a material cache keyed by what it looks like ----
-  let BOX, CYL, SPH, BALL, SOFT, ROUND, CASE, TORSO, SHADOW, SHEEN, GRILLE;
+  let BOX, CYL, SPH, BALL, SOFT, ROUND, CASE, TORSO, TORSO_F, SHADOW, SHEEN, GRILLE;
   const mats = new Map();
   // a unit box with its edges rounded off (r = corner radius, in unit-box
   // terms): each vertex is pulled onto a rounded shell around a smaller core.
@@ -82,6 +92,7 @@ window.VaultCustomers = (() => {
     ROUND = roundBox(0.18);                        // shoes, hips
     CASE = roundBox(0.08, 3);                      // TV cabinets: molded plastic / veneer edges
     TORSO = roundBox(0.2, 4, 0.22);                // shoulders broader than the waist
+    TORSO_F = roundBox(0.3, 5, 0.1);               // hers: rounder, sloping shoulders, less of a V
     // a soft contact shadow on the floor under each person (the store has no
     // real-time shadows; this is what keeps them from floating)
     SHADOW = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, opacity: 0.55,
@@ -145,19 +156,20 @@ window.VaultCustomers = (() => {
       return [m, m];
     }
     if (top === "uniform") {                      // store polo: VaultBuster blue, yellow collar band, a name tag (if it has one)
-      const body = patterned(`${key}|${o.nameTag}`, (g, n) => {
+      const tagHere = o.nameTag && !o.female;       // with a bust in the way, the tag's pinned on higher up instead (see build)
+      const body = patterned(`${key}|${tagHere ? o.nameTag : ""}`, (g, n) => {
         g.fillStyle = a; g.fillRect(0, 0, n, n);
         g.fillStyle = b; g.fillRect(0, 0, n, 7);
-        if (o.nameTag) {                            // no nameTag: a plain polo
+        if (tagHere) {                              // no nameTag: a plain polo
           g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.56, 16, 22, 9);
           g.fillStyle = "#1a1a1a"; g.font = "bold 7px Arial"; g.textAlign = "center"; g.fillText(o.nameTag, n * 0.56 + 11, 23);
         }
       });
       return [body, solid(a)];
     }
-    const tee = patterned(key, (g, n) => {         // tee: solid, with a small chest graphic
+    const tee = patterned(o.female ? key + "|plain" : key, (g, n) => {   // tee: solid, with a small chest graphic (not under a bust)
       g.fillStyle = a; g.fillRect(0, 0, n, n);
-      g.fillStyle = b; g.beginPath(); g.arc(n * 0.5, n * 0.4, 9, 0, Math.PI * 2); g.fill();
+      if (!o.female) { g.fillStyle = b; g.beginPath(); g.arc(n * 0.5, n * 0.4, 9, 0, Math.PI * 2); g.fill(); }
     });
     return [tee, solid(a)];
   }
@@ -259,13 +271,29 @@ window.VaultCustomers = (() => {
     });
     part(body, ROUND, pants, 0.35, 0.16, 0.22, 0, 0.93, 0);                        // seat of the pants
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
-    const torso = part(upper, TORSO, torsoM, 0.43, 0.56, 0.245, 0, 0.37, 0);
+    const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
+    const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
+    if (o.female && o.bust) {                          // a bust: two soft blocks set low on the chest, angled out, tucked in at the top, in the shirt's plain color
+      const b = o.bust, k = 0.9 + 0.1 * b;
+      for (const s of [-1, 1]) part(upper, SOFT, sleeveM, 0.145 * k, 0.15 * k, 0.15 * b, s * 0.074, 0.4, 0.08).rotation.set(-0.55, s * 0.25, 0);
+      if (o.nameTag) {                                 // name tag pinned high on the chest, above it
+        const key = "tag|" + o.nameTag;
+        if (!mats.has(key)) {
+          const c = document.createElement("canvas"); c.width = 64; c.height = 24; const g = c.getContext("2d");
+          g.fillStyle = "#f4f4f4"; g.fillRect(0, 0, 64, 24);
+          g.fillStyle = "#1a1a1a"; g.font = "bold 15px Arial"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(o.nameTag, 32, 13);
+          const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+          mats.set(key, new THREE.MeshLambertMaterial({ map: t }));
+        }
+        part(upper, BOX, mats.get(key), 0.085, 0.032, 0.004, 0.09, 0.553, 0.124);
+      }
+    }
     part(upper, ROUND, solid("#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);           // belt
     part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);         // buckle
     // arms: shoulder -> upper arm -> elbow -> forearm -> hand. Tucked in so the
     // sleeve overlaps the torso's rounded edge instead of hanging off beside it
     const arms = [-1, 1].map(s => {
-      const sh = pivot(upper, s * SHOULDER_X, 0.6, 0);
+      const sh = pivot(upper, s * SX, SY, 0);
       part(sh, SOFT, sleeveM, 0.125, 0.33, 0.135, 0, -0.13, 0);
       const el = pivot(sh, 0, -0.29, 0);
       part(el, SOFT, o.longSleeves ? sleeveM : skin, 0.105, 0.29, 0.115, 0, -0.12, 0);
@@ -368,7 +396,7 @@ window.VaultCustomers = (() => {
           group.updateMatrixWorld(true);
           const g = group.worldToLocal(tmp.copy(reach.target));
           const armI = reach.arm === "auto" ? (g.x > 0 ? 1 : 0) : reach.arm;
-          const d = g.sub(tmp2.set((armI ? SHOULDER_X : -SHOULDER_X) * W, 1.5 * H, 0));
+          const d = g.sub(tmp2.set((armI ? SX : -SX) * W, 1.5 * H, 0));
           ik = { armI, flat: Math.hypot(d.x, d.z), dy: d.y };
         }
         const bend = ik && reach.lean;                   // may the body help? (shelves yes, counter work no)
