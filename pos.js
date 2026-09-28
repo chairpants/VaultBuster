@@ -412,7 +412,7 @@ window.createPOS = function createPOS(api) {
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     checkIn(copy) {                              // a member dropped this copy back off: close out the rental
       const r = copy.rental; if (!r) return;
-      r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); delete copy.rental;   // off their account and out of the reports
+      r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); copy.rental = null;   // off their account and out of the reports (null, not delete: an extra copy would fall back to the first copy's rental)
       if (open && mode === "app") draw();
     },
   };

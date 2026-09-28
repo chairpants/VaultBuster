@@ -103,7 +103,8 @@ const TVU = {
   uThLight: { value: new THREE.Vector2(1, 1) },      // x = lobby switch, y = theater house-lights switch
   uLobbyBox: { value: new THREE.Vector4() },         // movie lobby: x0, x1, z0, z1
   uThBox: { value: new THREE.Vector4() },            // auditorium: x0, x1, z0, z1
-  uThScreenP: { value: new THREE.Vector3(-2.87, 1.1, 45.8) }, // theater screen center for live bounce
+  uThScreenP: { value: new THREE.Vector3(-2.87, 1.05, 45.8) }, // theater screen center for live bounce
+  uThSconce: { value: 1 },                           // auditorium wall sconces 0..1: up between films, fading out once one plays
 };
 // Room lighting, per fragment, by where it is (world space): no light objects,
 // so it costs the same however many zones there are, and it stops dead at the
@@ -129,7 +130,7 @@ const ROOM_FRAG = `
   } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uLobbyBox.z && P.z < uLobbyBox.w && P.y < uBohSplit.y + 0.05) {
     rl = (0.04 + 0.96 * uThLight.x) * fl * vec3(1.08, 0.93, 0.80);
   } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uFloorBox.w + 0.1) {
-    vec3 thFl = (0.025 + 0.30 * uThLight.y) * fl * vec3(1.15, 0.82, 0.55);
+    vec3 thFl = (0.025 + 0.30 * uThLight.y + 0.12 * uThSconce) * fl * vec3(1.15, 0.82, 0.55);   // house lights + a low warm sconce wash
     vec3 sL = uThScreenP - P; float sd2 = dot(sL, sL); sL *= inversesqrt(sd2);
     float sCos = max(sL.z, 0.0) * (0.35 + 0.65 * max(dot(rN, sL), 0.0));
     vec3 scrGlow = uTvGain * (uTvZoneC[4] * 4.2 + uTvAmb * 2.4) * sCos / (1.0 + 0.025 * sd2);
@@ -170,7 +171,7 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
     .replace("#include <common>", `#include <common>
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
       uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
-      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec2 uBohSplit, uThLight; uniform vec3 uThScreenP;
+      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec2 uBohSplit, uThLight; uniform vec3 uThScreenP; uniform float uThSconce;
       uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC;`)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + ROOM_FRAG + TV_FRAG);
 };
@@ -226,13 +227,30 @@ function cullDarkLights(dt) {
     else if ((l.userData.darkT = (l.userData.darkT || 0) + dt) > 1) l.visible = false;
   }
 }
+// in the glow pass, non-glowing meshes only matter as blockers (drawn black so
+// glow behind them is hidden). Small ones — snacks, cans, knobs, fingers —
+// block next to nothing, so that pass skips them outright: ~a thousand fewer
+// draw calls a frame in the store
+const occScale = new THREE.Vector3(), skippedInBloom = [];
+function tinyOccluder(o) {
+  if (o.userData.tinyOcc === undefined) {
+    const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+    o.getWorldScale(occScale);
+    o.userData.tinyOcc = !o.isInstancedMesh && g.boundingSphere.radius * Math.max(occScale.x, occScale.y, occScale.z) < 0.12;
+  }
+  return o.userData.tinyOcc;
+}
 function renderWithBloom() {
   scene.traverse(o => {
-    if (o.isMesh && !bloomLayer.test(o.layers)) { hiddenMaterials.set(o, o.material); o.material = o.userData.clearToBloom ? clearMaterial : darkMaterial; }
+    if (!o.isMesh || bloomLayer.test(o.layers)) return;
+    if (o.visible && tinyOccluder(o)) { o.visible = false; skippedInBloom.push(o); return; }
+    hiddenMaterials.set(o, o.material); o.material = o.userData.clearToBloom ? clearMaterial : darkMaterial;
   });
   bloomComposer.render();
   hiddenMaterials.forEach((m, o) => o.material = m);
   hiddenMaterials.clear();
+  for (const o of skippedInBloom) o.visible = true;   // only ever skipped while visible, so this puts it back as it was
+  skippedInBloom.length = 0;
   finalComposer.render();
 }
 
@@ -258,6 +276,10 @@ const copyByKey = k => { const i = k.lastIndexOf(":"), t = (byTapeKey ||= new Ma
 // (REWIND_FINE, set once pay exists) and the tape snaps back to the start.
 const REWIND_FINE = 0;                       // $ docked per unrewound tape shelved — ponytail: 0 until pay is wired up
 const payLedger = [];                        // { what, title, fine, at, ep, t } — penalties so far (saved)
+// an extra copy of a title inherits everything from the first copy (Object.create),
+// so its per-copy state has to be its own from the start — otherwise desensitizing,
+// rewinding or renting the first copy would quietly do it to all of them
+const newCopy = t => Object.assign(Object.create(t), { desens: false, lost: false, offShelf: false, tapePos: null, rental: null });
 const isRewound = c => !c.tapePos || (c.tapePos.ep === 0 && c.tapePos.t < 1);
 // how far through the whole tape it's wound, 0..1: episodes played + the part
 // of the current one (d = its length, recorded while it played; a movie-ish
@@ -281,31 +303,36 @@ function setWindFrac(c, f) {
   const x = Math.min(1, f) * n, ep = Math.min(n - 1, Math.floor(x));
   c.tapePos = { ep, t: (x - ep) * d, d: c.tapePos?.d };
 }
-// the counter rewinder: E puts the tape in hand in; it winds back over up to
-// REWIND_SECS (scaled by how far it's wound) with a motor whir, clunks when
-// done, and E takes it out — early, it comes out only partly rewound
+// the counter rewinders (two, either side of the returns tote): E puts the
+// tape in hand in; it winds back over up to REWIND_SECS (scaled by how far
+// it's wound) with a motor whir, clunks when done, and E takes it out — early,
+// it comes out only partly rewound. Each machine is its own object in rewinders
 const REWIND_SECS = 10;
-function rewinderLoad(tape) {
-  Object.assign(rewinder, { tape, f0: windFrac(tape), t: 0, done: false });
-  rewinder.dur = Math.max(1, rewinder.f0 * REWIND_SECS);
-  rewinder.tapeMesh.material = tape.sideMat || mat.tapeBody; rewinder.tapeMesh.visible = true;
-  if (rewinder.f0 > 0) rewinderSound(true); else rewinderFinish(false);
+let rewindAc = null;
+function rewinderLoad(rw, tape) {
+  Object.assign(rw, { tape, f0: windFrac(tape), t: 0, done: false });
+  rw.dur = Math.max(1, rw.f0 * REWIND_SECS);
+  rw.tapeMesh.material = tape.sideMat || mat.tapeBody; rw.tapeMesh.visible = true;
+  if (rw.f0 > 0) rewinderSound(rw, true); else rewinderFinish(rw, false);
 }
-function rewinderFinish(clunk = true) {
-  rewinder.done = true; rewinderSound(false); rewinder.led.material.color.set(0x2bff6a);
+function rewinderEmpty(rw) {                  // the tape's out: machine idle
+  rewinderSound(rw, false); rw.tape = null; rw.tapeMesh.visible = false; rw.led.material.color.set(0x222222);
+}
+function rewinderFinish(rw, clunk = true) {
+  rw.done = true; rewinderSound(rw, false); rw.led.material.color.set(0x2bff6a);
   if (clunk) try {                            // the eject thunk
-    const ac = rewinder.ac ||= new AudioContext(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    const ac = rewindAc ||= new AudioContext(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
     o.type = "square"; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.09);
     g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
     o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.13);
   } catch {}
 }
-function rewinderSound(on) {
-  if (!on) { rewinder.snd?.(); rewinder.snd = null; return; }
-  rewinder.led.material.color.set(0xff3b1f);
+function rewinderSound(rw, on) {
+  if (!on) { rw.snd?.(); rw.snd = null; return; }
+  rw.led.material.color.set(0xff3b1f);
   try {                                       // little motor: a soft hum, tape hiss, and the reel's rattle, speeding up a touch as the tape runs down
-    const ac = rewinder.ac ||= new AudioContext(); ac.resume();
-    const t = ac.currentTime, end = t + rewinder.dur, out = ac.createGain();
+    const ac = rewindAc ||= new AudioContext(); ac.resume();
+    const t = ac.currentTime, end = t + rw.dur, out = ac.createGain();
     out.gain.setValueAtTime(0, t); out.gain.linearRampToValueAtTime(0.05, t + 0.2); out.connect(ac.destination);
     const hum = ac.createOscillator(), humF = ac.createBiquadFilter(), humG = ac.createGain();
     hum.type = "sawtooth"; hum.frequency.setValueAtTime(95, t); hum.frequency.linearRampToValueAtTime(125, end);
@@ -320,23 +347,25 @@ function rewinderSound(on) {
     rattle.gain.value = 0.35; depth.gain.value = 0.25; lfo.connect(depth).connect(rattle.gain);
     noise.connect(hiss).connect(rattle).connect(out);
     const src = [hum, noise, lfo]; src.forEach(o => o.start());
-    rewinder.snd = () => { src.forEach(o => o.stop()); out.disconnect(); };
+    rw.snd = () => { src.forEach(o => o.stop()); out.disconnect(); };
   } catch {}
 }
 function rewinderTick(dt) {
-  if (!rewinder.tape || rewinder.done) return;
-  rewinder.t += dt;
-  const p = Math.min(1, rewinder.t / rewinder.dur);
-  setWindFrac(rewinder.tape, rewinder.f0 * (1 - p));
-  if (p >= 1) rewinderFinish();
+  for (const rw of rewinders) {
+    if (!rw.tape || rw.done) continue;
+    rw.t += dt;
+    const p = Math.min(1, rw.t / rw.dur);
+    setWindFrac(rw.tape, rw.f0 * (1 - p));
+    if (p >= 1) rewinderFinish(rw);
+  }
 }
-function rewinderUse() {                      // E on the rewinder
-  if (rewinder.tape) {                        // take it out (done, or early)
+function rewinderUse(rw) {                    // E on a rewinder
+  if (rw.tape) {                              // take it out (done, or early)
     if (!invMakeRoom()) { toast("Hands full"); return; }
-    const t = rewinder.tape;
-    rewinderSound(false); rewinder.tape = null; rewinder.tapeMesh.visible = false; rewinder.led.material.color.set(0x222222);
+    const t = rw.tape;
+    rewinderEmpty(rw);
     showTape(t);
-  } else if (held) { const t = held; releaseFromHand(); rewinderLoad(t); }
+  } else if (held) { const t = held; releaseFromHand(); rewinderLoad(rw, t); }
 }
 // the counter's service bell: a bright struck-metal ding (a few inharmonic partials, fast attack, long ring)
 let bellAc = null;
@@ -498,11 +527,39 @@ const mat = {
   lineYellow: new THREE.MeshBasicMaterial({ color: 0xe8c33c }),
   aluminum: new THREE.MeshLambertMaterial({ color: 0xc2c6cb }),
 };
-let floorHeightAt = () => 0;// ceiling panel groups, per switch zone — dark when switched off, flicker independently on warm-up
-let panelMats = [];  
+let floorHeightAt = () => 0;                // floor height under (x, z): 0 everywhere but the theater's stepped rows (set with the theater)
+let panelMats = [];                        // ceiling panel groups, per switch zone — dark when switched off, flicker independently on warm-up
 let theaterScreenMesh = null;
 let projBeamMat = null;
+let thSconceMat = null;                    // the auditorium wall sconces' shades (see the main loop)
+const beamU = { uBeamZ: { value: TVU.uTvZoneC.value }, uBeamOn: { value: 0 } };   // the beam reads the TV light's 3x3 picture colors straight from the shared array
 const theaterSeats = [];
+// the folding theater seats: one InstancedMesh, a hinge per seat. a: 0 = down, 1 = folded up against the back
+let thCushions = null, thSeatFolds = [];
+const thSeatDummy = new THREE.Object3D();
+function thSeatPose(i) {
+  const h = thSeatFolds[i];
+  thSeatDummy.position.set(h.x, h.y, h.z); thSeatDummy.rotation.set(-h.a * 1.45, 0, 0); thSeatDummy.updateMatrix();
+  thCushions.setMatrixAt(i, thSeatDummy.matrix);
+}
+// sprung: pushed down while someone's on it, snaps back up (with a little
+// bounce off the back) the moment they stand
+function thSeatTick(dt) {
+  if (!thCushions) return;
+  dt = Math.min(dt, 0.05);                        // a stalled frame mustn't fling the springs
+  let moved = false;
+  thSeatFolds.forEach((h, i) => {
+    const sat = (seated && seatAt === h.seat) || custs.some(k => k.thSeat === h.seat && (k.state === "thSitDown" || k.state === "thWatch"));
+    const want = sat ? 0 : 1;
+    if (h.a === want && !h.v) return;
+    h.v += (140 * (want - h.a) - 9 * h.v) * dt; h.a += h.v * dt;
+    if (h.a > 1) { h.a = 1; h.v *= -0.35; }        // clack against the back
+    if (h.a < 0) { h.a = 0; h.v *= -0.2; }         // bottoms out on its stop
+    if (Math.abs(want - h.a) < 0.002 && Math.abs(h.v) < 0.05) { h.a = want; h.v = 0; }
+    thSeatPose(i); moved = true;
+  });
+  if (moved) thCushions.instanceMatrix.needsUpdate = true;
+}
 
 // the light switch zones: three along the sales floor, then the back of house rooms
 const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater"];
@@ -573,17 +630,46 @@ function casing(at, c, alongX, W) {
 // across the wall) it opens toward; signs: [{ text, side }] plates, side = the
 // world side of the wall the plate faces. Closed, it blocks the opening;
 // open, it stands ~90° into the room and blocks just its own leaf
-function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [] }) {
+// push: a regal double-acting cinema door — no latch, no E: it swings away
+// from whoever walks into it and springs shut behind them (pushDoorTick).
+// porthole: a round window at head height, ringed in gold
+const doorGold = new THREE.MeshPhongMaterial({ color: 0xc9a227, specular: 0xffe2a0, shininess: 80 });
+const doorGlass = new THREE.MeshLambertMaterial({ color: 0x8a9aae, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+const PORT = { y: 1.6, r: 0.17 };
+const theaterDoorMat = new THREE.MeshLambertMaterial({ color: 0x5a1020 });   // maroon
+function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [], push = false, porthole = false }) {
   const W = DOOR_W, base = alongX ? 0 : -Math.PI / 2;   // leaf is built along local x; local +z is world +z (alongX) or world -x
   const toLocal = side => alongX ? side : -side;
   const pivot = new THREE.Group();
   if (alongX) pivot.position.set(c + hinge * W / 2, 0, at); else pivot.position.set(at, 0, c + hinge * W / 2);
   pivot.rotation.y = base; scene.add(pivot);
   const lx = -hinge * W / 2;                    // leaf center, pivot-local
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, DOOR_H - 0.02, 0.045), leafMat);
-  leaf.position.set(lx, DOOR_H / 2, 0); pivot.add(leaf);
+  let leaf;
+  if (porthole) {                               // the window's a real hole: the leaf is an extruded slab with a round cut
+    const LW = W - 0.03, LH = DOOR_H - 0.02, sh = new THREE.Shape();
+    sh.moveTo(-LW / 2, 0); sh.lineTo(LW / 2, 0); sh.lineTo(LW / 2, LH); sh.lineTo(-LW / 2, LH); sh.lineTo(-LW / 2, 0);
+    const hole = new THREE.Path(); hole.absarc(0, PORT.y - 0.01, PORT.r, 0, Math.PI * 2, true); sh.holes.push(hole);
+    const g = new THREE.ExtrudeGeometry(sh, { depth: 0.045, bevelEnabled: false, curveSegments: 24 }); g.translate(0, 0, -0.0225);
+    leaf = new THREE.Mesh(g, leafMat); leaf.position.set(lx, 0.01, 0); pivot.add(leaf);
+    const glass = new THREE.Mesh(new THREE.CircleGeometry(PORT.r, 32), doorGlass); glass.position.set(lx, PORT.y, 0); pivot.add(glass);
+  } else {
+    leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, DOOR_H - 0.02, 0.045), leafMat);
+    leaf.position.set(lx, DOOR_H / 2, 0); pivot.add(leaf);
+  }
   const hx = -hinge * (W - 0.12);               // hardware sits at the latch edge
-  for (const f of [-1, 1]) {
+  if (push) for (const f of [-1, 1]) {          // both faces: gold border inset from the edge, brass kick plate, a push plate where the lever would be
+    const g = (w, h, d, x, y) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), doorGold); m.position.set(x, y, f * (0.0225 + d / 2)); pivot.add(m); };
+    const bw = W - 0.03 - 0.14, bh = DOOR_H - 0.02 - 0.14;
+    g(bw, 0.022, 0.006, lx, 0.08); g(bw, 0.022, 0.006, lx, 0.08 + bh);
+    g(0.022, bh, 0.006, lx - bw / 2, 0.08 + bh / 2); g(0.022, bh, 0.006, lx + bw / 2, 0.08 + bh / 2);
+    g(W - 0.03 - 0.1, 0.22, 0.004, lx, 0.15);    // kick plate
+    g(0.1, 0.3, 0.004, hx, 1.1);                  // push plate
+    if (porthole) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(PORT.r + 0.01, 0.016, 10, 40), doorGold);
+      ring.position.set(lx, PORT.y, f * 0.024); pivot.add(ring);
+    }
+  }
+  else for (const f of [-1, 1]) {
     const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 14), mat.aluminum);
     rose.rotation.x = Math.PI / 2; rose.position.set(hx, 0.98, f * 0.028); pivot.add(rose);
     const lever = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.022), mat.aluminum);
@@ -593,7 +679,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const sg = textPlane(text, 0.42, 0.12, "#fff", "#2a2e35", "Arial", 70);
     sg.material = new THREE.MeshLambertMaterial({ map: sg.material.map });   // lit by the room like the other signs
     const f = toLocal(side);
-    sg.position.set(lx, 1.52, f * 0.028); if (f < 0) sg.rotation.y = Math.PI; pivot.add(sg);   // 5 mm proud of the leaf face
+    sg.position.set(lx, porthole ? 1.24 : 1.52, f * 0.028); if (f < 0) sg.rotation.y = Math.PI; pivot.add(sg);   // 5 mm proud of the leaf face (under the window, if it has one)
   }
   casing(at, c, alongX, W);
   const t = WALL_T / 2 + WALL_PAD, hp = c + hinge * W / 2, sw = swing * W;
@@ -602,9 +688,9 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
                          : { x0: Math.min(at, at + sw), x1: Math.max(at, at + sw), z0: hp - 0.03, z1: hp + 0.03 };
   // local z the leaf's free edge heads toward = toLocal(swing); rotating by a
   // moves it to local z = hinge * sin(a) * W/2, so the sign of a follows
-  const d = { pivot, base, a: 0, openA: Math.PI / 2 * hinge * toLocal(swing), open: false, locked, rattle: 0, shut, openBox };
-  colliders.push(shut);
-  leaf.userData.door = d; aimables.push(leaf);
+  const d = { pivot, base, a: 0, openA: Math.PI / 2 * hinge * toLocal(swing), open: false, locked, rattle: 0, shut, openBox,
+    push, at, c, alongX, hinge, v: 0, side: 0 };
+  if (!push) { colliders.push(shut); leaf.userData.door = d; aimables.push(leaf); }   // a push door never blocks: it gets out of your way
   doors.push(d);
   return d;
 }
@@ -718,15 +804,14 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - BZ0), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
   bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + BZ1) / 2); scene.add(bohCeil);
 
-  // the sales floor opens straight into the hall; the rooms get painted doors, the future door is steel
+  // the sales floor opens straight into the hall; the rooms get painted doors, the theater a maroon push door
   casing(Z, BOH_DOORS.store, true, BOH_OPENING_W);
-  const steel = new THREE.MeshLambertMaterial({ color: 0x8e959d });
   const painted = new THREE.MeshLambertMaterial({ color: 0xd9d4c7 });
   makeDoor({ at: HZ, c: BOH_DOORS.breakroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
     signs: [{ text: "BREAK ROOM", side: -1 }] });
   makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
     signs: [{ text: "RESTROOM", side: -1 }] });
-  makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, locked: false, leafMat: steel,
+  makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, leafMat: theaterDoorMat, push: true, porthole: true,
     signs: [{ text: "THEATER", side: 1 }] });
   const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over the store-side doorway, above the stripe
   rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
@@ -913,9 +998,8 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const lobCeil = new THREE.Mesh(new THREE.PlaneGeometry(LX1 - LX0, LZ1 - LZ0), new THREE.MeshLambertMaterial({ map: lobCeilTex }));
     lobCeil.rotation.x = Math.PI / 2; lobCeil.position.set(TX, LH, (LZ0 + LZ1) / 2); scene.add(lobCeil);
 
-    // padded crimson auditorium door
-    const plushDoor = new THREE.MeshLambertMaterial({ color: 0x6e141d });
-    makeDoor({ at: LZ1, c: TX, alongX: true, hinge: -1, swing: 1, leafMat: plushDoor,
+    // the auditorium door: the same maroon push door as the hall's, no window
+    makeDoor({ at: LZ1, c: TX, alongX: true, hinge: -1, swing: 1, leafMat: theaterDoorMat, push: true,
       signs: [{ text: "CINEMA 1", side: -1 }, { text: "LOBBY", side: 1 }] });
 
     // glowing marquee over the Cinema 1 door
@@ -975,7 +1059,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const stageWood = new THREE.MeshLambertMaterial({ color: 0x3d2314 });
     const tierFloorMat = new THREE.MeshLambertMaterial({ color: 0x38131a });
     const riserMat = new THREE.MeshLambertMaterial({ color: 0x1e0b0f });
-    const stepLightMat = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
+    const stepLightMat = new THREE.MeshBasicMaterial({ color: 0xff1a1a });   // red aisle step lights
 
     // header above lobby roof at z = TZ0, side walls, and rear screen wall
     box(TW, TH - LH, WALL_T, thWall, TX, LH + (TH - LH) / 2, TZ0);
@@ -987,9 +1071,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     colliders.push(
       { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
       { x0: TX1 - 0.18, x1: TX1 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
-      { x0: TX0, x1: TX1, z0: TZ1 - 0.18, z1: TZ1 + 0.18, y0: WALL_BOT, y1: TH },
-      { x0: TX0, x1: LX0, z0: TZ0 - 0.18, z1: TZ0 + 0.18, y0: WALL_BOT, y1: TH },
-      { x0: LX1, x1: TX1, z0: TZ0 - 0.18, z1: TZ0 + 0.18, y0: WALL_BOT, y1: TH }
+      { x0: TX0, x1: TX1, z0: TZ1 - 0.18, z1: TZ1 + 0.18, y0: WALL_BOT, y1: TH }
     );
 
     // dark cinema ceiling + back entry cross-aisle + sloped ramp + front orchestra pit
@@ -1001,8 +1083,18 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const rampLen = Math.hypot(R_END - R_Z0, PIT_Y), rampAng = Math.atan2(-PIT_Y, R_END - R_Z0);
     const ramp = new THREE.Mesh(new THREE.BoxGeometry(AISLE_HALF * 2, 0.04, rampLen), mat.carpet);
     ramp.position.set(TX, PIT_Y / 2 - 0.02, (R_Z0 + R_END) / 2); ramp.rotation.x = rampAng; scene.add(ramp);
+    {                                          // solid fill under the ramp, down to the pit: the rows step below its edges, so its sides would show daylight
+      const sh = new THREE.Shape();              // side profile in (z, y): top follows the ramp (tucked just inside its slab), bottom at the pit floor
+      sh.moveTo(R_Z0, -0.03); sh.lineTo(R_END, PIT_Y - 0.03); sh.lineTo(R_END, PIT_Y - 0.04); sh.lineTo(R_Z0, PIT_Y - 0.04); sh.lineTo(R_Z0, -0.03);
+      const g = new THREE.ExtrudeGeometry(sh, { depth: AISLE_HALF * 2 - 0.004, bevelEnabled: false });
+      g.rotateY(-Math.PI / 2); g.translate(TX + AISLE_HALF - 0.002, 0, 0);   // extruded across the aisle's width
+      scene.add(new THREE.Mesh(g, riserMat));
+    }
 
-    // stadium tiers & 48 seats (merged into 3 meshes for zero draw-call bloat)
+    // stadium tiers & 48 seats, v2: real cinema chairs — shared side standards
+    // with armrests and cup holders, a reclined padded back in a plastic shell,
+    // and a sprung seat that folds up against the back (see thSeatTick). The
+    // fixed parts merge into 3 meshes; the 48 folding seats are one InstancedMesh
     const bankW = (TW - AISLE_HALF * 2) / 2;
     const seatPlush = new THREE.MeshLambertMaterial({ color: 0x9e1b24 });
     const seatDark = new THREE.MeshLambertMaterial({ color: 0x1c1a1e });
@@ -1014,6 +1106,23 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       if (rx) g.rotateX(rx);
       g.translate(x, y, z); arr.push(g);
     };
+    // a padded slab: rounded rectangle w x h (x, y from 0 up), extruded `depth` along +z with a soft bevel
+    const padGeo = (w, h, r, depth, b) => {
+      const x0 = -w / 2 + b, x1 = w / 2 - b, y0 = b, y1 = h - b, sh = new THREE.Shape();
+      sh.moveTo(x0 + r, y0); sh.lineTo(x1 - r, y0); sh.quadraticCurveTo(x1, y0, x1, y0 + r); sh.lineTo(x1, y1 - r);
+      sh.quadraticCurveTo(x1, y1, x1 - r, y1); sh.lineTo(x0 + r, y1); sh.quadraticCurveTo(x0, y1, x0, y1 - r);
+      sh.lineTo(x0, y0 + r); sh.quadraticCurveTo(x0, y0, x0 + r, y0);
+      return new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 2, curveSegments: 4 });
+    };
+    const RECLINE = -0.2;
+    const backPad = padGeo(0.5, 0.6, 0.08, 0.05, 0.025);         // z -0.025..0.075, pivot at its bottom
+    const backShell = padGeo(0.54, 0.68, 0.09, 0.02, 0.012);     // z -0.012..0.032
+    const standard = new THREE.BoxGeometry(0.05, 0.6, 0.46), armrest = new THREE.BoxGeometry(0.085, 0.045, 0.4);
+    const cupHolder = new THREE.CylinderGeometry(0.038, 0.032, 0.05, 12, 1, true);
+    // the folding seat, hinged at its top back edge: cushion (plush) + the pan under it (dark), 0.44 deep along +z
+    const cushion = padGeo(0.48, 0.44, 0.07, 0.07, 0.02); cushion.rotateX(Math.PI / 2); cushion.translate(0, -0.02, 0);   // top at y 0, z 0..0.44
+    const pan = new THREE.BoxGeometry(0.44, 0.025, 0.38).toNonIndexed(); pan.translate(0, -0.125, 0.22);
+    const hinges = [];
 
     for (let r = 0; r < R_ROWS; r++) {
       const z0 = R_Z0 + r * R_STEP_Z, z1 = z0 + R_STEP_Z, y = -(r + 1) * R_DROP;
@@ -1022,26 +1131,31 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
         // solid tier block down to PIT_Y so aisle walls look closed from the ramp
         box(bankW, y - PIT_Y + 0.02, R_STEP_Z, tierFloorMat, bx, (y + PIT_Y) / 2 - 0.01, (z0 + z1) / 2);
         box(bankW, R_DROP + 0.02, 0.04, riserMat, bx, y + R_DROP / 2, z0 + 0.02);
-        // amber aisle step-edge marker light
+        // red aisle step-edge marker light
         const strip = glow(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.018, R_STEP_Z - 0.08), stepLightMat));
         strip.position.set(TX + s * (AISLE_HALF + 0.04), y + 0.01, (z0 + z1) / 2); scene.add(strip);
 
         // 4 seats per bank in this row (facing +z toward the screen)
-        const seatPitch = 0.62, bankInner = TX + s * (AISLE_HALF + 0.48);
+        const seatPitch = 0.62, bankInner = TX + s * (AISLE_HALF + 0.48), sz = z0 + 0.36;
+        for (let k = 0; k <= 4; k++) {                 // 5 standards: one each side of every seat, shared between neighbours
+          const ax = bankInner + s * (k - 0.5) * seatPitch;
+          pushGeo(darkGeos, standard, ax, y + 0.3, sz - 0.03);
+          pushGeo(woodGeos, armrest, ax, y + 0.625, sz - 0.05);
+          pushGeo(darkGeos, cupHolder, ax, y + 0.63, sz + 0.2);
+        }
         for (let k = 0; k < 4; k++) {
-          const sx = bankInner + s * k * seatPitch, sz = z0 + 0.36;
-          pushGeo(darkGeos, new THREE.BoxGeometry(0.44, 0.34, 0.05), sx, y + 0.17, sz);                 // pedestal
-          pushGeo(plushGeos, new THREE.BoxGeometry(0.48, 0.10, 0.44), sx, y + 0.39, sz + 0.03);         // cushion
-          pushGeo(plushGeos, new THREE.BoxGeometry(0.48, 0.52, 0.09), sx, y + 0.66, sz - 0.16, -0.12);  // angled backrest
-          pushGeo(woodGeos, new THREE.BoxGeometry(0.50, 0.50, 0.03), sx, y + 0.66, sz - 0.21, -0.12);   // wood back shell
-          for (const arm of [-0.24, 0.24]) pushGeo(darkGeos, new THREE.BoxGeometry(0.05, 0.04, 0.42), sx + arm, y + 0.54, sz + 0.02);
+          const sx = bankInner + s * k * seatPitch;
+          pushGeo(plushGeos, backPad, sx, y + 0.47, sz - 0.275, RECLINE);    // padded front, reclined
+          pushGeo(darkGeos, backShell, sx, y + 0.43, sz - 0.332, RECLINE);   // the plastic shell behind it
+          const seat = { x: sx, y, z: sz + 0.04, rowZ: z0 + 0.86 };
+          theaterSeats.push(seat);
+          hinges.push({ seat, x: sx, y: y + 0.45, z: sz - 0.19, a: 1, v: 0 });   // starts folded up
 
           // invisible pick target so aiming at any seat and pressing E sits you right there
           const seatHit = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.82, 0.52), hitMat);
           seatHit.position.set(sx, y + 0.42, sz);
           seatHit.userData.sit = true;
-          seatHit.userData.seatPos = { x: sx, y, z: sz + 0.04 };
-          theaterSeats.push({ x: sx, y, z: sz + 0.04, rowZ: z0 + 0.86 });
+          seatHit.userData.seatPos = seat;              // the same object as the theaterSeats entry: that's how a seat knows it's taken
           scene.add(seatHit); aimables.push(seatHit);
         }
         // row seat-back collider (leaves 0.72m legroom walkway in front of each row)
@@ -1055,9 +1169,14 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     scene.add(new THREE.Mesh(mergeGeometries(plushGeos), seatPlush));
     scene.add(new THREE.Mesh(mergeGeometries(darkGeos), seatDark));
     scene.add(new THREE.Mesh(mergeGeometries(woodGeos), seatWood));
+    thSeatFolds = hinges;
+    thCushions = new THREE.InstancedMesh(mergeGeometries([cushion, pan], true), [seatPlush, seatDark], hinges.length);
+    thCushions.frustumCulled = false;                  // instances are spread over the whole house; the base geometry sits at the origin
+    hinges.forEach((_, i) => thSeatPose(i));
+    scene.add(thCushions);
 
     // acoustic wall drapery + warm brass wall sconces
-    const sconceMat = new THREE.MeshLambertMaterial({ color: 0xffe0a3, emissive: 0xff9d3b, emissiveIntensity: 0.85 });
+    const sconceMat = thSconceMat = new THREE.MeshLambertMaterial({ color: 0xffe0a3, emissive: 0xff9d3b, emissiveIntensity: 0.85 });
     for (const s of [-1, 1]) {
       const wx = TX + s * (TW / 2 - 0.12);
       for (let z = 35.2; z < 44.5; z += 2.2) {
@@ -1074,13 +1193,13 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     box(TW - 0.16, 0.05, TZ1 - ST_Z0 + 0.06, brass, TX, ST_Y + 0.025, (ST_Z0 + TZ1) / 2);
     colliders.push({ x0: TX0, x1: TX1, z0: ST_Z0 - 0.05, z1: TZ1, y0: PIT_Y, y1: ST_Y + 0.5 });
 
-    // stage curtains & valance framing the 5.1m x 3.4m screen
-    for (const s of [-1, 1]) box(1.35, TH - ST_Y, 0.22, curtainMat, TX + s * (TW / 2 - 0.72), (TH + ST_Y) / 2, 45.75);
+    // stage curtains & valance framing the 5.7m x 3.8m screen (3:2, the video canvas's shape), stage top to valance
+    for (const s of [-1, 1]) box(0.9, TH - ST_Y, 0.22, curtainMat, TX + s * (TW / 2 - 0.57), (TH + ST_Y) / 2, 45.75);   // inner edges ±3.08, just clear of the screen
     box(TW - 0.2, 0.55, 0.26, curtainMat, TX, TH - 0.28, 45.7);
-    box(5.34, 3.64, 0.08, mat.dark, TX, 1.1, 45.92);
+    box(5.94, 4.04, 0.08, mat.dark, TX, 1.05, 45.92);
 
-    theaterScreenMesh = glow(new THREE.Mesh(new THREE.PlaneGeometry(5.1, 3.4), mat.dark));
-    theaterScreenMesh.position.set(TX, 1.1, 45.85);
+    theaterScreenMesh = glow(new THREE.Mesh(new THREE.PlaneGeometry(5.7, 3.8), mat.dark));
+    theaterScreenMesh.position.set(TX, 1.05, 45.85);
     theaterScreenMesh.rotation.y = Math.PI;          // faces -z toward the stadium seats
     scene.add(theaterScreenMesh);
     aimables.push(theaterScreenMesh);
@@ -1091,8 +1210,6 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const deckLbl = textPlane("THEATER VCR FEED", 0.42, 0.07, "#ffd400", "#14161a");
     deckLbl.position.set(TX, ST_Y + 0.08, ST_Z0 + 0.058); deckLbl.rotation.y = Math.PI; scene.add(deckLbl);
 
-    // projection booth ports + EXIT sign on the back wall (z = TZ0)
-    // projection booth ports + EXIT sign on the back wall (z = TZ0)
     // projection booth ports + volumetric projector beam + EXIT sign on the back wall (z = TZ0)
     box(1.4, 0.55, 0.06, mat.dark, TX + 1.8, 2.25, TZ0 + 0.12);
     for (const dx of [-0.35, 0.35]) {
@@ -1118,6 +1235,24 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
         map: beamTex, color: 0xfff8ee, transparent: true, opacity: 0.01,
         blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
       });
+      // sections of the picture ride the beam: aScr is where each vertex sits in
+      // the frame (0..1, top-left origin), and the fragment blends the 3x3 zone
+      // colors there — saturation pushed, since the zones are frame averages
+      projBeamMat.onBeforeCompile = sh => {
+        Object.assign(sh.uniforms, beamU);
+        sh.vertexShader = sh.vertexShader
+          .replace("#include <common>", "#include <common>\nattribute vec2 aScr; varying vec2 vScr;")
+          .replace("#include <begin_vertex>", "#include <begin_vertex>\nvScr = aScr;");
+        sh.fragmentShader = sh.fragmentShader
+          .replace("#include <common>", "#include <common>\nuniform vec3 uBeamZ[9]; uniform float uBeamOn; varying vec2 vScr;")
+          .replace("#include <map_fragment>", `#include <map_fragment>
+            vec2 g = clamp(vScr * 3.0 - 0.5, 0.0, 2.0);
+            ivec2 a = ivec2(floor(g)), b = min(a + 1, 2); vec2 f = g - vec2(a);
+            vec3 zc = mix(mix(uBeamZ[a.y * 3 + a.x], uBeamZ[a.y * 3 + b.x], f.x), mix(uBeamZ[b.y * 3 + a.x], uBeamZ[b.y * 3 + b.x], f.x), f.y);
+            zc = max(mix(vec3(dot(zc, vec3(0.2126, 0.7152, 0.0722))), zc, 3.0), 0.0);
+            zc *= 0.8 * inversesqrt(max(max(zc.r, max(zc.g, zc.b)), 0.01));   // brightness -> sqrt: dark sections dim, not black
+            diffuseColor.rgb *= mix(vec3(1.0), zc, uBeamOn);`);
+      };
       const P0 = new THREE.Vector3(TX + 1.45, 2.25, TZ0 + 0.16);
       const P1 = new THREE.Vector3(TX, 1.35, 45.85);
       const len = 8.5;                                           // stops mid-house so it never hangs over the screen
@@ -1133,7 +1268,16 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
         return g;
       });
       const cone = mergeGeometries(shells);
-      cone.translate(0, -len / 2, 0); cone.rotateX(-Math.PI / 2);
+      cone.translate(0, -len / 2, 0); cone.rotateX(-Math.PI / 2);   // axis now 0..len along +z, +z aimed at the screen
+      {                                                      // frame position per vertex, against the outer shell's radius there
+        const p = cone.attributes.position, scr = new Float32Array(p.count * 2);
+        for (let i = 0; i < p.count; i++) {
+          const R = 0.075 + 1.175 * p.getZ(i) / len;
+          scr[i * 2] = 0.5 - 0.5 * p.getX(i) / R;            // local +x is world +x: the audience's left
+          scr[i * 2 + 1] = 0.5 - 0.5 * p.getY(i) / R;        // +y up = top of the frame
+        }
+        cone.setAttribute("aScr", new THREE.BufferAttribute(scr, 2));
+      }
       const beam = new THREE.Mesh(cone, projBeamMat);
       beam.position.copy(P0); beam.lookAt(P1);
       beam.userData.clearToBloom = true;
@@ -1144,6 +1288,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       scene.add(lens);
     }
     const exitSign = glow(textPlane("EXIT", 0.46, 0.18, "#ffffff", "#b3121d", "Arial Black", 76));
+    exitSign.position.set(TX, DOOR_H + 0.25, TZ0 + WALL_T / 2 + 0.02); scene.add(exitSign);   // over the door, facing the seats
   }
   // fluorescent troffers: fixtures taking the place of one ceiling
   // tile each (snapped into its slot). Mostly one glowing white rectangle —
@@ -1507,9 +1652,10 @@ let returnSlotMesh;                          // the E target for the returns cou
 let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
 let flapPivot, flapGate, flapCollider;        // the counter pass-through: lift-up leaf + swinging half gate, set below
 let posScreen;                                // the register monitor's glass (pos.js mirrors its terminal onto it)
-// the counter's VHS rewinder (model built with the register, logic near the
-// rewind policy): tape = the copy inside, f0/dur/t = rewind progress
-const rewinder = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null };
+// the counter's VHS rewinders (models built with the counter, logic near the
+// rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
+const rewinders = [];
+const DESENS_AT = { x: -4.95, z: 3.92 };       // the desensitizer pad, beside the register
 let gateLed;                                  // the security gates' status LED material
 let desensLed;                                // the desensitizer pad's LED (flashes green when a tag is killed)
 const GATE_Z = 4.0;                           // security gate line across the entry lane (|x| < 2)
@@ -1647,10 +1793,12 @@ const GATE_Z = 4.0;                           // security gate line across the e
     cord.rotation.y = 0.55;
     pos.traverse(o => { if (o.isMesh) { o.userData.pos = true; aimables.push(o); } });   // E anywhere on it logs in
   }
-  // tape rewinder: the classic little sports-car shaped one. Faces the
-  // employee side like the register; a loaded tape rides in its open roof
-  {
-    const g = new THREE.Group(); g.position.set(-4.5, 1.08, 3.95); g.rotation.y = Math.PI; scene.add(g);
+  // tape rewinders: the classic little sports-car shaped ones, a pair on the
+  // lane counter either side of the returns tote (placed below, once RZ is
+  // known). Each faces the employee side; a loaded tape rides in its open roof
+  function buildRewinder(x, z, ry) {
+    const rw = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null };
+    const g = new THREE.Group(); g.position.set(x, TOP, z); g.rotation.y = ry; scene.add(g);
     const red = new THREE.MeshPhongMaterial({ color: 0xc41e1e, specular: 0xffffff, shininess: 80 });
     const blackP = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
     const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
@@ -1661,11 +1809,11 @@ const GATE_Z = 4.0;                           // security gate line across the e
       const w = add(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16), blackP, x, 0.03, z); w.rotation.x = Math.PI / 2;
     }
     for (const z of [-0.045, 0.045]) add(new THREE.BoxGeometry(0.01, 0.015, 0.03), new THREE.MeshBasicMaterial({ color: 0xfff6c8 }), 0.235, 0.045, z);   // headlights
-    rewinder.led = add(new THREE.BoxGeometry(0.012, 0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x222222 }), -0.02, 0.06, 0.077);   // status LED on the side
-    glow(rewinder.led);
-    rewinder.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.1 + TAPE.w / 2, 0);   // lies flat in the roof
-    rewinder.tapeMesh.rotation.y = Math.PI / 2; rewinder.tapeMesh.visible = false;
-    g.traverse(o => { if (o.isMesh) { o.userData.rewinder = true; aimables.push(o); } });
+    rw.led = glow(add(new THREE.BoxGeometry(0.012, 0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x222222 }), -0.02, 0.06, 0.077));   // status LED on the side
+    rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.1 + TAPE.w / 2, 0);   // lies flat in the roof
+    rw.tapeMesh.rotation.y = Math.PI / 2; rw.tapeMesh.visible = false;
+    g.traverse(o => { if (o.isMesh) { o.userData.rewinder = rw; aimables.push(o); } });
+    rewinders.push(rw);
   }
 
   // ---- returns: a stainless drop slot on the lane face, into a tote in the cubby behind ----
@@ -1675,6 +1823,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
   box(0.008, 0.05, 0.38, mat.dark, RX + CD / 2 + 0.014, 0.86, RZ);                                // the slot
   returnSlotMesh = box(0.02, 0.07, 0.4, chromeC, RX + CD / 2 + 0.02, 0.9, RZ);                     // its hinged lip — the E target from the lane
   returnSlotMesh.userData.returns = true; aimables.push(returnSlotMesh);
+  for (const dz of [-0.46, 0.46]) buildRewinder(RX - 0.12, RZ + dz, -Math.PI / 2);   // on the worktop over the tote, clear of the ledge; local +z (its face) = world -x, the employee side
   const drop = textPlane("DROP TAPES HERE", 0.44, 0.07, "#1a1d22", "#e8ecf0", "Arial", 64);
   drop.material = new THREE.MeshLambertMaterial({ map: drop.material.map });
   drop.position.set(RX + CD / 2 + 0.013, 0.73, RZ); drop.rotation.y = Math.PI / 2; scene.add(drop);
@@ -1729,16 +1878,17 @@ const GATE_Z = 4.0;                           // security gate line across the e
   const put = (geo, m, x, y, z, parent = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
   const beigeP = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), blackC = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
   // receipt printer beside the register, paper curling out the top
-  put(new THREE.BoxGeometry(0.16, 0.12, 0.2), beigeP, -5.0, TOP + 0.06, 3.98);
-  put(new THREE.BoxGeometry(0.1, 0.006, 0.05), blackC, -5.0, TOP + 0.123, 3.93);
-  const paper = put(new THREE.CylinderGeometry(0.05, 0.05, 0.075, 16, 1, true, 0, Math.PI * 0.8), new THREE.MeshLambertMaterial({ color: 0xfbfbf6, side: THREE.DoubleSide }), -5.0, TOP + 0.15, 3.9);
+  const PRN = -4.45;                          // the receipt printer: past the desensitizer, where the rewinder used to sit
+  put(new THREE.BoxGeometry(0.16, 0.12, 0.2), beigeP, PRN, TOP + 0.06, 3.98);
+  put(new THREE.BoxGeometry(0.1, 0.006, 0.05), blackC, PRN, TOP + 0.123, 3.93);
+  const paper = put(new THREE.CylinderGeometry(0.05, 0.05, 0.075, 16, 1, true, 0, Math.PI * 0.8), new THREE.MeshLambertMaterial({ color: 0xfbfbf6, side: THREE.DoubleSide }), PRN, TOP + 0.15, 3.9);
   paper.rotation.z = Math.PI / 2;
   // security-tag deactivator pad (the "desensitizer"): tapes run across it before they leave
-  const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, -3.95, TOP + 0.0125, 3.92);
-  desensLed = glow(put(new THREE.BoxGeometry(0.012, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xff3020 }), -3.83, TOP + 0.028, 3.84));
+  const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, DESENS_AT.x, TOP + 0.0125, DESENS_AT.z);   // right beside the register
+  desensLed = glow(put(new THREE.BoxGeometry(0.012, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xff3020 }), DESENS_AT.x + 0.12, TOP + 0.028, DESENS_AT.z - 0.08));
   padMesh.userData.desens = true; aimables.push(padMesh);
   const deac = textPlane("DESENSITIZE", 0.2, 0.04, "#ddd", "#151515", "Arial", 60);
-  deac.material = new THREE.MeshLambertMaterial({ map: deac.material.map }); deac.position.set(-3.97, TOP + 0.026, 3.92); deac.rotation.x = -Math.PI / 2; deac.rotation.z = Math.PI; scene.add(deac);
+  deac.material = new THREE.MeshLambertMaterial({ map: deac.material.map }); deac.position.set(DESENS_AT.x - 0.02, TOP + 0.026, DESENS_AT.z); deac.rotation.x = -Math.PI / 2; deac.rotation.z = Math.PI; scene.add(deac);
   // cash drawer under the register, on the employee face: slides out (toward
   // the clerk) when a sale's rung up, a till of bills and coins inside
   {
@@ -2321,7 +2471,8 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
 }
 
 // ---------------- posters on the walls ----------------
-const marquee = [];   // flashing bulbs around the posters: { mat, phase }
+const marquee = [];   // flashing bulbs around the posters: { mesh, phases } — one InstancedMesh per poster, a color per bulb
+const bulbTmp = new THREE.Color();
 const posterMats = [];                     // lamps-out mode: posters glow faintly under their marquees
 // the marquee's warm spill on the wall around each poster: one shared soft
 // halo texture, additively blended — a real point light per poster (~21 of
@@ -2334,7 +2485,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
   // chosen by fetch-covers.mjs: top movies + a few top non-cartoon shows
   const picks = (window.VAULT_POSTERS || []).map(art => ({ art }));
   const loader = new THREE.TextureLoader();
-  const bulbGeo = new THREE.SphereGeometry(0.022, 6, 5);
+  const bulbGeo = new THREE.SphereGeometry(0.022, 6, 5), bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff });   // white: the instance colors carry the chase
   const pts = [];                          // bulb ring around one poster, wall-local coords
   for (let j = 0; j < 7; j++) { pts.push([-0.485 + (j + 0.5) * 0.97 / 7, 0.695]); pts.push([-0.485 + (j + 0.5) * 0.97 / 7, -0.695]); }
   for (let j = 0; j < 9; j++) { pts.push([-0.485, -0.695 + (j + 0.5) * 1.39 / 9]); pts.push([0.485, -0.695 + (j + 0.5) * 1.39 / 9]); }
@@ -2348,11 +2499,10 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
       const pm = new THREE.MeshLambertMaterial({ map: t, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: t });
       posterMats.push(pm);
       g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.31), pm));
-      pts.forEach(([px, py], j) => {
-        const bm = new THREE.MeshBasicMaterial({ color: 0xffd400 });
-        const b = glow(new THREE.Mesh(bulbGeo, bm)); b.position.set(px, py, 0.04); g.add(b);
-        marquee.push({ mat: bm, phase: i * 1.3 + j * 0.55 });
-      });
+      const bulbs = glow(new THREE.InstancedMesh(bulbGeo, bulbMat, pts.length)), bd = new THREE.Object3D();
+      pts.forEach(([px, py], j) => { bd.position.set(px, py, 0.04); bd.updateMatrix(); bulbs.setMatrixAt(j, bd.matrix); bulbs.setColorAt(j, bulbTmp.set(0xffd400)); });
+      g.add(bulbs);
+      marquee.push({ mesh: bulbs, phases: pts.map((_, j) => i * 1.3 + j * 0.55) });
       // the bulbs' warm spill on the wall around it (see haloMat)
       const halo = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.1), haloMat); halo.position.z = -0.046; g.add(halo);
       scene.add(g);
@@ -2855,7 +3005,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     const n = copiesFor(ts, bays[gi] * CAP), stock = [];
     ts.forEach((t, i) => {
       t.copies = [];
-      for (let k = 0; k < n[i]; k++) { const c = k ? Object.create(t) : t; if (k) t.copies.push(c); stock.push(c); }   // a copy is the same tape in every way but where it sits
+      for (let k = 0; k < n[i]; k++) { const c = k ? newCopy(t) : t; if (k) t.copies.push(c); stock.push(c); }   // a copy is the same tape in every way but where it sits
     });
     sweep.push(...stock.reverse());
   });
@@ -2929,7 +3079,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   // most-voted titles get a second copy (side by side) until it's ~90% stocked
   const secondCopies = (ts, slots) => {
     const extra = new Set([...ts].sort((a, b) => votesOf(b) - votesOf(a)).slice(0, Math.max(0, Math.floor(slots * 0.9) - ts.length)));
-    return ts.flatMap(t => extra.has(t) ? [t, (() => { const c = Object.create(t); (t.copies ||= []).push(c); return c; })()] : [t]);
+    return ts.flatMap(t => extra.has(t) ? [t, (() => { const c = newCopy(t); (t.copies ||= []).push(c); return c; })()] : [t]);
   };
   const classicsBays = layBlock(classics, WALL_GENRES, blockRuns([classicsFrom, classicsFrom + 1], -CENTER.corridor, -1, CENTER.westBays), SHORT, {}, secondCopies);
   for (let b = 0; b < CENTER.bands - 1; b++) {           // a ceiling CRT cluster at each outer end of the aisle behind each band
@@ -2963,7 +3113,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     return all.slice(a - 1, b);
   };
   const slots = STAFF_ROWS.flatMap(row => {                // one copy each, padded out to a full shelf row
-    const ts = row.flatMap(tapesNamed).slice(0, SHORT.perRow).map(t => { const c = Object.create(t); (t.copies ||= []).push(c); return c; });
+    const ts = row.flatMap(tapesNamed).slice(0, SHORT.perRow).map(t => { const c = newCopy(t); (t.copies ||= []).push(c); return c; });
     return [...ts, ...Array(SHORT.perRow - ts.length).fill(null)];
   });
   const px0 = -pickW * BAY.len / 2;
@@ -4021,7 +4171,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = false, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false;
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -4040,7 +4190,29 @@ function toggleFlap() {
   else if (!flapOpen && i < 0) colliders.push(flapCollider);   // back down — flush with the counters again
 }
 function playerIn(c) { return player.x > c.x0 - player.r && player.x < c.x1 + player.r && player.z > c.z0 - player.r && player.z < c.z1 + player.r; }
+// a push door: whoever's in the doorway (you, a customer, Dana) swings it away
+// from the side they came in on; once they're through it springs shut, swinging
+// past center a few times before it settles, like a real double-acting door
+function pushDoorTick(d, dt) {
+  dt = Math.min(dt, 0.05);
+  const bodies = [[player.x, player.z]];
+  for (const k of custs) if (k.c) bodies.push([k.c.group.position.x, k.c.group.position.z]);
+  if (emp.c) bodies.push([emp.c.group.position.x, emp.c.group.position.z]);
+  let near = null;                              // across-the-wall offset of whoever's closest to the threshold
+  for (const [x, z] of bodies) {
+    const along = (d.alongX ? x : z) - d.c, across = (d.alongX ? z : x) - d.at;
+    if (Math.abs(along) < DOOR_W / 2 + 0.2 && Math.abs(across) < 0.8 && (near === null || Math.abs(across) < Math.abs(near))) near = across;
+  }
+  if (near === null) d.side = 0;
+  else if (!d.side) d.side = -Math.sign(near) || 1;   // opens away from them; holds that way until the doorway's clear
+  const target = d.side ? Math.PI / 2 * 0.95 * d.hinge * (d.alongX ? d.side : -d.side) : 0;
+  d.v += ((d.side ? 90 : 30) * (target - d.a) - (d.side ? 16 : 2.2) * d.v) * dt;   // pushed: quick and firm; let go: a loose spring
+  d.a += d.v * dt;
+  if (!d.side && Math.abs(d.a) < 0.002 && Math.abs(d.v) < 0.01) { d.a = 0; d.v = 0; }
+  d.pivot.rotation.y = d.base + d.a;
+}
 function toggleDoor(d) {
+  if (d.push) return;                        // push doors aren't opened, they're walked through
   if (d.locked) { d.rattle = 0.35; return; }   // just jiggles in its frame
   const next = d.open ? d.shut : d.openBox;
   if (playerIn(next)) return;                // you're standing where it would swing to
@@ -4443,7 +4615,7 @@ function custStep(cust, dt) {
       p.y = floorHeightAt(p.x, p.z);
       cust.ry = Math.atan2(dx, dz);
       // open any unlocked closed door right in front of them
-      for (const door of doors) if (!door.open && !door.locked) {
+      for (const door of doors) if (!door.open && !door.locked && !door.push) {
         const dcx = (door.shut.x0 + door.shut.x1) / 2, dcz = (door.shut.z0 + door.shut.z1) / 2;
         if (Math.hypot(p.x - dcx, p.z - dcz) < 1.1) toggleDoor(door);
       }
@@ -4589,11 +4761,11 @@ function custStep(cust, dt) {
 // back to the register once the bin's empty (or when you tell her).
 const EMP_POST = { x: -5.45, z: 3.2, ry: 0 };                      // behind the register, facing the customer side
 const EMP_TOTE = { x: -3.05, z: 4 - 0.35 - 1.05, ry: Math.PI / 2 }; // behind the returns slot, at the tote
-const EMP_REWIND = { x: -4.5, z: 3.2, ry: 0 };                      // at the rewinder
+const EMP_REWIND = EMP_TOTE;                                         // the rewinders sit on the counter right over the tote
 const EMP_ARMFUL = 10;                                              // returns she takes out per trip
-const emp = { coT: 0, coReached: false, c: null, task: "register", state: "", path: [], ry: 0, face: 0, t: 0, ringT: 0, alarmT: 0, carry: [], rewinding: null, openedFlap: false, stuck: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
+const emp = { coT: 0, coReached: false, c: null, task: "register", state: "", path: [], ry: 0, face: 0, t: 0, ringT: 0, alarmT: 0, carry: [], rewinding: [], openedFlap: false, stuck: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
 function empCoTarget(at) {                     // where Dana's hand goes for each checkout step
-  if (at === "pad") return new THREE.Vector3(-3.95, 1.12, 3.9);
+  if (at === "pad") return new THREE.Vector3(DESENS_AT.x, 1.12, DESENS_AT.z - 0.02);
   if (at === "register") return co?.i >= CO_STEPS.findIndex(q => q.id === "ring") ? cashDrawer.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, -0.3)) : new THREE.Vector3(-5.45, 1.12, 3.8);   // the drawer / the keyboard
   const q = co.cust.c.group.position; return new THREE.Vector3(q.x, 1.2, 3.95);   // over the counter, where their hand meets hers
 }
@@ -4644,7 +4816,7 @@ function empBackToRegister(msg) {
   emp.paused = false;
   const c = emp.c;
   returnBin.push(...emp.carry); emp.carry = []; refreshReturnsBin();   // anything still in hand goes back in the tote
-  emp.rewinding = null;                            // (a tape in the rewinder stays there for whoever's next)
+  emp.rewinding = [];                              // (a tape in a rewinder stays there for whoever's next)
   c.holdTape(0); c.setPose("idle"); c.reachTo(null); c.setMood(msg ? "happy" : "neutral");
   emp.task = "register"; empGo("toPost", EMP_POST);
   if (msg) toast(msg, true);
@@ -4773,7 +4945,7 @@ function empTick(dt) {
         } else emp.ringT = 0;
         const mine = co?.by === "dana" && co.cust.c;
         // she shuffles over to the pad for the desensitize step and back after — never leans across for it
-        const wantX = mine && coStep()?.at === "pad" ? -4.2 : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // home = wherever she parked (beside you, if you're on her spot)
+        const wantX = mine && coStep()?.at === "pad" ? DESENS_AT.x : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // home = wherever she parked (beside you, if you're on her spot)
         if (Math.abs(gap) > 0.02) { const st = Math.sign(gap) * Math.min(Math.abs(gap), 1.0 * dt); p.x += st; speed = 1.0; }
         if (mine) {                                // chatting while she works: faces them, nods, smiles
           c.talk(true);
@@ -4873,20 +5045,24 @@ function empTick(dt) {
         c.reachTo(new THREE.Vector3(EMP_TOTE.x + 0.55, 0.8, EMP_TOTE.z)); emp.state = "grab"; emp.t = 0.9; break;   // down into the tote
       case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-EMP_ARMFUL); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
       case "toRewinder": emp.state = "rewind"; break;
-      case "rewind": {
-        const t = emp.carry.find(x => !isRewound(x));
-        if (emp.rewinding && rewinder.tape !== emp.rewinding) {   // someone else took it out: it's theirs now
-          emp.carry.splice(emp.carry.indexOf(emp.rewinding), 1); emp.rewinding = null; empNext(); break;
+      case "rewind": {                              // both machines at once if she's got the tapes for it
+        for (const t of [...emp.rewinding]) if (!rewinders.some(rw => rw.tape === t)) {   // someone else took it out: it's theirs now
+          emp.carry.splice(emp.carry.indexOf(t), 1); emp.rewinding.splice(emp.rewinding.indexOf(t), 1);
         }
-        if (!emp.rewinding) {
-          if (!t) { empNext(); break; }
-          if (rewinder.tape) { c.setMood("impatient"); break; }   // somebody's tape is in there: wait for it
-          rewinderLoad(t); emp.rewinding = t; c.reachTo(rewinder.tapeMesh.getWorldPosition(new THREE.Vector3())); emp.t = 0.8; c.setMood("wait");
-          c.holdTape(Math.min(3, emp.carry.length - 1));
-        } else if (rewinder.done) {                // out it comes, rewound
-          rewinderSound(false); rewinder.tape = null; rewinder.tapeMesh.visible = false; rewinder.led.material.color.set(0x222222);
-          emp.rewinding = null; c.setMood("neutral"); empNext();
-        } else if (emp.t <= 0) { c.reachTo(null); c.setPose("hold"); }
+        if (emp.t > 0) break;                      // one hand, one tape at a time
+        const out = rewinders.find(rw => rw.done && emp.rewinding.includes(rw.tape));
+        if (out) {                                 // out it comes, rewound
+          emp.rewinding.splice(emp.rewinding.indexOf(out.tape), 1); c.reachTo(out.tapeMesh.getWorldPosition(new THREE.Vector3()));
+          rewinderEmpty(out); emp.t = 0.5; c.setMood("neutral");
+          c.holdTape(Math.min(3, emp.carry.length - emp.rewinding.length)); break;
+        }
+        const t = emp.carry.find(x => !isRewound(x) && !emp.rewinding.includes(x)), free = rewinders.find(rw => !rw.tape);
+        if (t && free) {                           // in it goes
+          rewinderLoad(free, t); emp.rewinding.push(t); c.reachTo(free.tapeMesh.getWorldPosition(new THREE.Vector3())); emp.t = 0.8; c.setMood("wait");
+          c.holdTape(Math.min(3, emp.carry.length - emp.rewinding.length)); break;
+        }
+        if (!emp.rewinding.length) { if (t) c.setMood("impatient"); else { c.reachTo(null); empNext(); } break; }   // nothing of hers running: done, or both machines taken by someone else
+        c.reachTo(null); c.setPose("hold");        // waiting on the machines
         break;
       }
       case "toShelf": c.reachTo(emp.target.pos); emp.state = "shelve"; emp.t = 0.9; break;   // into its own slot
@@ -4976,6 +5152,28 @@ function coWants(at) {
   if (s.id === "desens" && at === "customer") return CO_STEPS.find(q => q.id === "cash");   // you can skip the pad... the gates won't
   return null;
 }
+// the desensitizer works any time. Mid-checkout, from taking their tapes until
+// you hand them back, it does theirs, whatever step you're on (skip it for the
+// cash, come back after the change); otherwise the next live tape you're
+// carrying, the one in hand first. -> { tape, of, co } | {} (all done) | null (nothing to do it to)
+function padTarget() {
+  const count = list => list.length > 1 ? ` (${list.filter(t => t.desens).length + 1} of ${list.length})` : "";
+  if (co?.by === "player" && co.i > CO_STEPS.findIndex(q => q.id === "tapes") && co.cust.tapes.length) {
+    const t = co.cust.tapes.find(t => !t.desens);
+    return t ? { tape: t, of: count(co.cust.tapes), co: true } : {};
+  }
+  const mine = [...new Set([held, ...inv.filter(e => e.kind === "tape").map(e => e.ref)])].filter(Boolean);
+  if (!mine.length) return null;
+  const t = mine.find(t => !t.desens);
+  return t ? { tape: t, of: count(mine) } : {};
+}
+function padUse() {
+  const p = padTarget();
+  if (!p?.tape) { toast(p ? "Everything in hand is already desensitized" : "Nothing to desensitize"); return; }
+  if (p.co && coStep()?.id === "desens") { coAct("pad"); return; }   // right on cue: the checkout moves along
+  desensitize(p.tape);
+  if (p.co) { co.idle = 0; coHud(); }             // out of order: same sale, the hand-held stack just updates
+}
 function coAct(at) {                              // do the current step if it happens at this spot
   const s = coWants(at); if (!s) return false;
   if (s !== coStep()) co.i = CO_STEPS.indexOf(s);     // jumped ahead past the pad
@@ -5033,7 +5231,7 @@ function posBeep(f) {
   } catch {}
 }
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = false; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (stool.carried) {                       // arms full: setting the stool down is the only thing E does
@@ -5087,9 +5285,9 @@ function pickHover() {
     else if (aim?.object.userData.door && aim.distance < 2.4) aimDoor = aim.object.userData.door;
     else if (aim?.object.userData.pos && aim.distance < 2.4) aimPOS = true;
     else if (aim?.object.userData.bell && aim.distance < 2.4) aimBell = true;
-    else if (aim?.object.userData.desens && aim.distance < 2.4 && (held || (co?.by === "player" && coWants("pad")))) aimDesens = true;
+    else if (aim?.object.userData.desens && aim.distance < 2.4) aimDesens = true;   // always usable (see padTarget)
     else if (aim?.object.userData.drawer && aim.distance < 2.4) aimDrawer = true;
-    else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || rewinder.tape)) aimRewinder = true;
+    else if (aim?.object.userData.rewinder && aim.distance < 2.4 && (held || aim.object.userData.rewinder.tape)) aimRewinder = aim.object.userData.rewinder;
     else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
     else if (aim?.object.userData.frontLock && aim.distance < 2.2) aimLock = true;
     else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
@@ -5106,9 +5304,9 @@ function pickHover() {
     else if (aimCooler) tip.innerHTML = `E — ${coolerOpen ? "close" : "open"} the cooler`;
     else if (aimFlap) tip.innerHTML = `E — ${flapOpen ? "close" : "open"} the counter pass-through`;
     else if (aimDoor) tip.innerHTML = aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`;
-    else if (aimRewinder) tip.innerHTML = !rewinder.tape ? `E — rewind ${held.title}${isRewound(held) ? " (already rewound)" : ""}`
-      : rewinder.done ? `E — take out ${rewinder.tape.title} · rewound`
-      : `Rewinding… ${Math.round(100 * rewinder.t / rewinder.dur)}% · E — take it out early`;
+    else if (aimRewinder) tip.innerHTML = !aimRewinder.tape ? `E — rewind ${held.title}${isRewound(held) ? " (already rewound)" : ""}`
+      : aimRewinder.done ? `E — take out ${aimRewinder.tape.title} · rewound`
+      : `Rewinding… ${Math.round(100 * aimRewinder.t / aimRewinder.dur)}% · E — take it out early`;
     else if (aimBell) tip.innerHTML = "E — ring for service";
     else if (aimEmp) tip.innerHTML = emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
       ? (returnBin.length ? `E — ask Dana to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `Dana<div class="cat">On the register · returns bin is empty</div>`)
@@ -5120,9 +5318,8 @@ function pickHover() {
     else if (aimCustomer) tip.innerHTML = `${co?.cust === aimCustomer ? (co.by === "player" && coWants("customer") ? `E — ${coWants("customer").tip()}` : co.by === "dana" ? "Dana's ringing them up" : `Next: ${coStep().tip()}`)
       : !co && ["wait", "impatient", "angry"].includes(aimCustomer.state) ? "E — take their member card" : "E — say hi"}<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
-    else if (aimDesens && co?.by === "player" && coWants("pad")) tip.innerHTML = `E — ${coWants("pad").tip()}`;
+    else if (aimDesens) { const p = padTarget(); tip.innerHTML = p?.tape ? `E — desensitize ${p.tape.title}${p.of}` : `Desensitizer<div class="cat">${p ? "everything in hand is desensitized" : "bring a tape over to desensitize it"}</div>`; }
     else if (aimDrawer) tip.innerHTML = co?.by === "player" && coWants("register") ? `E — ${coWants("register").tip()}` : "Cash drawer";
-    else if (aimDesens) tip.innerHTML = held.desens ? `${held.title} · already desensitized` : `E — desensitize ${held.title}`;
     else if (aimPOS && co?.by === "player" && coWants("register")) tip.innerHTML = `E — ${coWants("register").tip()}`;
     else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
     else { tip.style.display = "none"; return; }
@@ -5534,10 +5731,9 @@ function onE() {
   if (aimLock) { setFrontLock(!frontLock.locked); toast(frontLock.locked ? "Front doors locked — no new customers" : "Front doors unlocked — open for business", true); return; }   // stays in your arms if it won't fit there
   if ((aimPOS || aimDrawer) && co?.by === "player" && coAct("register")) return;   // mid-checkout: tap the card / ring it up
   if (aimPOS) { openPOS(); return; }
-  if (aimRewinder) { rewinderUse(); return; }
+  if (aimRewinder) { rewinderUse(aimRewinder); return; }
   if (aimBell) { dingBell(); return; }
-  if (aimDesens && co?.by === "player" && coAct("pad")) return;
-  if (aimDesens) { desensitize(held); return; }
+  if (aimDesens) { padUse(); return; }
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
   if (aimDoor) { toggleDoor(aimDoor); return; }
@@ -5696,7 +5892,7 @@ function saveState() {
     lights: zoneOn, timeOfDay: tod.i, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
-    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), returns: returnBin.map(copyKey), rewinder: rewinder.tape && copyKey(rewinder.tape),
+    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), returns: returnBin.map(copyKey), rewinders: rewinders.map(rw => rw.tape && copyKey(rw.tape)),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
@@ -5726,8 +5922,10 @@ function loadState(S) {
     for (const k of S.lost || []) { const c = copyByKey(k); if (c) { c.lost = true; setOnShelf(c, false); } }
     for (const c of (S.returns || []).map(copyByKey).filter(Boolean)) { setOnShelf(c, false); returnBin.push(c); }
     refreshReturnsBin();
-    const rw = S.rewinder && copyByKey(S.rewinder);
-    if (rw) { setOnShelf(rw, false); rewinderLoad(rw); }   // picks up rewinding from wherever it had got to
+    (S.rewinders || [S.rewinder]).forEach((k, i) => {   // (older saves had the one)
+      const c = k && copyByKey(k);
+      if (c && rewinders[i]) { setOnShelf(c, false); rewinderLoad(rewinders[i], c); }   // picks up rewinding from wherever it had got to
+    });
     const units = snackUnits();
     for (const it of S.inv || []) {          // re-pick each item up in order, exactly as if you'd grabbed it
       const c = it.kind === "tape" && copyByKey(it.key), u = it.kind === "snack" && units[it.i];
@@ -5755,6 +5953,58 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) saveS
 
 // ---------------- main loop ----------------
 const clock = new THREE.Clock();
+// ---------------- room culling ----------------
+// three.js only culls what's outside the camera's view, not what's behind a
+// wall, so from the lobby it still drew the whole store. Every static object
+// sits in one room (by its bounding box; anything straddling two stays
+// always-on) under that room's group, and a room is drawn only if you're in
+// it or can see into it: the hall is open to the store, the store to the
+// street, and the lobby and auditorium only while their push doors swing open.
+// Lights and anything that moves (you, Dana, customers, the stool, the
+// standee) are left alone
+const ROOMS = ["out", "store", "boh", "lobby", "theater"];
+const roomGroups = Object.fromEntries(ROOMS.map(r => { const g = new THREE.Group(); scene.add(g); return [r, g]; }));
+function roomAt(x, z) {
+  if (z < 0 || x < WALL_L || x > STORE.x) return "out";
+  if (z < STORE.z) return "store";
+  if (z < BOH.z1) return x >= BOH.x0 ? "boh" : "lobby";
+  return "theater";
+}
+const roomBox = new THREE.Box3(), roomSeen = new WeakSet(), roomGroupSet = new Set(Object.values(roomGroups));
+function roomOf(o) {
+  roomBox.setFromObject(o); if (roomBox.isEmpty()) return null;
+  const { min, max } = roomBox, e = 0.05;
+  const rs = new Set([roomAt(min.x + e, min.z + e), roomAt(max.x - e, min.z + e), roomAt(min.x + e, max.z - e), roomAt(max.x - e, max.z - e)]);
+  return rs.size === 1 ? [...rs][0] : null;
+}
+function roomSort() {                          // file new top-level objects into their rooms (posters load late, so this runs a few times)
+  const movers = new Set([me.group, stool.g, cutout.g, emp.c?.group, ...custs.map(k => k.c?.group)]);
+  for (const o of [...scene.children]) {
+    if (roomSeen.has(o) || roomGroupSet.has(o)) continue;
+    roomSeen.add(o);
+    if (movers.has(o)) continue;
+    let skip = false; o.traverse(k => { if (k.isLight || k.isCamera) skip = true; });   // hiding a light would change everyone's lighting (and recompile shaders)
+    if (skip) continue;
+    const r = roomOf(o); if (r) roomGroups[r].add(o);   // the room groups sit at the origin: world transforms don't change
+  }
+}
+const roomFrustum = new THREE.Frustum(), roomProj = new THREE.Matrix4(), roomPort = new THREE.Vector3();
+const roomSortAt = [0.5, 2, 5, 10, 20];       // seconds in
+let hallDoor, cinemaDoor;
+function regionTick() {
+  if (roomSortAt.length && clockT >= roomSortAt[0]) { roomSortAt.shift(); roomSort(); }
+  hallDoor ??= doors.find(d => d.push && !d.alongX); cinemaDoor ??= doors.find(d => d.push && d.alongX);
+  const open = d => !d || Math.abs(d.a) > 0.01;
+  let nearPort = false;                          // the hall door's porthole is a window, shut or not: it counts as open while it's close and on screen
+  if (hallDoor && Math.hypot(camera.position.x - hallDoor.at, camera.position.z - hallDoor.c) < 8) {
+    camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
+  }
+  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor)]];
+  const seen = new Set([roomAt(camera.position.x, camera.position.z)]);
+  for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
+  for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
+}
 let clockT = 0;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -5769,9 +6019,13 @@ renderer.setAnimationLoop(() => {
   }
   document.body.classList.toggle("idle", performance.now() - lastActive > 2500);
   clockT += dt;
-  for (const b of marquee) {              // marquee chase around the posters
-    const v = 0.5 + 0.5 * Math.sin(clockT * 7 + b.phase);
-    b.mat.color.setRGB(0.3 + 0.7 * v, 0.27 + 0.62 * v, 0.03 + 0.09 * v);
+  for (const m of marquee) {              // marquee chase around the posters
+    if (!m.mesh.parent?.parent?.visible) continue;   // its room's culled (see regionTick)
+    m.phases.forEach((ph, j) => {
+      const v = 0.5 + 0.5 * Math.sin(clockT * 7 + ph);
+      m.mesh.setColorAt(j, bulbTmp.setRGB(0.3 + 0.7 * v, 0.27 + 0.62 * v, 0.03 + 0.09 * v));
+    });
+    m.mesh.instanceColor.needsUpdate = true;
   }
   exteriorTick(dt);
   const cloudSpan = (STORE.x + 20) - (WALL_L - 20);
@@ -5798,11 +6052,11 @@ renderer.setAnimationLoop(() => {
   if (!playing) {
     screenMesh.material = tvMenu ? videoMat : screensaverMat;
     if (theaterScreenMesh) theaterScreenMesh.material = tvMenu ? videoMat : screensaverMat;
-  }  // menu over a blank screen when no tape's in
+  }                                               // menu over a blank screen when no tape's in
   if (tvMenu) {                                   // what the crosshair (the remote) is pointing at on the menu
     const hit = tvScreenHit();
     tvHover = hit ? tvMenuHit(hit.x, hit.y) : null;
-  }   // pauses whie a tape's actually in, like a real screensaver would
+  }   // pauses while a tape's actually in, like a real screensaver would
   lightingTick(dt);
   if (cashDrawer) cashDrawer.position.z += ((4 - 0.35 - 0.01 - drawerOpen * 0.26) - cashDrawer.position.z) * Math.min(1, dt * 12);   // till slides out toward the clerk
   for (const t of switchToggles) t.mesh.rotation.x += ((zoneOn[t.zone] ? -0.32 : 0.32) - t.mesh.rotation.x) * Math.min(1, dt * 25);   // rocker snaps up/down
@@ -5826,14 +6080,14 @@ renderer.setAnimationLoop(() => {
     tvBackGlow.color.copy(tvLight.avg); tvBackGlow.intensity = tvLight.base * (lightsOut ? 0.8 : 0.3);   // a hint of bleed, not a second light
     const crtBase = tvLight.base ? 0.9 : 0;   // ceiling CRTs tint/dim with whatever's actually playing
     crtGlows.forEach(cg => { cg.color.copy(tvLight.avg); cg.intensity = crtBase * (lightsOut ? 1.8 : 1); });
+    {                                              // theater sconces: up while nothing's showing, a slow fade out once a film runs
+      const want = playing && !video.paused ? 0 : 1, u = TVU.uThSconce;
+      u.value += Math.sign(want - u.value) * Math.min(Math.abs(want - u.value), dt / (want ? 2 : 6));   // 2 s up, 6 s down
+      if (thSconceMat) thSconceMat.emissiveIntensity = 0.85 * u.value;
+    }
     if (projBeamMat) {
-      if (tvLight.base) {
-        projBeamMat.color.copy(tvLight.avg).lerp(new THREE.Color(0xfff6e5), 0.45);
-        const luma = Math.max(projBeamMat.color.r, projBeamMat.color.g, projBeamMat.color.b, 0.01);
-        if (luma < 0.5) projBeamMat.color.multiplyScalar(0.5 / luma);
-      } else {
-        projBeamMat.color.setHex(0xd8e8ff);
-      }
+      beamU.uBeamOn.value = tvLight.base ? 1 : 0;              // playing: the shader tints by picture section
+      projBeamMat.color.setHex(tvLight.base ? 0xffffff : 0xd8e8ff);
       const lookBack = Math.max(0, (Math.cos(player.yaw) + 0.05) / 1.05);     // 0 when facing the screen, >0 when turning back
       const lookUp = Math.max(0, (player.pitch - 0.20) / 0.45);               // 0 at normal viewing pitch, >0 when looking up
       const attention = Math.min(1, Math.max(lookBack, lookUp));
@@ -5841,7 +6095,7 @@ renderer.setAnimationLoop(() => {
       const flicker = 0.95 + 0.05 * Math.sin(clockT * 44) * Math.cos(clockT * 19);
       projBeamMat.opacity = (0.004 + 0.09 * attention * attention) * darkRoom * flicker;
     }
-	if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
+    if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
   }
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
   flapPivot.rotation.z += ((flapOpen ? Math.PI / 2 * 0.97 : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
@@ -5849,6 +6103,7 @@ renderer.setAnimationLoop(() => {
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
   coolerThermo.tick(dt);
   for (const d of doors) {                   // doors ease open/closed; a locked one rattles briefly when tried
+    if (d.push) { pushDoorTick(d, dt); continue; }
     d.a += ((d.open ? d.openA : 0) - d.a) * Math.min(1, dt * 5);
     d.rattle = Math.max(0, d.rattle - dt);
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
@@ -5858,6 +6113,7 @@ renderer.setAnimationLoop(() => {
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
   stoolTick(dt);
+  thSeatTick(dt);
   meTick(dt);
   if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
   else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
@@ -5879,7 +6135,7 @@ renderer.setAnimationLoop(() => {
   empTick(dt);
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
-    handGroup.visible = !inspecting && !coHand.visible;   // hands full with a sale: your own tape waits        // 3D box only for the carried-at-your-side pose
+    handGroup.visible = !inspecting && !coHand.visible;   // 3D box only for the carried-at-your-side pose; hands full with a sale: your own tape waits
     handGroup.position.set(0.3, -0.28, -0.55); handGroup.rotation.set(0.05, -0.4, 0.06); handGroup.scale.setScalar(1);
   }
   $("inspect").style.display = inspecting ? "flex" : "none";
@@ -5895,10 +6151,11 @@ renderer.setAnimationLoop(() => {
     : seated
     ? "Press E to stand up · right-click the screen for picture settings"
     : aimCouch
-      ? "Press E to sit on the couch"
+      ? (aimSeatObj ? "Press E to take a seat" : "Press E to sit on the couch")
       : held
         ? `Press E to insert “${held.title}” into the TV`
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
+  regionTick();
   cullDarkLights(dt);
   renderWithBloom();
 });
@@ -5909,5 +6166,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
