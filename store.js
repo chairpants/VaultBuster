@@ -1980,6 +1980,15 @@ const GATE_Z = 4.0;                           // security gate line across the e
     const lbl = textPlane("HOLDS", 0.12, 0.035, "#222", "#fff59a", "Arial Black", 60); lbl.material = new THREE.MeshLambertMaterial({ map: lbl.material.map });
     lbl.position.set(-4.4, BHt + 0.0125, bz + 0.1); lbl.rotation.x = -Math.PI / 2; lbl.rotation.z = Math.PI; scene.add(lbl);
     HOLDS_AT.set(-4.4, BHt + 0.012, bz);
+    // Dana's job board: a little cork board on an easel, facing the register
+    const jb = new THREE.Group(); jb.position.set(-5.25, BHt, bz - 0.08); jb.rotation.x = -0.12; scene.add(jb);
+    const frame = put(new THREE.BoxGeometry(0.52, 0.36, 0.02), new THREE.MeshLambertMaterial({ color: 0x5a3b22 }), 0, 0.2, 0, jb);
+    const cork = put(new THREE.BoxGeometry(0.47, 0.31, 0.012), new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => {
+      g.fillStyle = "#b98a55"; g.fillRect(0, 0, w, h); for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(${90 + Math.random() * 60},${60 + Math.random() * 40},30,.35)`; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+      g.fillStyle = "#fff8c8"; g.fillRect(w * 0.08, h * 0.1, w * 0.84, h * 0.2); g.fillStyle = "#222"; g.font = `bold ${h * 0.12}px Arial`; g.textAlign = "center"; g.fillText("DANA'S JOBS", w / 2, h * 0.25);
+      ["#ffd6d6", "#d6f0ff", "#e3ffd6", "#fff0c8", "#f0d6ff", "#d6fff4"].forEach((c, i) => { g.fillStyle = c; g.fillRect(w * (0.08 + (i % 3) * 0.29), h * (0.4 + Math.floor(i / 3) * 0.28), w * 0.25, h * 0.22); });
+    }, 256, 170) }), 0, 0.2, 0.012, jb);
+    for (const m of [frame, cork]) { m.userData.jobBoard = true; aimables.push(m); }
   }
 
   const kind = textPlane("BE KIND, REWIND", 1.6, 0.55); kind.position.set(0, 3.1, 0.16);
@@ -4298,6 +4307,7 @@ let eHoldSwitch = null;                    // E went down on a multi-switch plat
 addEventListener("keydown", e => {
   if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
   if (shift.report) { if (["Enter", "Space", "KeyE"].includes(e.code) && !e.repeat) nextShift(); return; }   // the end-of-shift slip
+  if (board.open) { if (document.pointerLockElement === canvas) boardKey(e); return; }   // arranging Dana's jobs
   if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
     if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
     return;
@@ -4396,7 +4406,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -5269,6 +5279,7 @@ function empSpawn() {
 }
 function empGo(state, spot, avoidPlayer = false) {
   if (emp.fetch && !["fetchGo", "fetchBack", "repath"].includes(state)) empFetchDrop();   // called away mid-fetch: the tape goes back
+  if (emp.restock && !["stockGo", "stockTo", "repath"].includes(state)) danaRestockAbort();   // ...or the stock she's carrying
   if (STOOL_STATES.includes(emp.state) && !STOOL_STATES.includes(state)) empLeaveStool();
   const p = emp.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
@@ -5324,8 +5335,120 @@ function empFetchDrop() {                          // whatever she was fetching 
   if (f.hold && !f.hold.copy) f.hold.by = "you";   // (a hold she didn't get to is yours to do)
   emp.fetch = null;
 }
-function empSummon() {                           // the bell: drop what she's doing (tapes stay in hand), ring them up, then back to it
+// ---- Dana's job board, RimWorld style: each job gets a priority, 1 (first)
+// to 4, or off. Whenever she's free she takes the job with work at the best
+// priority (ties go in the board's order); a customer-facing job at a better
+// priority than what she's on pulls her off background work ----
+const JOBS = {
+  register: { name: "REGISTER", desc: "ring up customers, sign people up" },
+  phone: { name: "PHONES", desc: "answer calls, put holds aside" },
+  floor: { name: "FLOOR HELP", desc: "fetch what people ask for at the counter" },
+  returns: { name: "RETURNS", desc: "rewind and reshelve, fix misshelved tapes" },
+  restock: { name: "RESTOCK", desc: "fill the snack and drink racks from stock" },
+  cleanup: { name: "CLEANUP", desc: "litter, spills, cups in the theater" },
+};
+const JOB_DEFAULT = { register: 1, phone: 2, floor: 2, returns: 3, restock: 3, cleanup: 4 };
+const jobs = Object.keys(JOBS).map(id => ({ id, pri: SAVE?.jobs?.find?.(j => j.id === id)?.pri ?? JOB_DEFAULT[id] }));   // (the board's order is fixed; the priorities are yours)
+const jobPri = id => jobs.find(j => j.id === id)?.pri || 9;   // off counts as never
+const jobOrder = () => jobs.filter(j => j.pri).sort((a, b) => a.pri - b.pri || jobs.indexOf(a) - jobs.indexOf(b)).map(j => j.id);
+const FRONT_JOBS = ["register", "phone", "floor"];   // the customer-facing ones: these pull her off background work
+function jobHasWork(id) {
+  switch (id) {
+    case "register": return !!custWaiting() && (!co || co.by === "dana");
+    case "phone": return !!phone.ring && phone.ring.t > 6;
+    case "floor": return custAsks.some(k => k.state === "asking" && !k.danaOn && clockT - k.askAt > 20);
+    case "returns": return returnBin.length > 0 || strays.length > 0;
+    case "restock": return emptySpots().some(u => (backstock[u.userData.snack.name] || 0) > 0);
+    case "cleanup": return messes.length > 0;
+  }
+  return false;
+}
+const danaBestJob = (above = null) => { for (const id of jobOrder()) { if (above && jobPri(id) >= jobPri(above)) return null; if (jobHasWork(id)) return id; } return null; };   // above: only jobs at a strictly better priority
+const danaJobNow = () => emp.task === "returns" && !emp.paused ? "returns" : emp.restock ? "restock" : emp.mess ? "cleanup" : emp.fetch?.cust ? "floor" : emp.fetch?.hold ? "phone" : co?.by === "dana" ? "register" : null;
+function danaStartJob(id) {                       // from her post: off to do it
+  const c = emp.c, p = c.group.position;
+  if (id === "floor") { const k = custAsks.find(k => k.state === "asking" && !k.danaOn && clockT - k.askAt > 20); if (k) empFetch(k); return; }
+  if (id === "returns") { emp.task = "returns"; c.setMood("happy"); returnBin.length ? empGo("toTote", EMP_TOTE) : empNext(); return; }
+  if (id === "restock") { danaRestockStart(); return; }
+  if (id === "cleanup") {
+    const m = messes.reduce((a, b) => Math.hypot(b.x - p.x, b.z - p.z) < Math.hypot(a.x - p.x, a.z - p.z) ? b : a);
+    emp.mess = m; c.setMood("neutral"); empGo("toMess", { x: m.x + 0.45, z: m.z, ry: -Math.PI / 2 });
+  }
+}
+function danaPreempt() {                          // something customer-facing (and ranked above what she's on) needs her
+  const now = danaJobNow(); if (!now || FRONT_JOBS.includes(now)) return;
+  for (const id of jobOrder()) {
+    if (jobPri(id) >= jobPri(now)) return;
+    if (!FRONT_JOBS.includes(id) || !jobHasWork(id)) continue;
+    if (now === "returns") empSummon(true);
+    else if (now === "restock") { danaRestockAbort(); empGo("toPost", EMP_POST); }
+    return;                                       // (cleanup is quick: she finishes it)
+  }
+}
+// ---- restock: from the cupboard to the racks, up to 6 at a time ----
+function danaRestockStart() {
+  const need = emptySpots().filter(u => (backstock[u.userData.snack.name] || 0) > 0); if (!need.length) return;
+  const drinks = need.filter(u => isDrink(u.userData.snack)), food = need.filter(u => !isDrink(u.userData.snack)), kind = drinks.length >= food.length ? "drinks" : "food";
+  const units = (kind === "drinks" ? drinks : food).slice(0, 6);
+  emp.restock = { kind, units, got: [], n: 0 }; emp.c.setMood("neutral");
+  empGo("stockGo", cupboardSpot(kind));
+}
+function cupboardSpot(kind) {                     // in front of that kind's cupboard doors, on the staff side
+  const doorsOf = aimables.filter(m => m.userData.stock === kind && m.geometry?.parameters?.width > 0.4), v = new THREE.Vector3(), n = new THREE.Vector3();
+  const d = doorsOf[Math.floor(doorsOf.length / 2)] || doorsOf[0];
+  d.getWorldPosition(v); n.set(0, 0, -1).applyQuaternion(d.getWorldQuaternion(new THREE.Quaternion()));
+  return { x: v.x + n.x * 0.6, z: v.z + n.z * 0.6, ry: Math.atan2(-n.x, -n.z), door: v.clone() };
+}
+function unitSpot(u) {                            // standing in front of a rack spot, facing it
+  const v = u.getWorldPosition(new THREE.Vector3()), n = new THREE.Vector3(); u.parent.getWorldDirection(n);
+  return { x: v.x + n.x * 0.75, z: v.z + n.z * 0.75, ry: Math.atan2(-n.x, -n.z), at: v };
+}
+function danaRestockNext() {
+  const r = emp.restock, u = r.got[0];
+  if (!u) {                                       // all out
+    if (emp.openedCooler) { coolerOpen = false; emp.openedCooler = false; }
+    emp.c.holdItem(null); emp.c.setPose("idle");
+    if (r.n) logAct(`Dana restocked ${r.n} item${r.n > 1 ? "s" : ""} on the racks`, "good", null, 3 * r.n);
+    emp.restock = null; empGo("toPost", EMP_POST); return;
+  }
+  emp.c.holdItem(snackProxy(u)); emp.c.setPose("hold");
+  if (!isDrink(u.userData.snack) && emp.openedCooler) { coolerOpen = false; emp.openedCooler = false; }
+  empGo("stockTo", unitSpot(u));
+}
+function danaRestockAbort() {                     // called away: what she's carrying goes back in the cupboard
+  const r = emp.restock; if (!r) return;
+  for (const u of r.got) backstock[u.userData.snack.name] = (backstock[u.userData.snack.name] || 0) + 1;
+  if (emp.openedCooler) { coolerOpen = false; emp.openedCooler = false; }
+  emp.c.holdItem(null); emp.c.reachTo(null); emp.c.setPose("idle");
+  if (r.n) logAct(`Dana restocked ${r.n} item${r.n > 1 ? "s" : ""} before she was needed elsewhere`, "good", null, 3 * r.n);
+  emp.restock = null;
+}
+// ---- the board itself: E on it; ↑↓ pick a job, 1-4 / ←→ its priority, 0 off, E closes ----
+const board = { open: false, sel: 0 };
+function boardOpen() { board.open = true; keys.clear(); $("hoverTip").style.display = "none"; boardHud(); }
+function boardClose() { board.open = false; boardHud(); }
+function boardKey(e) {
+  const k = e.code;
+  if (k === "KeyE" || k === "Escape" || k === "Enter") { if (!e.repeat) boardClose(); return; }
+  if (k === "ArrowUp" || k === "KeyW") board.sel = (board.sel + jobs.length - 1) % jobs.length;
+  else if (k === "ArrowDown" || k === "KeyS") board.sel = (board.sel + 1) % jobs.length;
+  else if (/^Digit[0-4]$/.test(k)) jobs[board.sel].pri = +k[5];
+  else if (k === "ArrowLeft" || k === "KeyA") { const j = jobs[board.sel]; j.pri = j.pri === 1 ? 1 : j.pri ? j.pri - 1 : 4; }   // (from off: 4)
+  else if (k === "ArrowRight" || k === "KeyD" || k === "Space") { const j = jobs[board.sel]; j.pri = j.pri && j.pri < 4 ? j.pri + 1 : 0; }   // (past 4: off)
+  else return;
+  e.preventDefault(); boardHud();
+}
+function boardHud() {
+  const el = $("jobBoard"); if (!board.open) { el.style.display = "none"; return; }
+  const now = emp.c ? danaJobNow() : null;
+  el.innerHTML = `<div class="h">DANA'S JOBS \u00b7 1 FIRST \u2192 4 LAST</div>` + (emp.c ? "" : `<div class="warn">Dana isn't on staff yet: hire her on the register (U)</div>`) +
+    jobs.map((j, i) => `<div class="job${i === board.sel ? " sel" : ""}${j.pri ? "" : " off"}"><span class="pri p${j.pri}">${j.pri || "\u2013"}</span> ${JOBS[j.id].name} <span class="d">${JOBS[j.id].desc}</span><span class="st">${now === j.id ? "\u25c0 NOW" : j.pri ? "" : "OFF"}</span></div>`).join("") +
+    `<div class="keys">\u2191\u2193 pick a job \u00b7 1\u20134 set its priority (or \u2190\u2192) \u00b7 0 off \u00b7 E close</div>`;
+  el.style.display = "block";
+}
+function empSummon(force = false) {              // the bell: drop what she's doing (tapes stay in hand), ring them up, then back to it
   if (emp.task !== "returns" || emp.paused) return;
+  if (!force && jobPri("register") >= jobPri("returns")) return;   // the board says the returns matter as much or more
   emp.paused = true; emp.c.setMood("happy"); empGo("toPost", EMP_POST);
 }
 function empBackToRegister(msg) {
@@ -5393,7 +5516,7 @@ const EMP_STOOL = { x: -4.75, z: 2.7 };          // where she parks it: beside t
 const EMP_STOOL_WAIT = 8;                        // seconds of nothing going on before she goes for it
 const EMP_BORED_AT = 25;                         // seconds up there before she's bored enough to really spin
 const STOOL_STATES = ["toStool", "stoolGrab", "stoolCarry", "stoolSitDown", "stoolSit", "stoolStandUp"];
-const empIdle = () => emp.task === "register" && !emp.paused && !custs.length && !co && !gateAlarm.on && !empCanWatch();
+const empIdle = () => emp.task === "register" && !emp.paused && !custs.length && !co && !gateAlarm.on && !empCanWatch() && !danaBestJob();   // (work on the board gets her off the stool)
 const stoolFree = () => !stool.carried && !onStool && !stool.by && !eHoldStool;
 const clearFor = (x, z, r, skip) => !colliders.some(c => !skip.includes(c) && x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
 function stoolSide(fx, fz) {                      // a clear spot to stand beside the stool, on the side nearest (fx, fz), facing it
@@ -5439,6 +5562,7 @@ function empLeaveStool() {                       // dropped mid-whatever (you ca
 function empTick(dt) {
   if (!emp.c) { if (window.VaultCustomers && posTerm && owned("hireDana")) empSpawn(); else return; }   // (simulation: once she's hired)
   const c = emp.c, p = c.group.position;
+  if (jobs.length) danaPreempt();
   if (gateAlarm.on && gateAlarm.t > 5 && emp.task === "returns" && !emp.paused) {   // you've let it ring: she drops the returns and goes to shut it off
     empSummon(); logAct("Dana's leaving the returns to shut off the gate alarm");
   }
@@ -5478,8 +5602,9 @@ function empTick(dt) {
         empFetchDrop(); empGo("toPost", EMP_POST);
       } break;
       case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
-      case "post":                                // ring up whoever's waiting; shut the gates up
-        if (custWaiting()) {
+      case "post": {                              // ring up whoever's waiting (if that's her job right now); shut the gates up
+        const best = co?.by === "dana" ? "register" : danaBestJob();
+        if (custWaiting() && best === "register") {
           c.setMood("happy");
           if (!co && (emp.ringT += dt) > 1.5) { emp.ringT = 0; coStart("dana"); }   // her turn: start ringing them up
         } else emp.ringT = 0;
@@ -5503,23 +5628,19 @@ function empTick(dt) {
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 4) { emp.alarmT = 0; silenceGateAlarm(); logAct("Dana shut off the gate alarm"); } } else emp.alarmT = 0;   // a few seconds' grace: yours if you want it
         if (emp.t <= 0 && co?.by !== "dana") c.reachTo(null);
         if (emp.t <= 0 && !co && c.mood === "happy" && !custWaiting()) { c.setPose("idle"); c.setMood("neutral"); }
-        if (emp.paused && emp.t <= 0 && !co && !custLine.length && !gateAlarm.on) { emp.paused = false; empNext(); break; }   // served: back to the returns
+        if (emp.paused && emp.t <= 0 && !co && !gateAlarm.on && !danaBestJob("returns")) { emp.paused = false; empNext(); break; }   // nothing above the returns needs her: back to them
         if (!co && empCanWatch()) {                       // closed up and you're on the couch: take the next cushion over
           const side = seatAt.x > 0 ? -1 : seatAt.x < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);   // the end cushion farthest from you
           emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
           empGo("toCouch", { x: emp.seat.x, z: TV.z - 2.425, ry: 0 });   // the strip between the couch and the coffee table
         }
-        if (emp.state === "post" && !co && !custWaiting() && !emp.paused && emp.t <= 0) {   // someone's been waiting for help: she'll go find it
-          const k = custAsks.find(k => k.state === "asking" && !k.danaOn && clockT - k.askAt > 20);
-          if (k) { empFetch(k); break; }
-        }
-        if (emp.state === "post" && empIdle() && emp.t <= 0 && messes.length && (emp.messT = (emp.messT || 0) + dt) > 6) {   // quiet: she'll go clean something up
-          emp.messT = 0; const m = messes.reduce((a, b) => Math.hypot(b.x - p.x, b.z - p.z) < Math.hypot(a.x - p.x, a.z - p.z) ? b : a);
-          emp.mess = m; c.setMood("neutral"); empGo("toMess", { x: m.x + 0.45, z: m.z, ry: -Math.PI / 2 }); break;
-        }
-        if (emp.state === "post" && empIdle() && emp.t <= 0 && stoolFree()) { if ((emp.idleT = (emp.idleT || 0) + dt) > EMP_STOOL_WAIT) { emp.idleT = 0; empFetchStool(); } }
+        if (emp.state === "post" && co?.by !== "dana" && !emp.paused && emp.t <= 0 && best && !["register", "phone"].includes(best)) {   // the next job on the board (phones: she takes those right here)
+          if ((emp.jobT = (emp.jobT || 0) + dt) > 2) { emp.jobT = 0; danaStartJob(best); break; }
+        } else emp.jobT = 0;
+        if (emp.state === "post" && !best && empIdle() && emp.t <= 0 && stoolFree()) { if ((emp.idleT = (emp.idleT || 0) + dt) > EMP_STOOL_WAIT) { emp.idleT = 0; empFetchStool(); } }
         else emp.idleT = 0;
         break;
+      }
       case "toStool":
         if (!empIdle()) { empGo("toPost", EMP_POST); break; }
         if (emp.stoolPlan === "sit") { empStoolSit(); break; }
@@ -5594,6 +5715,25 @@ function empTick(dt) {
         if (strays.includes(s)) { strayTake(s); emp.carry.push(s.copy); shiftScore(5, "dana"); }
         empNext();
       } break;
+      case "stockGo": c.reachTo(cupboardSpot(emp.restock.kind).door); emp.state = "stockGrab"; emp.t = 1; break;
+      case "stockGrab": if (emp.t <= 0) {         // into the cupboard for what the racks need
+        const r = emp.restock; c.reachTo(null);
+        const units = r.units; r.units = [];     // (her own plan off the books, so emptySpots sees those spots again)
+        const free = new Set(emptySpots());
+        for (const u of units) { const nm = u.userData.snack.name; if (free.has(u) && (backstock[nm] || 0) > 0) { backstock[nm]--; r.got.push(u); } }
+        danaRestockNext();
+      } break;
+      case "stockTo": {
+        const u = emp.restock.got[0];
+        if (isDrink(u.userData.snack) && !coolerOpen) { coolerOpen = true; emp.openedCooler = true; }
+        c.reachTo(u.getWorldPosition(new THREE.Vector3())); emp.state = "stockPut"; emp.t = 0.8; break;
+      }
+      case "stockPut": if (emp.t <= 0) {
+        const r = emp.restock, u = r.got.shift(); c.reachTo(null);
+        if (!u.visible) { u.visible = true; if (isDrink(u.userData.snack)) u.userData.temp = ROOM_F; shiftScore(3, "dana"); r.n++; }
+        else backstock[u.userData.snack.name] = (backstock[u.userData.snack.name] || 0) + 1;   // somebody beat her to it
+        danaRestockNext();
+      } break;
       case "toMess": c.setPose("crouch"); c.reachTo(new THREE.Vector3(emp.mess.x, emp.mess.y + 0.05, emp.mess.z)); emp.state = "cleaning"; emp.t = 1.4; break;
       case "cleaning": if (emp.t <= 0) {
         const m = emp.mess; emp.mess = null; c.reachTo(null); c.setPose("idle");
@@ -5601,7 +5741,7 @@ function empTick(dt) {
         empGo("toPost", EMP_POST);
       } break;
       case "toTote":
-        if (!returnBin.length) { if (strays.length) { empNext(); break; } empBackToRegister("Dana: returns are all put away"); break; }
+        if (!returnBin.length) { if (strays.length) { empNext(); break; } empBackToRegister(); logAct("Dana finished the returns"); break; }
         c.reachTo(new THREE.Vector3(EMP_TOTE.x + 0.55, 0.8, EMP_TOTE.z)); emp.state = "grab"; emp.t = 0.9; break;   // down into the tote
       case "grab": if (emp.t <= 0) { emp.carry = returnBin.splice(-EMP_ARMFUL); refreshReturnsBin(); c.setMood("neutral"); empNext(); } break;
       case "toRewinder": emp.state = "rewind"; break;
@@ -5949,7 +6089,7 @@ function custTip(k) {                           // what E (and Q) do to this cus
   return t;
 }
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (stool.carried) {                       // arms full: setting the stool down is the only thing E does
@@ -6017,6 +6157,7 @@ function pickHover() {
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
+    else if (aim?.object.userData.jobBoard && aim.distance < 2.4) aimBoard = true;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
     else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
@@ -6062,6 +6203,7 @@ function pickHover() {
     else if (aimCupboard) { const n = emptySpots().filter(u => isDrink(u.userData.snack) === (aimCupboard === "drinks")).length;
       tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : " · the racks are full"}`; }
     else if (aimBox) tip.innerHTML = `E — pick up the box: ${aimBox.name} \u00d7${aimBox.qty}`;
+    else if (aimBoard) tip.innerHTML = `E — Dana's job board<div class="cat">${emp.c ? `Now: ${JOBS[danaJobNow()]?.name.toLowerCase() || "free"}` : "no Dana yet"}</div>`;
     else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
       tip.innerHTML = h ? `E — put ${held.title} on hold for ${memberName(h.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${h.title.title} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
@@ -6197,7 +6339,7 @@ const stockProducts = () => {                    // every product on the racks, 
 };
 const caseCost = e => +((e.drink ? 0.6 : 0.45) * CASE_QTY).toFixed(2);   // wholesale: about half of what they sell for
 function emptySpots() {                          // rack spots with nothing on them, that nobody's holding
-  const busy = new Set([heldSnack, ...inv.filter(e => e.kind === "snack").map(e => e.ref), ...stockCarry, ...custs.flatMap(k => k.snacks), ...custs.map(k => k.snackUnit)]);
+  const busy = new Set([heldSnack, ...inv.filter(e => e.kind === "snack").map(e => e.ref), ...stockCarry, ...custs.flatMap(k => k.snacks), ...custs.map(k => k.snackUnit), ...(emp.restock ? [...emp.restock.units, ...emp.restock.got] : [])]);
   return snackUnits().filter(u => !u.visible && !busy.has(u));
 }
 function stockTake(kind) {                       // E on a stock cupboard
@@ -6373,7 +6515,7 @@ function phoneTick(dt) {                          // (runs with the clock)
   const r = phone.ring; if (!r) { phoneCallTick(dt); return; }
   r.t += dt;
   if (r.t >= r.rang) { r.rang += 3; ringBurst(); }
-  if (r.t > 6 && emp.c && emp.state === "post" && !storeBusy() && emp.t <= 0) return danaCall();   // nobody needs her: Dana gets it
+  if (r.t > 6 && emp.c && emp.state === "post" && co?.by !== "dana" && emp.t <= 0 && danaBestJob() === "phone") return danaCall();   // top of her list right now: Dana gets it
   if (r.t > 20) {                                 // rang out
     phone.ring = null;
     if (storeBusy()) { logAct(`Missed a call from ${memberName(r.member)} while you were with customers: they'll call back`); phone.next = shift.h + 0.4 + Math.random() * 0.4; }
@@ -6796,6 +6938,7 @@ function onE() {
   if (aimStockSlot) { stockPlace(aimStockSlot); return; }
   if (aimMess) { messClean(aimMess); return; }
   if (aimPhone) { phoneAnswer(); return; }
+  if (aimBoard) { boardOpen(); return; }
   if (aimHolds && held && !inspecting) { holdPlace(held); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
@@ -6894,7 +7037,7 @@ document.addEventListener("pointerlockchange", () => {
     if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
     $("titleScreen").classList.add("paused");
     titleMenu.refresh?.();
-  } else { keys.clear(); titleMenu.refresh?.(); }
+  } else { keys.clear(); titleMenu.refresh?.(); if (board.open) boardClose(); }
 });
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -7061,7 +7204,7 @@ function saveState() {
   const data = {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by })),
-    rep: rep.v, upg, members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
+    jobs: jobs.map(j => ({ id: j.id, pri: j.pri })), rep: rep.v, upg, members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
@@ -7367,5 +7510,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
