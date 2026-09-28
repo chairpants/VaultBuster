@@ -260,6 +260,10 @@ const catalog = window.VAULT_CATALOG || [];
 const SAVE_KEY = "vaultbuster-save";
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
+// the game mode. Simulation: a bare-bones store you build up (no staff, no
+// theater, no popcorn machine, part of the library) out of what it earns.
+// Sandbox: everything open and a big budget. Saves from before modes are sandbox
+const MODE = SAVE?.mode === "simulation" ? "simulation" : "sandbox", SIM = MODE === "simulation";
 const rep = { v: SAVE?.rep ?? 50 };             // store reputation 0..100 (see repStars)
 const upg = { ...SAVE?.upg };                   // upgrades bought (see UPGRADES)
 // a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
@@ -417,7 +421,6 @@ for (const t of catalog) {
 }
 catalog.sort((a, b) => shelfKey(a).localeCompare(shelfKey(b), undefined, { numeric: true, sensitivity: "base" })
   || a.id.localeCompare(b.id) || seasonRank(a) - seasonRank(b));
-$("enterHint").textContent = "CLICK TO ENTER THE STORE";
 
 // ---------------- canvas texture helpers ----------------
 function makeTexture(draw, w, h) {
@@ -2139,6 +2142,7 @@ function brandTex(slot, w, h, draw) {
   return makeTexture(draw, Math.round(w * k), Math.round(h * k));
 }
 let coolerDoor = null, coolerOpen = false, coolerThermo = null;
+let popcornMachine = null, theaterSign = null;   // (simulation: bought later — see amenities)
 let popcornKit = null;                       // cup geometry/material + popcorn texture, reused for the box in your hand
 let buildSnackRack = null;                   // (width, header) -> a stocked snack rack group; set in the snack center
 {
@@ -2392,6 +2396,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     pop(addTo(g, new THREE.BoxGeometry(0.03, 0.018, 0.06), black, SX - 0.07, ST + 0.215, -0.05), "butter");   // pump head + nozzle
     place(g, CD, CW, PZ);
     colliders.push({ x0: WX, x1: WX + 0.01 + CD, z0: PZ + CW / 2, z1: PZ + CW / 2 + SHELF });   // the side shelf (local -x = world +z)
+    popcornMachine = { g, cols: colliders.slice(-2) };   // (simulation: bought later — see amenities)
   }
 
   // ---- snack rack: 1.62 tall, sloped shelves, every product its own shape ----
@@ -3932,7 +3937,21 @@ const repStars = (v = rep.v) => Math.max(1, Math.min(5, Math.round(1 + v / 25)))
 const starStr = n => "\u2605".repeat(n) + "\u2606".repeat(5 - n);
 const repMult = () => 0.7 + rep.v / 100 * 0.6;
 // ---- upgrades, bought on the register out of the store budget ----
+const LIBRARY = [                               // simulation: the library comes in tiers, each after the one before
+  { cats: ["Kids & Educational", "Holiday", "Reality TV", "Music", "Broadcast Blocks"] },
+  { cats: ["Classic Sitcoms", "Sketch Comedy & Late Night"] },
+  { cats: ["Anime", "Horror & Anthology", "MonsterVision"] },
+];
+const owned = id => !SIM || !!upg[id];           // sandbox has it all
+const libTier = () => SIM ? (upg.library || 0) : LIBRARY.length;
+const libLocked = c => SIM && LIBRARY.slice(libTier()).some(t => t.cats.includes(c.category));
 const UPGRADES = [
+  { id: "hireDana", name: "HIRE DANA", cost: 250, sim: true, desc: "A CLERK FOR REGISTER & RETURNS, $35/DAY" },
+  { id: "popcorn", name: "POPCORN MACHINE", cost: 150, sim: true, desc: "FRESH POPCORN, RIGHT IN THE STORE" },
+  { id: "theater", name: "OPEN THE THEATER", cost: 600, sim: true, desc: "UNLOCK THE LOBBY AND THE AUDITORIUM" },
+  { id: "lib1", name: "LIBRARY UPGRADE 1", cost: 200, sim: true, lib: 1, desc: "KIDS, HOLIDAY, REALITY TV, MUSIC" },
+  { id: "lib2", name: "LIBRARY UPGRADE 2", cost: 350, sim: true, lib: 2, desc: "CLASSIC SITCOMS, SKETCH & LATE NIGHT" },
+  { id: "lib3", name: "LIBRARY UPGRADE 3", cost: 500, sim: true, lib: 3, desc: "ANIME, HORROR ANTHOLOGY, MONSTERVISION" },
   { id: "cameras", name: "SECURITY CAMERAS", cost: 450, desc: "EVERY SHOPLIFTER ON TAPE; FEWER TRY" },
   { id: "sign", name: "ANTI-THEFT SIGNAGE", cost: 60, desc: "\"SHOPLIFTERS WILL BE PROSECUTED\"" },
   { id: "rewinders", name: "HIGH-SPEED REWINDERS", cost: 180, desc: "REWINDS IN HALF THE TIME" },
@@ -3942,9 +3961,16 @@ const UPGRADES = [
 ];
 function upgBuy(id) {                            // -> null if bought, else why not
   const u = UPGRADES.find(q => q.id === id); if (!u) return "NO SUCH UPGRADE.";
-  if (!u.repeat && upg[id]) return "ALREADY INSTALLED.";
+  if (!u.repeat && owned(id)) return "ALREADY INSTALLED.";
+  if (id === "dana" && !owned("hireDana")) return "HIRE DANA FIRST.";
+  if (u.lib) {                                   // the distributor stocks the shelves overnight
+    if (libTier() !== u.lib - 1 || deliveries.some(d => d.lib)) return libTier() >= u.lib || deliveries.some(d => d.lib === u.lib) ? "ALREADY ORDERED." : `LIBRARY UPGRADE ${u.lib - 1} FIRST.`;
+    deliveries.push({ lib: u.lib }); upg[id] = true;
+    logAct(`Ordered ${u.name.toLowerCase()}: the tapes arrive tomorrow morning`, "good"); return null;
+  }
   if (id === "ad") { if (upg.adDay === shift.day) return "AN AD ALREADY RAN TODAY."; upg.adDay = shift.day; rep.v = Math.min(100, rep.v + 8); logAct("Ran an ad in the paper: the word's getting out", "good"); return null; }
-  upg[id] = true; upgVisuals(); logAct(`Installed: ${u.name.toLowerCase()}`, "good");
+  upg[id] = true; upgVisuals(); amenities();
+  logAct(id === "hireDana" ? "Hired Dana: she's starting right now" : id === "theater" ? "The theater's open for business" : `Installed: ${u.name.toLowerCase()}`, "good");
   return null;
 }
 function upgVisuals() {                          // what you can see of what you've bought
@@ -3996,6 +4022,7 @@ function showTick() {
   }
 }
 function showSet(title) {                        // from the register: today's 8 PM if there's time to sell tickets, else tomorrow's
+  if (!owned("theater")) return "THE THEATER ISN'T OPEN YET.";
   const day = shift.h < 18 ? shift.day : shift.day + 1;
   if (show.day === day && show.sold) return `TICKETS ALREADY SOLD FOR ${show.title.title.toUpperCase()}.`;
   Object.assign(show, { title, day, sold: 0, status: "", spawned: 0 });
@@ -4378,6 +4405,7 @@ function playerIn(c) { return player.x > c.x0 - player.r && player.x < c.x1 + pl
 // from the side they came in on; once they're through it springs shut, swinging
 // past center a few times before it settles, like a real double-acting door
 function pushDoorTick(d, dt) {
+  if (d.locked) { d.a = d.v = 0; d.side = 0; d.pivot.rotation.y = d.base; return; }   // chained shut
   dt = Math.min(dt, 0.05);
   const bodies = [[player.x, player.z]];
   for (const k of custs) if (k.c) bodies.push([k.c.group.position.x, k.c.group.position.z]);
@@ -4751,6 +4779,7 @@ function custDwell(cust) {                        // how long they look at a she
   return (2 + r() * 5) * cust.who.persona.dwell * (r() < 0.1 ? 2.5 : 1);
 }
 function custPickTheaterSeat(cust) {              // pick an open stadium seat and walk to its row on the center ramp
+  if (!owned("theater")) return false;
   const free = theaterSeats.filter(s =>
     !custs.some(k => k !== cust && k.thSeat === s) &&
     !(seated && seatAt && Math.hypot(seatAt.x - s.x, seatAt.z - s.z) < 0.3)
@@ -4857,7 +4886,7 @@ function custWant(cust) {
   if (custAsks.length >= 3) return false;
   const cats = cust.who.persona.taste.cats, r = Math.random();
   if (r < 0.16) {                                 // a title in mind: usually one that's in; now and then one that's all out
-    const pool = catalog.filter(t => t.pos && (!cats.length || cats.includes(t.category)));
+    const pool = catalog.filter(t => t.pos && !t.libLocked && (!cats.length || cats.includes(t.category)));
     const inNow = pool.filter(onShelfCopy), out = pool.filter(t => !onShelfCopy(t));
     const from = Math.random() < 0.75 || !out.length ? inNow : out; if (!from.length) return false;
     cust.want = { kind: "title", title: from[Math.floor(Math.random() * from.length)] };
@@ -5372,7 +5401,7 @@ function empLeaveStool() {                       // dropped mid-whatever (you ca
   stool.by = null;
 }
 function empTick(dt) {
-  if (!emp.c) { if (window.VaultCustomers && posTerm) empSpawn(); else return; }
+  if (!emp.c) { if (window.VaultCustomers && posTerm && owned("hireDana")) empSpawn(); else return; }   // (simulation: once she's hired)
   const c = emp.c, p = c.group.position;
   if (gateAlarm.on && gateAlarm.t > 5 && emp.task === "returns" && !emp.paused) {   // you've let it ring: she drops the returns and goes to shut it off
     empSummon(); logAct("Dana's leaving the returns to shut off the gate alarm");
@@ -5921,7 +5950,7 @@ function pickHover() {
     else if (aim?.object.userData.box && aim.distance < 2.4) aimBox = aim.object.userData.box;
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
-    else if (aim?.object.userData.popcorn && aim.distance < 2.4) aimPop = aim.object.userData.popcorn;
+    else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
     else if (aim?.object.userData.flap && aim.distance < 2.6) aimFlap = aim.object.userData.flap;
     else if (aim?.object.userData.door && aim.distance < 2.4) aimDoor = aim.object.userData.door;
@@ -6146,7 +6175,8 @@ function boxesLayout() { boxes.filter(b => !boxCarry.includes(b)).forEach((b, i)
 function boxDeliver() {                          // morning: yesterday's orders are by the door
   const tapes = deliveries.filter(d => d.tape).map(d => copyByKey(d.tape)).filter(Boolean);
   for (const d of deliveries.filter(d => d.name)) { const b = { name: d.name, qty: d.qty }; boxes.push(b); boxMake(b); }
-  const nb = deliveries.filter(d => d.name).length;
+  const nb = deliveries.filter(d => d.name).length, lib = deliveries.find(d => d.lib);
+  if (lib) { const n = libUnlock(lib.lib); logAct(`Library upgrade ${lib.lib} came in overnight: ${n} tapes on the shelves`, "good"); }
   deliveries.length = 0; boxesLayout();
   for (const c of tapes) { setOnShelf(c, false); returnBin.push(c); } if (tapes.length) refreshReturnsBin();
   if (nb) logAct(`Delivery: ${nb} box${nb > 1 ? "es" : ""} by the front door`);
@@ -6184,6 +6214,49 @@ function drinkTempTick(dt) {
 function custWarmDrink(cust, u) {
   shiftScore(-10); posTerm.loyal(cust.member, -3); cust.c.setMood("meh"); cust.hi = 1.8;
   logAct(`${memberName(cust.member)} grabbed a warm ${u.userData.snack.name} (${Math.round(drinkTemp(u))}°F)`, "bad", null, -10);
+}
+
+// ---------------- the build-up (simulation): what the store has so far ----------------
+function amenities() {
+  const hall = doors.find(d => d.push && !d.alongX);   // the hall -> lobby door: the theater's way in
+  const open = owned("theater");
+  if (hall && hall.locked !== !open) {
+    hall.locked = !open;
+    if (!open) colliders.push(hall.shut); else { const i = colliders.indexOf(hall.shut); if (i >= 0) colliders.splice(i, 1); }
+    custSpots = custSnackSpots = null;           // the lobby's reachable (or not) now
+  }
+  if (!open && !theaterSign && hall) {           // chained shut, a sign on both faces
+    theaterSign = new THREE.Group(); scene.add(theaterSign);
+    for (const f of [1, -1]) {
+      const t = textPlane("THEATER \u00b7 COMING SOON", 0.62, 0.16, "#ffd400", "#3a0d12", "Arial Black", 60);
+      t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(hall.at + f * 0.07, 1.5, hall.c); t.rotation.y = f * Math.PI / 2; theaterSign.add(t);
+    }
+  } else if (open && theaterSign) { scene.remove(theaterSign); theaterSign = null; }
+  if (popcornMachine) {
+    const on = owned("popcorn");
+    if (popcornMachine.g.visible !== on) {
+      popcornMachine.g.visible = on;
+      for (const c of popcornMachine.cols) { const i = colliders.indexOf(c); if (on && i < 0) colliders.push(c); if (!on && i >= 0) colliders.splice(i, 1); }
+    }
+  }
+}
+function libLock() {                             // simulation: sections you haven't bought come off the shelves
+  if (!SIM) return;
+  for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
+    if (!libLocked(c)) continue;
+    c.libLocked = true;
+    if (c.rental) { posTerm.cancel(c); const i = rentedCopies.indexOf(c); if (i >= 0) rentedCopies.splice(i, 1); }   // (a new store's opening rentals don't include them)
+    if (!c.offShelf) setOnShelf(c, false);
+  }
+}
+function libUnlock(tier) {                       // -> tapes put out
+  let n = 0;
+  for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
+    if (!LIBRARY[tier - 1].cats.includes(c.category) || !c.libLocked) continue;
+    c.libLocked = false; if (!c.lost && !c.rental) { setOnShelf(c, true); n++; }
+  }
+  upg.library = tier; custSpots = null;
+  return n;
 }
 
 // ---------------- misshelved tapes ----------------
@@ -6601,10 +6674,28 @@ setInterval(() => {
 
 // ---------------- pointer lock / title screen ----------------
 let started = false;
-$("titleScreen").addEventListener("click", () => {
-  if ($("enterHint").textContent.startsWith("LOADING")) return;
-  canvas.requestPointerLock();
+$("titleScreen").addEventListener("click", e => {
+  if (e.target.closest("button, #mainMenu")) return;
+  if (started) canvas.requestPointerLock();       // paused: click anywhere to go back in
 });
+// the main menu: continue the saved store (or resume), or a new game in either
+// mode. A new game is set up as a fresh save and the page reloads into it
+function titleMenu() {
+  const nice = MODE === "simulation" ? "SIMULATION" : "SANDBOX";
+  const label = () => started ? "RESUME" : SAVE?.fresh ? `START \u00b7 ${nice}` : `CONTINUE \u00b7 ${nice} \u00b7 DAY ${shift.day}`;
+  const cont = $("mmContinue"), main = $("mmMain"), modes = $("mmModes");
+  titleMenu.refresh = () => { cont.textContent = label(); cont.hidden = !SAVE && !started; main.hidden = false; modes.hidden = true; };
+  titleMenu.refresh();
+  cont.onclick = () => canvas.requestPointerLock();
+  $("mmNew").onclick = () => { main.hidden = true; modes.hidden = false; $("mmWarn").hidden = !(SAVE && !SAVE.fresh) && !started; };
+  $("mmBack").onclick = () => titleMenu.refresh();
+  for (const b of modes.querySelectorAll("button[data-mode]")) b.onclick = () => {
+    saveOff = true;                               // (don't let the old store save over the new one on the way out)
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_V, mode: b.dataset.mode, fresh: true })); } catch {}
+    location.reload();
+  };
+  $("enterHint").style.display = "none"; $("mainMenu").hidden = false;
+}
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
   if (!locked && (posTerm?.isOpen() || shift.report)) { keys.clear(); $("crosshair").hidden = true; return; }   // the mouse was freed for the terminal / the shift slip, not a pause
@@ -6613,9 +6704,9 @@ document.addEventListener("pointerlockchange", () => {
   if (locked) {
     started = true;
     if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
-    $("enterHint").textContent = "CLICK TO RESUME";
     $("titleScreen").classList.add("paused");
-  } else keys.clear();
+    titleMenu.refresh?.();
+  } else { keys.clear(); titleMenu.refresh?.(); }
 });
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -6660,14 +6751,15 @@ function armGates(on) {                      // disarmed gates go dark and ignor
 let gateLastZ = player.z;
 
 const posTerm = window.createPOS({
-  catalog, rented: rentedCopies, budget: SAVE?.budget, savedOwed: SAVE?.owed, savedRecords: SAVE?.records,
+  catalog, rented: rentedCopies, budget: SAVE?.budget ?? (SIM ? 300 : 5000), savedOwed: SAVE?.owed, savedRecords: SAVE?.records,
   today: +shiftDate(), clock: () => { const m = Math.floor(shift.h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; },   // the shift's date and clock on the screen
   savedRental: c => SAVE?.rentals?.[copyKey(c)],
   replace(c) { deliveries.push({ tape: copyKey(c) }); logAct(`Ordered a replacement ${c.title}: arrives tomorrow morning`); },
   supplies: () => stockProducts().map(e => ({ name: e.name, drink: e.drink, spots: e.units.length, out: e.units.filter(u => u.visible).length, back: backstock[e.name] || 0,
     ordered: deliveries.filter(d => d.name === e.name).reduce((a, d) => a + d.qty, 0) + boxes.filter(b => b.name === e.name).reduce((a, b) => a + b.qty, 0), caseCost: caseCost(e), caseQty: CASE_QTY })),
   order: (name, cases) => stockOrder(name, cases),
-  upgrades: () => UPGRADES.map(u => ({ ...u, owned: !u.repeat && !!upg[u.id], ranToday: u.repeat && upg.adDay === shift.day })), buyUpgrade: upgBuy,
+  upgrades: () => UPGRADES.filter(u => SIM || !u.sim).map(u => ({ ...u, owned: !u.repeat && owned(u.id), ranToday: u.repeat && upg.adDay === shift.day })), buyUpgrade: upgBuy,
+  theaterOpen: () => owned("theater"), mode: MODE,
   reputation: () => ({ stars: repStars(), v: rep.v }),
   feature: () => show.title && { title: show.title.title, day: show.day === shift.day ? "TONIGHT" : "TOMORROW", sold: show.sold, status: show.status },
   featureChoices: () => catalog.filter(t => t.seasons.length === 1 && t.seasons[0].episodes.length === 1 && onShelfCopy(t))
@@ -6700,6 +6792,7 @@ function clockOut() {
   document.exitPointerLock();
   const chk = { bin: returnBin.length, strays: strays.length, messes: messes.length, empty: emptySpots().length };   // the closing walk-through: what's been left undone
   const chkPts = -10 * (chk.bin + chk.strays + chk.messes) - 2 * chk.empty;
+  const wages = SIM && owned("hireDana") ? 35 : 0; if (wages) posTerm.sale(-wages);   // Dana's pay for the day
   if (chkPts) { shiftScore(chkPts); logAct(`Closing check: ${[chk.bin && `${chk.bin} in the returns bin`, chk.strays && `${chk.strays} misshelved`, chk.messes && `${chk.messes} messes`, chk.empty && `${chk.empty} empty rack spots`].filter(Boolean).join(", ")}`, "bad", null, chkPts); }
   const s = shift.stats, d = shiftDate(), W = 34, money = n => "$" + n.toFixed(2);
   const row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v;
@@ -6718,7 +6811,7 @@ function clockOut() {
     row("SHOPLIFTERS CAUGHT", s.caught), row("TAPES STOLEN", s.stolen), line,
     row("RENTALS", money(s.rentalTake)), row("SNACKS", money(s.snackTake)), row("SHOW TICKETS", money(s.tickets * SHOW.ticket - s.refunds)), row("LATE FEES", money(s.feesCollected)),
     row("FEES WAIVED", money(s.feesWaived)), row("TOTAL TAKE", money(s.rentalTake + s.snackTake + s.feesCollected + s.tickets * SHOW.ticket - s.refunds)),
-    row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
+    ...(wages ? [row("DANA'S WAGES", "-" + money(wages))] : []), row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
     row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  EMPTY RACK SPOTS", chk.empty),
     row("  POINTS", chkPts.toLocaleString()), line, "",
     row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`),
@@ -6763,7 +6856,7 @@ function saveState() {
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
     : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    v: SAVE_V, mode: MODE, player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     rep: rep.v, upg, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
@@ -6841,6 +6934,8 @@ loadState(SAVE);
 if (!SAVE?.stock) for (const e of stockProducts()) backstock[e.name] ??= CASE_QTY;   // a new store: a case of everything in the cupboards
 if (!SAVE?.shift) beginShift();              // a new store (or one saved before the shift clock): day 1, first thing
 gateLastZ = player.z;                        // restored position isn't a walk through the gates
+libLock(); amenities();                     // simulation: what the store hasn't got yet
+titleMenu();
 setInterval(saveState, 2000);
 addEventListener("beforeunload", saveState);
 document.addEventListener("visibilitychange", () => { if (document.hidden) saveState(); });
@@ -7062,5 +7157,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
