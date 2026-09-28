@@ -15,12 +15,13 @@
 //     group,              origin at the floor between the feet, facing +z
 //     screen,             the face mesh (store.js marks it to glow)
 //     parts,              every mesh, for aiming at
-//     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks off on
+//     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks shifty off on
 //     setPose(name, opts), walk idle reach hold wait sit crouch; sit takes { hipY, tuck }:
 //                         hip height (couch: 0.5) and extra knee bend to pull the feet back (a stool's footring)
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
-//     holdProp(name),     "card" / "cash" in the other hand, or null
+//     holdProp(name),     "card" / "cash" / "receipt" in the other hand, or null
+//     holdItem(obj|null), something real in the other hand (a snack off the rack), sized to the world; null empties it
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
 //     talk(bool),         conversational head motion
 //     tick(dt, speed),    animate; speed = m/s along the ground (0 = standing)
@@ -233,6 +234,7 @@ window.VaultCustomers = (() => {
         line(42, 54, 68, 54); line(92, 54, 118, 54); line(70, 92, 90, 92);
         const k = (mt * 0.5) % 1; g.globalAlpha = 1 - k; text("z", 30 - k * 14, 22 + k * 10); g.globalAlpha = 1; break;
       }
+      case "shifty": eyes(Math.sin(t * 3.1) > 0 ? 16 : -16, 2); line(70, 92, 90, 90); break;   // eyes darting side to side, lips pressed
       case "thanks": line(40, 52, 52, 40, 64, 52); line(96, 52, 108, 40, 120, 52); text("THANK YOU", 96, 17); break;
       default: eyes(); line(66, 90, 94, 90);            // neutral
     }
@@ -345,8 +347,10 @@ window.VaultCustomers = (() => {
     // the free hand's props at the counter: a membership card, or the cash they pay with
     const cardM = patterned("memberCard", (g, n) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, n, n); g.fillStyle = "#ffd400"; g.fillRect(0, n * 0.62, n, n * 0.14); g.fillStyle = "#fff"; g.fillRect(n * 0.08, n * 0.12, n * 0.5, n * 0.1); });
     const cashM = patterned("cash", (g, n) => { g.fillStyle = "#8fbf8a"; g.fillRect(0, 0, n, n); g.strokeStyle = "#3d6b3a"; g.lineWidth = 4; g.strokeRect(4, 4, n - 8, n - 8); g.fillStyle = "#3d6b3a"; g.beginPath(); g.arc(n / 2, n / 2, n * 0.18, 0, 7); g.fill(); });
-    const props = { card: part(arms[0].el, BOX, cardM, 0.006, 0.054, 0.086, 0, -0.37, 0.05), cash: part(arms[0].el, BOX, cashM, 0.004, 0.066, 0.156, 0, -0.37, 0.07) };
+    const props = { card: part(arms[0].el, BOX, cardM, 0.006, 0.054, 0.086, 0, -0.37, 0.05), cash: part(arms[0].el, BOX, cashM, 0.004, 0.066, 0.156, 0, -0.37, 0.07),
+      receipt: part(arms[0].el, BOX, solid("#f4f1e6"), 0.003, 0.15, 0.056, 0, -0.4, 0.06) };
     for (const m of Object.values(props)) m.visible = false;
+    const item = new THREE.Group(); item.position.set(0, -0.4, 0.07); arms[0].el.add(item);   // holdItem's slot, in the same hand
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
 
     const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.7 * W, 0.55), SHADOW); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.006; group.add(shadow);
@@ -369,7 +373,12 @@ window.VaultCustomers = (() => {
       setPose(p, opts = {}) { pose = p; sitAt = opts; },
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
-      holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | null, in the free (left) hand
+      holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | "receipt" | null, in the free (left) hand
+      holdItem(obj) {                                   // obj comes in at world scale: undo the body's own scaling
+        item.clear(); if (!obj) return;
+        group.updateWorldMatrix(true, true); const k = item.getWorldScale(new THREE.Vector3());
+        obj.scale.divide(k); item.add(obj);
+      },
       // reach a hand to a point in the world (a tape slot, the returns slot, the
       // rewinder...) — eased in and out. arm: 1 = the tape hand (default), 0 = the other, "auto" = nearer
       // opts.lean: false = arm only (counter work: no bowing; out-of-reach just points the arm)
@@ -443,7 +452,7 @@ window.VaultCustomers = (() => {
           el.rotation.x += (e - el.rotation.x) * w;
         }
         // head: browsing scans, impatience tilts, otherwise a slow idle drift
-        const yaw = look != null ? look : face.mood === "browse" ? Math.sin(t * 1.3) * 0.25 : Math.sin(t * 0.4) * 0.05;
+        const yaw = look != null ? look : face.mood === "browse" ? Math.sin(t * 1.3) * 0.25 : face.mood === "shifty" ? Math.sin(t * 2.3) * 0.55 : Math.sin(t * 0.4) * 0.05;   // shifty: checking over both shoulders
         lerp(head.rotation, "y", yaw + (talking ? Math.sin(t * 0.9) * 0.06 : 0), r * 0.6);
         lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : talking ? Math.sin(t * 1.3) * 0.05 : 0, r * 0.5);
         head.rotation.x = ease("nod", walking ? Math.cos(phase * 2 - 0.8) * 0.008 : face.mood === "watch" ? -0.06 : talking ? Math.max(0, Math.sin(t * 2.4)) * 0.05 : 0, soft)   // talking: little agreeing nods   // eyes-level: only a whisper of nod, lagging the step; tips up at the screen

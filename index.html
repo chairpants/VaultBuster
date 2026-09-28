@@ -44,22 +44,53 @@
     margin: -3px; border-radius: 50%; background: var(--bb-yellow); box-shadow: 0 0 4px #000;
     pointer-events: none; transition: opacity .5s; }
   body.idle #crosshair { opacity: 0; }     /* fades out after a few still seconds, back on the next move */
-  #hoverTip { position: fixed; z-index: 10; left: 50%; top: calc(50% + 26px); transform: translateX(-50%);
-    background: var(--bb-blue); color: #fff; border: 2px solid var(--bb-yellow);
-    padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: bold; white-space: nowrap;
-    pointer-events: none; display: none; text-shadow: 1px 1px 0 #0008; }
+  /* on-screen prompts: bare text with a dark outline, no box */
+  #hoverTip, #holdingTag, #checkoutTag, #tvHint, #shiftClock { text-shadow: 0 1px 2px #000, 0 0 6px #000c, 0 0 12px #0008; }
+  #hoverTip { position: fixed; z-index: 10; left: 50%; top: 68%; transform: translateX(-50%); color: #fff; text-align: center;
+    font-size: 14px; font-weight: bold; white-space: nowrap; pointer-events: none; display: none; }
   #hoverTip .cat { color: var(--bb-yellow); font-weight: normal; font-size: 11px; }
-  #holdingTag { position: fixed; z-index: 10; right: 14px; top: 14px; background: var(--bb-blue);
-    color: #fff; border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 14px;
-    font-size: 13px; font-weight: bold; display: none; max-width: 320px; }
+  #holdingTag { position: fixed; z-index: 10; right: 16px; top: 14px; text-align: right;
+    color: #fff; font-size: 13px; font-weight: bold; display: none; max-width: 320px; }
   #holdingTag .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
-  #checkoutTag { position: fixed; z-index: 10; left: 14px; top: 14px; background: var(--bb-blue); color: #fff;
-    border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 14px; font-size: 13px; font-weight: bold; display: none; max-width: 340px; }
+  #checkoutTag { position: fixed; z-index: 10; left: 16px; top: 72px; color: #fff;   /* under the clock */
+    font-size: 13px; font-weight: bold; display: none; max-width: 340px; }
   #checkoutTag .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
   #checkoutTag .next { margin-top: 4px; font-weight: normal; color: #ffe98a; }
-  #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 64px; transform: translateX(-50%);
-    color: #fff; background: var(--bb-blue); border: 2px solid var(--bb-yellow); border-radius: 4px;
-    padding: 8px 16px; font-size: 13px; font-weight: bold; display: none; }
+  /* ---------- the shift clock, and the slip when you clock out ---------- */
+  #shiftClock { position: fixed; z-index: 10; left: 16px; top: 14px; display: none; color: #fff;
+    font-size: 17px; font-weight: bold; font-variant-numeric: tabular-nums; pointer-events: none; }
+  #shiftClock .h { color: var(--bb-yellow); font-size: 10px; letter-spacing: 2px; }
+  #shiftClock.late .h { color: #ff6b6b; }
+  #shiftReport { position: fixed; inset: 0; z-index: 30; display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; background: rgba(3, 6, 16, .82); animation: slipIn .8s ease-out; }
+  #shiftSlip { margin: 0; padding: 22px 26px 30px; background: #f4f1e6; color: #1d1d1d; font: 15px/1.35 "Courier New", monospace;
+    box-shadow: 0 20px 60px #000c; max-width: calc(100vw - 32px); overflow: auto; border-bottom: 3px dashed #bdb8a6; }
+  #shiftNext { font: bold 15px Verdana, sans-serif; letter-spacing: 1px; color: #fff; background: var(--bb-blue);
+    border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 10px 22px; cursor: pointer; }
+  #shiftNext:hover { background: #0a3fa0; }
+  @keyframes slipIn { from { opacity: 0; } }
+
+  /* ---------- the log: bottom left, fixed height, scrolls ---------- */
+  #actLog { position: fixed; z-index: 10; left: 16px; bottom: 14px; width: min(380px, calc(100vw - 32px)); display: none;
+    background: rgba(4, 8, 20, .55); border: 1px solid #ffffff22; border-radius: 6px; color: #e8e8ee; font-size: 12px; }
+  #actLog .h { padding: 5px 10px; color: var(--bb-yellow); font-size: 10px; font-weight: bold; letter-spacing: 2px; cursor: pointer;
+    border-bottom: 1px solid #ffffff1a; user-select: none; }
+  #actLog .h .k { float: right; color: #ffffff80; letter-spacing: 0; font-weight: normal; }
+  #actLog .h .n { color: #fff; letter-spacing: 0; margin-left: 6px; }
+  #actLogList { height: 148px; overflow-y: auto; padding: 4px 10px 6px; scrollbar-width: thin; scrollbar-color: #ffffff40 transparent; }
+  #actLog.shut #actLogList { display: none; }
+  #actLog.shut .h { border-bottom: 0; }
+  #actLog .row { display: flex; gap: 8px; padding: 2px 0; line-height: 1.3; }
+  #actLog .row .t { color: #ffffff70; flex: none; width: 58px; font-variant-numeric: tabular-nums; }
+  #actLog .row .x { flex: 1; }
+  #actLog .row .a { flex: none; font-weight: bold; font-variant-numeric: tabular-nums; }
+  #actLog .row.good .a { color: #7ee08f; }
+  #actLog .row.bad .x { color: #ffb3b3; }
+  #actLog .row.bad .a { color: #ff7b7b; }
+  body.nohud #actLog { display: none !important; }
+
+  #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 96px; transform: translateX(-50%);   /* clear of the inventory bar */
+    color: #fff; font-size: 13px; font-weight: bold; display: none; }
 
   /* ---------- held-up tape overlay ---------- */
   #inspect { position: fixed; z-index: 12; inset: 0; display: none; align-items: center;
@@ -98,7 +129,7 @@
 
   /* ---------- H toggles every HUD overlay off ---------- */
   body.nohud #nowPlaying, body.nohud #tvHint,
-  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #checkoutTag, body.nohud #invBar, body.nohud #crosshair { display: none !important; }
+  body.nohud #hoverTip, body.nohud #holdingTag, body.nohud #checkoutTag, body.nohud #shiftClock, body.nohud #invBar, body.nohud #crosshair { display: none !important; }
 
   /* ---------- now playing: quiet corner caption ---------- */
   #nowPlaying { position: fixed; z-index: 10; right: 16px; bottom: 12px; display: none;
@@ -117,8 +148,8 @@
     <div class="keys">
       <b>W A S D</b><span>move</span>      <b>MOUSE</b><span>look</span>
       <b>CLICK</b><span>grab</span>         <b>RIGHT-CLICK</b><span>put back</span>
-      <b>E</b><span>interact</span>         <b>1–9 / WHEEL</b><span>switch items</span>
-      <b>SHIFT</b><span>hustle</span>       <b>L</b><span>time of day</span>
+      <b>E / Q</b><span>interact</span>         <b>1–9 / WHEEL</b><span>switch items</span>
+      <b>SHIFT</b><span>hustle</span>       <b>L</b><span>skip an hour</span>
     </div>
     <div class="more">Most things do something. Poke around. &nbsp;·&nbsp; <b>ESC</b> menu</div>
   </div>
@@ -128,6 +159,9 @@
 <div id="hoverTip"></div>
 <div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
 <div id="checkoutTag"></div>
+<div id="shiftClock"></div>
+<div id="actLog"><div class="h" onclick="logToggle()">LOG<span class="n"></span><span class="k">J hide · PgUp/PgDn</span></div><div id="actLogList"></div></div>
+<div id="shiftReport"><pre id="shiftSlip"></pre><button id="shiftNext">NEXT SHIFT ▸</button></div>
 <div id="invBar"></div>
 <div id="toast"></div>
 <div id="tvHint"></div>
