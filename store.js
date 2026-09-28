@@ -75,7 +75,6 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
-
 // ---------------- TV light (shader side) ----------------
 // The big screen lights the room as a 3x3 grid of colored patches (one per
 // region of the picture), each with real cosine falloff at the screen and at
@@ -101,6 +100,10 @@ const TVU = {
   uSunSky: { value: new THREE.Color() }, uSunGround: { value: new THREE.Color() }, uSunC: { value: new THREE.Color() }, uSunDir: { value: new THREE.Vector3() },
   uMoonSky: { value: new THREE.Color() }, uMoonGround: { value: new THREE.Color() }, uMoonC: { value: new THREE.Color() }, uMoonDir: { value: new THREE.Vector3() },
   uDayC: { value: new THREE.Color() }, uNightC: { value: new THREE.Color() },       // what comes in through the storefront glass by day / by night
+  uThLight: { value: new THREE.Vector2(1, 1) },      // x = lobby switch, y = theater house-lights switch
+  uLobbyBox: { value: new THREE.Vector4() },         // movie lobby: x0, x1, z0, z1
+  uThBox: { value: new THREE.Vector4() },            // auditorium: x0, x1, z0, z1
+  uThScreenP: { value: new THREE.Vector3(-2.87, 1.1, 45.8) }, // theater screen center for live bounce
 };
 // Room lighting, per fragment, by where it is (world space): no light objects,
 // so it costs the same however many zones there are, and it stops dead at the
@@ -116,13 +119,21 @@ const ROOM_FRAG = `
   vec3 rl;
   if (P.x > uFloorBox.x && P.x < uFloorBox.y && P.z > -0.05 && P.z < uFloorBox.z && P.y < uFloorBox.w) {
     float w1 = 1.0 - smoothstep(9.0, 11.0, P.z), w3 = smoothstep(18.0, 20.0, P.z), w2 = max(0.0, 1.0 - w1 - w3);
-    float win = exp(-P.z / 9.0);                       // nearer the glass, the more of the outside there is
-    float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);   // faces turned toward the windows / up catch more
+    float win = exp(-P.z / 9.0);
+    float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);
     rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
   } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
     float lvl = P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
-    rl = (0.03 + 0.97 * lvl) * fl;                    // no windows back here: off is dark
+    rl = (0.03 + 0.97 * lvl) * fl;
+  } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uLobbyBox.z && P.z < uLobbyBox.w && P.y < uBohSplit.y + 0.05) {
+    rl = (0.04 + 0.96 * uThLight.x) * fl * vec3(1.08, 0.93, 0.80);
+  } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uFloorBox.w + 0.1) {
+    vec3 thFl = (0.025 + 0.30 * uThLight.y) * fl * vec3(1.15, 0.82, 0.55);
+    vec3 sL = uThScreenP - P; float sd2 = dot(sL, sL); sL *= inversesqrt(sd2);
+    float sCos = max(sL.z, 0.0) * (0.35 + 0.65 * max(dot(rN, sL), 0.0));
+    vec3 scrGlow = uTvGain * (uTvZoneC[4] * 4.2 + uTvAmb * 2.4) * sCos / (1.0 + 0.025 * sd2);
+    rl = thFl + scrGlow;
   } else {
     vec3 sun = mix(uSunGround, uSunSky, 0.5 * rN.y + 0.5) + uSunC * max(dot(rN, uSunDir), 0.0);
     vec3 moon = mix(uMoonGround, uMoonSky, 0.5 * rN.y + 0.5) + uMoonC * max(dot(rN, uMoonDir), 0.0);
@@ -159,7 +170,7 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
     .replace("#include <common>", `#include <common>
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
       uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
-      uniform vec4 uZone, uBoh, uFloorBox, uBohBox; uniform vec2 uBohSplit;
+      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec2 uBohSplit, uThLight; uniform vec3 uThScreenP;
       uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC;`)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + ROOM_FRAG + TV_FRAG);
 };
@@ -487,12 +498,19 @@ const mat = {
   lineYellow: new THREE.MeshBasicMaterial({ color: 0xe8c33c }),
   aluminum: new THREE.MeshLambertMaterial({ color: 0xc2c6cb }),
 };
-let panelMats = [];                        // ceiling panel groups, per switch zone — dark when switched off, flicker independently on warm-up
+let floorHeightAt = () => 0;// ceiling panel groups, per switch zone — dark when switched off, flicker independently on warm-up
+let panelMats = [];  
+let theaterScreenMesh = null;
+let projBeamMat = null;
+const theaterSeats = [];
+
 // the light switch zones: three along the sales floor, then the back of house rooms
-const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom"];
-const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom" };
-const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS" };   // printed on the plates
+const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater"];
+const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom", lobby: "theater lobby", theater: "auditorium" };
+const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS", lobby: "LOBBY", theater: "HOUSE" };
 function lightZoneAt(x, z) {
+  if (z >= BOH.z1) return "theater";
+  if (z > STORE.z && x < BOH.x0) return "lobby";
   if (z > STORE.z) return z < BOH.hallZ ? "hall" : x < BOH.splitX ? "breakroom" : "restroom";
   return z < 10 ? "front" : z < 19 ? "aisles" : "lounge";
 }
@@ -708,7 +726,8 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     signs: [{ text: "BREAK ROOM", side: -1 }] });
   makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
     signs: [{ text: "RESTROOM", side: -1 }] });
-  makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, locked: true, leafMat: steel });
+  makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, locked: false, leafMat: steel,
+    signs: [{ text: "THEATER", side: 1 }] });
   const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over the store-side doorway, above the stripe
   rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
   rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y = Math.PI; scene.add(rr);
@@ -863,7 +882,269 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     wash.material = new THREE.MeshLambertMaterial({ map: wash.material.map });
     wash.position.set(x0 + 0.006, 1.9, sz); wash.rotation.y = Math.PI / 2; scene.add(wash);
   }
+// ---- movie theater lobby (x WALL_L..BX0, z BZ0..BZ1) & single-screen stadium theater (z BZ1..46.5) ----
+  {
+    const LX0 = WALL_L, LX1 = BX0, LZ0 = Z, LZ1 = BZ1, LH = BOH.h;
+    const TX = (LX0 + LX1) / 2;              // -2.87: centerline of lobby & auditorium
+    const TW = 8.2, TX0 = TX - TW / 2, TX1 = TX + TW / 2, TZ0 = LZ1, TZ1 = 46.5, TH = STORE.h;
+    TVU.uLobbyBox.value.set(LX0 - 0.05, LX1 + 0.05, LZ0, LZ1 + 0.05);
+    TVU.uThBox.value.set(TX0 - 0.05, TX1 + 0.05, TZ0, TZ1 + 0.05);
 
+    // lobby walls, art-deco cinema carpet, and ceiling
+    wall(LZ0, LZ1 + T / 2, LX0, false, LH, mat.wall);
+    wall(LX0, LX1, LZ1, true, LH, mat.wall, [TX]);   // south wall with door into Cinema 1
+    const lobbyCarpetTex = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#58111a"; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "#d4a017"; ctx.lineWidth = 6;
+      const s = W / 4;
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+        const cx = (x + 0.5) * s, cy = (y + 0.5) * s;
+        ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.38); ctx.lineTo(cx + s * 0.38, cy);
+        ctx.lineTo(cx, cy + s * 0.38); ctx.lineTo(cx - s * 0.38, cy); ctx.closePath(); ctx.stroke();
+        ctx.fillStyle = "#1b4d4a"; ctx.beginPath(); ctx.arc(cx, cy, s * 0.1, 0, 7); ctx.fill();
+      }
+      for (let i = 0; i < 1800; i++) {
+        ctx.fillStyle = Math.random() < 0.5 ? "rgba(255,215,100,.12)" : "rgba(0,0,0,.22)";
+        ctx.fillRect(Math.random() * W, Math.random() * H, 2, 2);
+      }
+    }, 512, 512);
+    floorPatch(lobbyCarpetTex, 2.0, LX0, LX1, LZ0, LZ1);
+    const lobCeilTex = ceilGrid(ceilTex.clone(), LX0, LX1, LZ0, LZ1); lobCeilTex.needsUpdate = true;
+    const lobCeil = new THREE.Mesh(new THREE.PlaneGeometry(LX1 - LX0, LZ1 - LZ0), new THREE.MeshLambertMaterial({ map: lobCeilTex }));
+    lobCeil.rotation.x = Math.PI / 2; lobCeil.position.set(TX, LH, (LZ0 + LZ1) / 2); scene.add(lobCeil);
+
+    // padded crimson auditorium door
+    const plushDoor = new THREE.MeshLambertMaterial({ color: 0x6e141d });
+    makeDoor({ at: LZ1, c: TX, alongX: true, hinge: -1, swing: 1, leafMat: plushDoor,
+      signs: [{ text: "CINEMA 1", side: -1 }, { text: "LOBBY", side: 1 }] });
+
+    // glowing marquee over the Cinema 1 door
+    box(2.2, 0.36, 0.14, mat.dark, TX, DOOR_H + 0.25, LZ1 - T / 2 - 0.07);
+    const mq = glow(textPlane("★ CINEMA 1 · NOW SHOWING ★", 2.08, 0.28, "#ffd400", "#58111a", "Arial Black", 64));
+    mq.position.set(TX, DOOR_H + 0.25, LZ1 - T / 2 - 0.145); mq.rotation.y = Math.PI; scene.add(mq);
+
+    // brass velvet-rope stanchions flanking the Cinema 1 entrance
+    const brass = new THREE.MeshPhongMaterial({ color: 0xc9a227, specular: 0xffe2a0, shininess: 80 });
+    const velvet = new THREE.MeshLambertMaterial({ color: 0x8f111c });
+    for (const sx of [-1, 1]) {
+      for (const px of [TX + sx * 1.05, TX + sx * 2.25]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 12), brass);
+        post.position.set(px, 0.45, LZ1 - 0.65); scene.add(post);
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.03, 16), brass);
+        base.position.set(px, 0.015, LZ1 - 0.65); scene.add(base);
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), brass);
+        ball.position.set(px, 0.92, LZ1 - 0.65); scene.add(ball);
+      }
+      const rope = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.022, 8, 24, Math.PI), velvet);
+      rope.position.set(TX + sx * 1.65, 0.84, LZ1 - 0.65); rope.rotation.z = Math.PI; rope.scale.y = 0.35; scene.add(rope);
+      colliders.push({ x0: TX + sx * 1.65 - 0.65, x1: TX + sx * 1.65 + 0.65, z0: LZ1 - 0.78, z1: LZ1 - 0.52, y1: 0.95 });
+    }
+
+    // small-town concession & ticket counter in the west end of the lobby
+    const cx0 = LX0 + 0.2, cx1 = -4.5, cz = 30.2, cw = cx1 - cx0, ccx = (cx0 + cx1) / 2;
+    box(cw, 0.96, 0.62, mat.wood, ccx, 0.48, cz);
+    box(cw + 0.06, 0.05, 0.68, brass, ccx, 0.985, cz);
+    box(1.1, 0.38, 0.52, mat.glass, ccx + 0.45, 1.2, cz);   // glass candy display case
+    for (const [dx, col] of [[-0.3, 0xe63946], [0, 0xf4a300], [0.3, 0x457b9d]])
+      box(0.22, 0.08, 0.28, new THREE.MeshLambertMaterial({ color: col }), ccx + 0.45 + dx, 1.06, cz);
+    colliders.push({ x0: cx0, x1: cx1, z0: cz - 0.35, z1: cz + 0.35, y1: 1.4 });
+    const adm = textPlane("ADMISSION $3.50 · MATINEE $2.00 · POPCORN $1.50", 2.5, 0.34, "#fff4d0", "#1a1412", "Arial", 48);
+    adm.material = new THREE.MeshLambertMaterial({ map: adm.material.map });
+    adm.position.set(ccx, 2.05, LZ0 + T / 2 + 0.015); scene.add(adm);
+
+    // ---- Single-Screen Stadium Auditorium ----
+    // 6 stadium rows stepping down from y = 0 (at z = 34.6) to y = -1.56 (at z = 42.4)
+    const R_Z0 = 34.6, R_ROWS = 6, R_STEP_Z = 1.3, R_DROP = 0.26, R_END = R_Z0 + R_ROWS * R_STEP_Z; // 42.4
+    const PIT_Y = -R_ROWS * R_DROP;          // -1.56
+    const AISLE_HALF = 0.78;
+
+    floorHeightAt = (x, z) => {
+      if (z <= R_Z0 || x < TX0 || x > TX1 || z > TZ1) return 0;
+      if (z < R_END) {
+        if (Math.abs(x - TX) < AISLE_HALF) return ((z - R_Z0) / (R_END - R_Z0)) * PIT_Y; // smooth center ramp
+        const r = Math.min(R_ROWS - 1, Math.floor((z - R_Z0) / R_STEP_Z));
+        return -(r + 1) * R_DROP;
+      }
+      return PIT_Y;
+    };
+
+    // outer auditorium walls (spanning down to PIT_Y so no gaps show as the floor drops)
+    const WALL_BOT = PIT_Y, WALL_H = TH - WALL_BOT, WALL_CY = (TH + WALL_BOT) / 2;
+    const thWall = new THREE.MeshLambertMaterial({ color: 0x261015 });
+    const curtainMat = new THREE.MeshLambertMaterial({ color: 0x74121d });
+    const stageWood = new THREE.MeshLambertMaterial({ color: 0x3d2314 });
+    const tierFloorMat = new THREE.MeshLambertMaterial({ color: 0x38131a });
+    const riserMat = new THREE.MeshLambertMaterial({ color: 0x1e0b0f });
+    const stepLightMat = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
+
+    // header above lobby roof at z = TZ0, side walls, and rear screen wall
+    box(TW, TH - LH, WALL_T, thWall, TX, LH + (TH - LH) / 2, TZ0);
+    aimBlockers.push(
+      box(WALL_T, WALL_H, TZ1 - TZ0, thWall, TX0, WALL_CY, (TZ0 + TZ1) / 2),
+      box(WALL_T, WALL_H, TZ1 - TZ0, thWall, TX1, WALL_CY, (TZ0 + TZ1) / 2),
+      box(TW, WALL_H, WALL_T, thWall, TX, WALL_CY, TZ1)
+    );
+    colliders.push(
+      { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
+      { x0: TX1 - 0.18, x1: TX1 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
+      { x0: TX0, x1: TX1, z0: TZ1 - 0.18, z1: TZ1 + 0.18, y0: WALL_BOT, y1: TH },
+      { x0: TX0, x1: LX0, z0: TZ0 - 0.18, z1: TZ0 + 0.18, y0: WALL_BOT, y1: TH },
+      { x0: LX1, x1: TX1, z0: TZ0 - 0.18, z1: TZ0 + 0.18, y0: WALL_BOT, y1: TH }
+    );
+
+    // dark cinema ceiling + back entry cross-aisle + sloped ramp + front orchestra pit
+    const thCeil = new THREE.Mesh(new THREE.PlaneGeometry(TW, TZ1 - TZ0), new THREE.MeshLambertMaterial({ color: 0x121016 }));
+    thCeil.rotation.x = Math.PI / 2; thCeil.position.set(TX, TH, (TZ0 + TZ1) / 2); scene.add(thCeil);
+    box(TW, 0.04, R_Z0 - TZ0, tierFloorMat, TX, -0.02, (TZ0 + R_Z0) / 2);
+    box(TW, 0.04, TZ1 - R_END, tierFloorMat, TX, PIT_Y - 0.02, (R_END + TZ1) / 2);
+
+    const rampLen = Math.hypot(R_END - R_Z0, PIT_Y), rampAng = Math.atan2(-PIT_Y, R_END - R_Z0);
+    const ramp = new THREE.Mesh(new THREE.BoxGeometry(AISLE_HALF * 2, 0.04, rampLen), mat.carpet);
+    ramp.position.set(TX, PIT_Y / 2 - 0.02, (R_Z0 + R_END) / 2); ramp.rotation.x = rampAng; scene.add(ramp);
+
+    // stadium tiers & 48 seats (merged into 3 meshes for zero draw-call bloat)
+    const bankW = (TW - AISLE_HALF * 2) / 2;
+    const seatPlush = new THREE.MeshLambertMaterial({ color: 0x9e1b24 });
+    const seatDark = new THREE.MeshLambertMaterial({ color: 0x1c1a1e });
+    const seatWood = new THREE.MeshLambertMaterial({ color: 0x4a2c18 });
+    const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+    const plushGeos = [], darkGeos = [], woodGeos = [];
+    const pushGeo = (arr, geo, x, y, z, rx = 0) => {
+      const g = geo.index ? geo.toNonIndexed() : geo.clone();
+      if (rx) g.rotateX(rx);
+      g.translate(x, y, z); arr.push(g);
+    };
+
+    for (let r = 0; r < R_ROWS; r++) {
+      const z0 = R_Z0 + r * R_STEP_Z, z1 = z0 + R_STEP_Z, y = -(r + 1) * R_DROP;
+      for (const s of [-1, 1]) {
+        const bx = TX + s * (AISLE_HALF + bankW / 2);
+        // solid tier block down to PIT_Y so aisle walls look closed from the ramp
+        box(bankW, y - PIT_Y + 0.02, R_STEP_Z, tierFloorMat, bx, (y + PIT_Y) / 2 - 0.01, (z0 + z1) / 2);
+        box(bankW, R_DROP + 0.02, 0.04, riserMat, bx, y + R_DROP / 2, z0 + 0.02);
+        // amber aisle step-edge marker light
+        const strip = glow(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.018, R_STEP_Z - 0.08), stepLightMat));
+        strip.position.set(TX + s * (AISLE_HALF + 0.04), y + 0.01, (z0 + z1) / 2); scene.add(strip);
+
+        // 4 seats per bank in this row (facing +z toward the screen)
+        const seatPitch = 0.62, bankInner = TX + s * (AISLE_HALF + 0.48);
+        for (let k = 0; k < 4; k++) {
+          const sx = bankInner + s * k * seatPitch, sz = z0 + 0.36;
+          pushGeo(darkGeos, new THREE.BoxGeometry(0.44, 0.34, 0.05), sx, y + 0.17, sz);                 // pedestal
+          pushGeo(plushGeos, new THREE.BoxGeometry(0.48, 0.10, 0.44), sx, y + 0.39, sz + 0.03);         // cushion
+          pushGeo(plushGeos, new THREE.BoxGeometry(0.48, 0.52, 0.09), sx, y + 0.66, sz - 0.16, -0.12);  // angled backrest
+          pushGeo(woodGeos, new THREE.BoxGeometry(0.50, 0.50, 0.03), sx, y + 0.66, sz - 0.21, -0.12);   // wood back shell
+          for (const arm of [-0.24, 0.24]) pushGeo(darkGeos, new THREE.BoxGeometry(0.05, 0.04, 0.42), sx + arm, y + 0.54, sz + 0.02);
+
+          // invisible pick target so aiming at any seat and pressing E sits you right there
+          const seatHit = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.82, 0.52), hitMat);
+          seatHit.position.set(sx, y + 0.42, sz);
+          seatHit.userData.sit = true;
+          seatHit.userData.seatPos = { x: sx, y, z: sz + 0.04 };
+          theaterSeats.push({ x: sx, y, z: sz + 0.04, rowZ: z0 + 0.86 });
+          scene.add(seatHit); aimables.push(seatHit);
+        }
+        // row seat-back collider (leaves 0.72m legroom walkway in front of each row)
+        colliders.push({
+          x0: Math.min(bankInner, bankInner + s * 3 * seatPitch) - 0.28,
+          x1: Math.max(bankInner, bankInner + s * 3 * seatPitch) + 0.28,
+          z0: z0 + 0.08, z1: z0 + 0.56, y0: y, y1: y + 0.95, shadow: false,
+        });
+      }
+    }
+    scene.add(new THREE.Mesh(mergeGeometries(plushGeos), seatPlush));
+    scene.add(new THREE.Mesh(mergeGeometries(darkGeos), seatDark));
+    scene.add(new THREE.Mesh(mergeGeometries(woodGeos), seatWood));
+
+    // acoustic wall drapery + warm brass wall sconces
+    const sconceMat = new THREE.MeshLambertMaterial({ color: 0xffe0a3, emissive: 0xff9d3b, emissiveIntensity: 0.85 });
+    for (const s of [-1, 1]) {
+      const wx = TX + s * (TW / 2 - 0.12);
+      for (let z = 35.2; z < 44.5; z += 2.2) {
+        box(0.05, 2.2, 1.5, curtainMat, wx, 0.8, z);
+        box(0.08, 0.28, 0.16, brass, wx - s * 0.04, 1.55, z);
+        const shade = glow(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.05, 0.22, 10), sconceMat));
+        shade.position.set(wx - s * 0.09, 1.68, z); scene.add(shade);
+      }
+    }
+
+    // stage, curtains, silver screen, and front-row VCR feed podium
+    const ST_Z0 = 44.8, ST_Y = -0.95;
+    box(TW - 0.2, ST_Y - PIT_Y, TZ1 - ST_Z0, stageWood, TX, (ST_Y + PIT_Y) / 2, (ST_Z0 + TZ1) / 2);
+    box(TW - 0.16, 0.05, TZ1 - ST_Z0 + 0.06, brass, TX, ST_Y + 0.025, (ST_Z0 + TZ1) / 2);
+    colliders.push({ x0: TX0, x1: TX1, z0: ST_Z0 - 0.05, z1: TZ1, y0: PIT_Y, y1: ST_Y + 0.5 });
+
+    // stage curtains & valance framing the 5.1m x 3.4m screen
+    for (const s of [-1, 1]) box(1.35, TH - ST_Y, 0.22, curtainMat, TX + s * (TW / 2 - 0.72), (TH + ST_Y) / 2, 45.75);
+    box(TW - 0.2, 0.55, 0.26, curtainMat, TX, TH - 0.28, 45.7);
+    box(5.34, 3.64, 0.08, mat.dark, TX, 1.1, 45.92);
+
+    theaterScreenMesh = glow(new THREE.Mesh(new THREE.PlaneGeometry(5.1, 3.4), mat.dark));
+    theaterScreenMesh.position.set(TX, 1.1, 45.85);
+    theaterScreenMesh.rotation.y = Math.PI;          // faces -z toward the stadium seats
+    scene.add(theaterScreenMesh);
+    aimables.push(theaterScreenMesh);
+
+    // small VCR deck at the center of the stage apron so you can load/eject tapes right in the theater
+    const deck = box(0.46, 0.12, 0.32, mat.dark, TX, ST_Y + 0.08, ST_Z0 + 0.22);
+    deck.userData.theaterDeck = true; aimables.push(deck);
+    const deckLbl = textPlane("THEATER VCR FEED", 0.42, 0.07, "#ffd400", "#14161a");
+    deckLbl.position.set(TX, ST_Y + 0.08, ST_Z0 + 0.058); deckLbl.rotation.y = Math.PI; scene.add(deckLbl);
+
+    // projection booth ports + EXIT sign on the back wall (z = TZ0)
+    // projection booth ports + EXIT sign on the back wall (z = TZ0)
+    // projection booth ports + volumetric projector beam + EXIT sign on the back wall (z = TZ0)
+    box(1.4, 0.55, 0.06, mat.dark, TX + 1.8, 2.25, TZ0 + 0.12);
+    for (const dx of [-0.35, 0.35]) {
+      const port = glow(new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.22), new THREE.MeshBasicMaterial({ color: dx < 0 ? 0xffffff : 0x5577aa })));
+      port.position.set(TX + 1.8 + dx, 2.25, TZ0 + 0.155); scene.add(port);
+    }
+    {
+      const beamTex = makeTexture((ctx, W, H) => {
+        const img = ctx.createImageData(W, H), d = img.data;
+        for (let y = 0; y < H; y++) {
+          const along = Math.pow(1 - y / H, 2.6);                // hugs the booth, dies out well before the screen
+          for (let x = 0; x < W; x++) {
+            const a = (x / W) * Math.PI * 2;                     // seamless around the cylinder circumference
+            const ray = 0.78 + 0.22 * Math.sin(a * 5) * Math.cos(a * 3);
+            const alpha = Math.round(255 * along * ray);
+            const i = (y * W + x) * 4;
+            d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = alpha;
+          }
+        }
+        ctx.putImageData(img, 0, 0);
+      }, 128, 256);
+      projBeamMat = new THREE.MeshBasicMaterial({
+        map: beamTex, color: 0xfff8ee, transparent: true, opacity: 0.01,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      });
+      const P0 = new THREE.Vector3(TX + 1.45, 2.25, TZ0 + 0.16);
+      const P1 = new THREE.Vector3(TX, 1.35, 45.85);
+      const len = 8.5;                                           // stops mid-house so it never hangs over the screen
+      // 4 nested concentric cones (no flat crossed fins -> no '+' shape at the port)
+      const shells = [
+        [0.075, 1.25, 1.00],
+        [0.055, 0.90, 0.92],
+        [0.038, 0.58, 0.84],
+        [0.020, 0.28, 0.75],
+      ].map(([r0, r1, k]) => {
+        const g = new THREE.CylinderGeometry(r0, r1, len * k, 24, 1, true);
+        g.translate(0, len * (1 - k) / 2, 0);
+        return g;
+      });
+      const cone = mergeGeometries(shells);
+      cone.translate(0, -len / 2, 0); cone.rotateX(-Math.PI / 2);
+      const beam = new THREE.Mesh(cone, projBeamMat);
+      beam.position.copy(P0); beam.lookAt(P1);
+      beam.userData.clearToBloom = true;
+      scene.add(beam);
+
+      const lens = glow(new THREE.Mesh(new THREE.CircleGeometry(0.075, 16), new THREE.MeshBasicMaterial({ color: 0xfffbe6 })));
+      lens.position.set(P0.x, P0.y, P0.z + 0.01);
+      scene.add(lens);
+    }
+    const exitSign = glow(textPlane("EXIT", 0.46, 0.18, "#ffffff", "#b3121d", "Arial Black", 76));
+  }
   // fluorescent troffers: fixtures taking the place of one ceiling
   // tile each (snapped into its slot). Mostly one glowing white rectangle —
   // the diffuser — with the two tubes behind it only faintly brighter bands.
@@ -888,6 +1169,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     if (!panelBuckets.has(key)) panelBuckets.set(key, []);
     panelBuckets.get(key).push(p);
   };
+  for (const [x, z] of [[-5.4, 30.15], [-1.8, 30.15]]) troffer(x, z, BOH.h);   // movie theater lobby troffers
   // every other tile slot across, every fourth along — a tile or more of
   // plain ceiling on every side, so no two fixtures ever touch
   for (let x = -9.9; x <= STORE.x - 1; x += 2 * CEIL_TILE.x) for (let z = 3.15; z <= STORE.z - 1; z += 4 * CEIL_TILE.z) {
@@ -1697,6 +1979,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     g.rotation.y = Math.PI / 2; g.position.set(WX + 0.01 + depth / 2, 0, z); scene.add(g);
     colliders.push({ x0: WX, x1: WX + 0.01 + depth, z0: z - width / 2, z1: z + width / 2 });
   };
+
   const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
   const glass = new THREE.MeshLambertMaterial({ color: 0xcfe9f7, transparent: true, opacity: 0.16, depthWrite: false });
 
@@ -2030,6 +2313,11 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     return g;                                  // local +z faces the shopper; the pegboard back is at z = -RD/2
   };
   buildSnackRack.depth = RD;
+  {
+    const lobRack = buildSnackRack(1.2, "CONCESSIONS");
+    lobRack.position.set(-3.4, 0, 28.1 + RD / 2); scene.add(lobRack);
+    colliders.push({ x0: -4.0, x1: -2.8, z0: 28.0, z1: 28.1 + RD });
+  }
 }
 
 // ---------------- posters on the walls ----------------
@@ -3314,6 +3602,10 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   videoTex.colorSpace = THREE.SRGBColorSpace;
   videoMat = new THREE.MeshBasicMaterial({ map: videoTex, color: 0xd9d9d9 }); // -15%, blown-out whites were blinding
   miniScreens = [screenMesh];
+  if (theaterScreenMesh) {
+    theaterScreenMesh.material = screensaverMat;
+    miniScreens.push(theaterScreenMesh);
+  }
   // ceiling CRT clusters at the outer ends of the center aisles, pairs side by side
   // (along z), fanned ~45° apart, screens facing the center of the store
   const crtBody = new THREE.MeshLambertMaterial({ color: 0x2a2d33 });
@@ -3413,6 +3705,7 @@ function applyLighting() {
   const Z = TVU.uZone.value, B = TVU.uBoh.value;
   Z.set(zoneLvl.front, zoneLvl.aisles, zoneLvl.lounge, tod.level);
   B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, 0);
+  TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater);
   for (const l of allLights) l.intensity = l.userData.on * (zoneLvl[l.userData.zone] ?? 1);
   const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;
   if (dark === lightsOut && applyLighting.done) return;
@@ -3513,6 +3806,7 @@ function switchSnap(on) {
   const inside = BOH.hallZ + WALL_T / 2;
   plate(BOH_DOORS.breakroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["breakroom"]);
   plate(BOH_DOORS.restroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["restroom"]);
+  plate(-1.8, 1.22, BOH.z1 - WALL_T / 2, Math.PI, ["lobby", "theater"]);
 }
 
 // ---------------- player ----------------
@@ -3537,11 +3831,11 @@ function meTick(dt) {
     g.position.set(stool.x, 0, stool.z); g.rotation.y = stool.angle + Math.PI;
     me.setPose("sit", STOOL_SIT);
   } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
-    g.position.set(Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), 0, seatAt.z); g.rotation.y = 0;
+    g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = 0;
     me.setPose("sit");
   } else {
     speed = Math.hypot(player.x - meLast.x, player.z - meLast.z) / Math.max(dt, 1e-4);
-    g.position.set(player.x + Math.sin(player.yaw) * 0.21, 0, player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
+    g.position.set(player.x + Math.sin(player.yaw) * 0.21, floorHeightAt(player.x, player.z), player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
     g.rotation.y = player.yaw + Math.PI;      // the rig faces +z; yaw 0 looks down -z
     me.setPose(keys.has("KeyC") ? "crouch" : "idle");
   }
@@ -3825,22 +4119,22 @@ function cutoutPutDown() {
   colliders.push(cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box));
   tvBake = bakeTvVis();
 }
-// ---------------- customers (prototype): one TV-head customer at a time ----------------
-// customers.js builds them; this walks one through a visit: in the door,
+// ---------------- customers: up to three TV-head shoppers at a time ----------------
+// customers.js builds them; this walks each through a visit: in the door,
 // browse a shelf, pick a tape, wait at the register getting steadily less
 // patient, then leave — rung up (E on them at the counter) or not, in which
 // case the tape they walk out with sets the gates off. Paths come from a grid
 // A* over the colliders, rebuilt per trip, so doors and the moved standee count.
-const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: STORE.x, z1: STORE.z, pad: 0.3 };
+const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: STORE.x, z1: 46.5, pad: 0.3 };
 function navGrid(skip, extra = []) {                // extra: temporary obstacles (you, standing in the way)
   const { cell, x0, z0, pad } = NAV, nx = Math.ceil((NAV.x1 - x0) / cell), nz = Math.ceil((NAV.z1 - z0) / cell);
   const g = new Uint8Array(nx * nz);
-  const skips = [].concat(skip);                   // one collider or several to leave out (the asker's own, a door they'll open)
+  const skips = [].concat(skip, doors.filter(d => !d.locked).flatMap(d => [d.shut, d.openBox]));   // path through unlocked doors
   for (const c of colliders.concat(extra)) {
     if (skips.includes(c)) continue;
     const i0 = Math.max(0, Math.ceil((c.x0 - pad - x0) / cell - 0.5)), i1 = Math.min(nx - 1, Math.floor((c.x1 + pad - x0) / cell - 0.5));
     const k0 = Math.max(0, Math.ceil((c.z0 - pad - z0) / cell - 0.5)), k1 = Math.min(nz - 1, Math.floor((c.z1 + pad - z0) / cell - 0.5));
-    for (let k = k0; k <= k1; k++) g.fill(1, k * nx + i0, k * nx + i1 + 1);
+    for (let k = k0; k <= k1; k++) if (i1 >= i0) g.fill(1, k * nx + i0, k * nx + i1 + 1);
   }
   const at = (x, z) => { const i = Math.floor((x - x0) / cell), k = Math.floor((z - z0) / cell); return i < 0 || k < 0 || i >= nx || k >= nz ? -1 : k * nx + i; };
   const free = (x, z) => { const n = at(x, z); return n >= 0 && !g[n]; };
@@ -3853,19 +4147,22 @@ function navPath(grid, ax, az, bx, bz) {         // A* (8-way, binary heap), the
     return -1;
   };
   const s = near(at(ax, az)), e = near(at(bx, bz)); if (s < 0 || e < 0) return null;
-  const cost = new Float32Array(g.length).fill(Infinity), from = new Int32Array(g.length).fill(-1), heap = [[0, s]];
+  const cost = new Float64Array(g.length).fill(Infinity), from = new Int32Array(g.length).fill(-1), closed = new Uint8Array(g.length), heap = [[0, s]];
   const h = n => { const dx = Math.abs(n % nx - e % nx), dz = Math.abs((n / nx | 0) - (e / nx | 0)); return Math.max(dx, dz) + 0.414 * Math.min(dx, dz); };
   const push = it => { heap.push(it); for (let i = heap.length - 1; i && heap[i - 1 >> 1][0] > heap[i][0]; i = i - 1 >> 1) [heap[i], heap[i - 1 >> 1]] = [heap[i - 1 >> 1], heap[i]]; };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; for (let i = 0; ;) { let m = i; for (const c of [2 * i + 1, 2 * i + 2]) if (c < heap.length && heap[c][0] < heap[m][0]) m = c; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
   cost[s] = 0;
   while (heap.length) {
-    const [, n] = pop(); if (n === e) break;
+    const [, n] = pop();
+    if (closed[n]) continue;
+    closed[n] = 1;
+    if (n === e) break;
     const i = n % nx;
     for (const [di, dk, w] of [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]]) {
       if (i + di < 0 || i + di >= nx) continue;
-      const m = n + dk * nx + di; if (m < 0 || m >= g.length || g[m]) continue;
+      const m = n + dk * nx + di; if (m < 0 || m >= g.length || g[m] || closed[m]) continue;
       if (di && dk && (g[n + di] || g[n + dk * nx])) continue;   // no cutting a corner
-      const c = cost[n] + w; if (c < cost[m]) { cost[m] = c; from[m] = n; push([c + h(m), m]); }
+      const c = cost[n] + w; if (c + 1e-9 < cost[m]) { cost[m] = c; from[m] = n; push([c + h(m), m]); }
     }
   }
   if (from[e] < 0 && e !== s) return null;
@@ -3886,7 +4183,7 @@ let custSpots = null, custSnackSpots = null;
 const snackPrice = p => p.kind ? 1.25 : 0.99;       // drinks carry a kind (Soda, Water...), candy doesn't
 function snackSpots() {                           // in front of each snack fixture (the cooler, the candy racks), where a shopper can reach it
   if (custSnackSpots) return custSnackSpots;
-  const grid = navGrid(cust.box), spots = new Map(), v = new THREE.Vector3(), n = new THREE.Vector3();
+  const grid = navGrid(custs.map(k => k.box)), spots = new Map(), v = new THREE.Vector3(), n = new THREE.Vector3();
   for (const u of snackUnits()) {
     u.parent.getWorldDirection(n); u.getWorldPosition(v);   // fixtures face their local +z
     const x = v.x + n.x * 0.75, z = v.z + n.z * 0.75;
@@ -3900,7 +4197,7 @@ function snackSpots() {                           // in front of each snack fixt
 }
 function browseSpots() {
   if (custSpots) return custSpots;
-  const grid = navGrid(cust.box), groups = new Map();   // not counting the customer asking: they're standing in the doorway the flood fill starts from
+  const grid = navGrid(custs.map(k => k.box)), groups = new Map();   // not counting the customers: they're standing in the doorway the flood fill starts from
   for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
     if (!c.pos) continue;
     const nx = Math.cos(c.ry), nz = -Math.sin(c.ry), sx = c.pos.x + nx * 0.8, sz = c.pos.z + nz * 0.8;   // shelves face their local +x
@@ -3935,23 +4232,30 @@ function customerFor(seed, female) {
     patience: 0.6 + rnd() * 1.2,                  // scales how long they'll wait at the counter
     speed: 1.0 + rnd() * 0.55,                    // m/s
     picky: 0.25 + rnd() * 0.5,                    // chance a shelf they like has something for them
-    stops: 1 + Math.floor(rnd() * 3),             // shelves they'll look at before deciding
+    stops: (r => r < 0.05 ? 7 + Math.floor(rnd() * 4) : r < 0.2 ? 4 + Math.floor(rnd() * 3) : 1 + Math.floor(rnd() * 3))(rnd()),   // shelves they'll look at: 1-3 mostly, a proper browse now and then, rarely 7-10
     maxTapes: 1 + (rnd() < 0.35) + (rnd() < 0.12),   // most rent one; some make a night of it
+    dwell: 0.6 + rnd() * 0.9,                     // how long they tend to stand at a shelf
   } };
-  who.persona.stops += who.persona.maxTapes - 1;   // a bigger haul means more shelves to look at
+  who.persona.stops = Math.min(10, who.persona.stops + who.persona.maxTapes - 1);   // a bigger haul means more shelves to look at
   return who;
 }
-const cust = { c: null, state: "gone", t: 3, path: [], ry: 0, face: 0, tagged: false, hi: 0, box: { x0: 0, x1: 0, z0: 0, z1: 0, shadow: false } };
-const custLikes = spot => {                       // 0..1: how much of this shelf is their kind of thing
+// everyone in the store: up to CUST_MAX at once, each with their own visit.
+// One at a time at the register; the rest line up behind them (custLine[0] is
+// the one at the counter). Someone new wanders in every so often while there's room
+const CUST_MAX = 4;
+const custs = [], custLine = [];
+const custArrivals = { t: 3, lastMember: null };
+const custLikes = (cust, spot) => {               // 0..1: how much of this shelf is their kind of thing
   const cats = cust.who.persona.taste.cats; if (!cats.length) return 0.3;
   return cats.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n;
 };
+const custWaiting = () => custLine[0] && ["wait", "impatient", "angry"].includes(custLine[0].state) ? custLine[0] : null;   // at the counter, waiting to be rung up
 // who comes in: every walk-in is one of the POS's members, and their member
 // number is their seed, so the same member always looks and acts the same.
 // About half the time it's someone with tapes out, bringing them back — most
 // likely whoever's due today or late
 function custPickMember() {
-  const ms = posTerm.members.filter(m => m !== cust.lastMember);
+  const ms = posTerm.members.filter(m => m !== custArrivals.lastMember && !custs.some(k => k.member === m));   // not someone who's already in here
   const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
   const due = ms.filter(m => m.rentals.length && soonest(m) <= 1);
   if (due.length && Math.random() < 0.5) {
@@ -3963,16 +4267,19 @@ function custPickMember() {
 }
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
 function custSpawn(member = custPickMember()) {
-  const who = cust.who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
-  cust.member = cust.lastMember = member;
+  const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
+  const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
+  custArrivals.lastMember = member;
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   const c = cust.c = VaultCustomers.build(who.outfit);
-  c.parts.forEach(m => { m.userData.customer = true; aimables.push(m); });
+  c.parts.forEach(m => { m.userData.customer = cust; aimables.push(m); });
   c.glows.forEach(glow);
-  c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); c.group.rotation.y = cust.ry = cust.face = 0;
+  c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); c.group.rotation.y = 0;
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
   Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
+  custs.push(cust);
+  return cust;
 }
 // ---- getting past you (shared by customers and Dana) ----
 // you're standing on where they're headed: use a spot beside it (sideways to
@@ -3999,40 +4306,81 @@ function yieldTo(w, p, dx, dz, dt, redo) {
   else if (w.stuck > 3.5) { w.squeeze = 1.4; w.stuck = 0; }                         // no way round: slip past
   return true;
 }
-function custGo(state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
+// the same manners with the other shoppers (and Dana): wait a beat for whoever's
+// right ahead, then re-plan around them (they're colliders), and slip past if
+// that doesn't do it. Two meeting head-on don't both wait: whoever's already
+// waiting on the other one gets the right of way
+function custBumps(cust, p, dx, dz, dt) {
+  if (cust.squeeze > 0) return false;
+  const d = Math.hypot(dx, dz), ahead = q => { const ox = q.x - p.x, oz = q.z - p.z, r = Math.hypot(ox, oz); return r < 0.7 && (ox * dx + oz * dz) / d > r * 0.5; };
+  const o = custs.find(k => k !== cust && k.waitFor !== cust && ahead(k.c.group.position)) || (emp.c && ahead(emp.c.group.position) ? emp : null);
+  cust.waitFor = o;
+  if (!o) { cust.bumpT = 0; return false; }
+  cust.bumpT = (cust.bumpT || 0) + dt;
+  if (cust.bumpT > 0.7 && !cust.bumpDetour) { custGo(cust, cust.state, cust.spot); cust.bumpDetour = true; cust.bumpT = 0.01; }   // go around
+  else if (cust.bumpT > 3) { cust.squeeze = 1.4; cust.bumpT = 0; }                                                            // pardon me
+  return true;
+}
+function custGo(cust, state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
+  if (state === "leave") custLeaveLine(cust);
   const p = cust.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
   const grid = navGrid(cust.box, you); spot = spotBesideYou(spot, grid);
   cust.path = navPath(grid, p.x, p.z, spot.x, spot.z) || [[spot.x, spot.z]];
   if (!avoidPlayer) cust.detour = false;
-  cust.stuck = 0;
+  cust.stuck = 0; cust.bumpDetour = false;
   cust.state = state; cust.spot = spot;
+}
+// the checkout line: the front of it stands at the counter, the rest queue
+// back into the store behind them, facing the register
+const custLineSpot = i => i ? { x: CUST_COUNTER.x, z: CUST_COUNTER.z + 0.85 * i, ry: Math.PI } : CUST_COUNTER;
+function custToLine(cust) { const i = custLine.indexOf(cust); custGo(cust, i ? "queue" : "counter", custLineSpot(i)); }
+function custLeaveLine(cust) {                    // out of the line: everyone behind shuffles up a spot
+  const i = custLine.indexOf(cust); if (i < 0) return;
+  custLine.splice(i, 1);
+  for (const k of custLine.slice(i)) if (["queue", "inLine", "counter"].includes(k.state)) custToLine(k);
 }
 function custReturnsSpot() {                      // in the lane, facing the drop slot
   const s = returnSlotMesh.position;
   return { x: s.x + 0.6, z: s.z, ry: -Math.PI / 2 };
 }
-function custNextStop() {                         // a shelf they haven't looked at yet, favoring their kind of thing
-  let spots = browseSpots().filter(s => !cust.seen.has(s));
+function custNextStop(cust) {                     // a shelf they haven't looked at yet (and nobody else is at), favoring their kind of thing
+  let spots = browseSpots().filter(s => !cust.seen.has(s) && !custs.some(k => k !== cust && k.spot === s));
   if (cust.stopsLeft === 1 && !cust.holding && cust.who.persona.taste.cats.length) {   // last stop, still empty-handed: one more try at their favorite section
-    const favs = spots.filter(s => custLikes(s) > 0.5); if (favs.length) spots = favs;
+    const favs = spots.filter(s => custLikes(cust, s) > 0.5); if (favs.length) spots = favs;
   }
-  const w = spots.map(s => 1 + 8 * custLikes(s)), total = w.reduce((a, b) => a + b, 0);
+  const w = spots.map(s => 1 + 8 * custLikes(cust, s)), total = w.reduce((a, b) => a + b, 0);
   let r = cust.who.rnd() * total, i = 0; while (i < spots.length - 1 && (r -= w[i]) > 0) i++;
-  const spot = spots[i]; if (!spot) return custDone();
-  cust.seen.add(spot); custGo("stop", spot);
+  const spot = spots[i]; if (!spot) return custDone(cust);
+  cust.seen.add(spot); custGo(cust, "stop", spot);
 }
-function custDone() {                             // out of shelves to look at: grab a snack on the way maybe, then pay for what they've got, or give up
+function custDwell(cust) {                        // how long they look at a shelf: a few seconds mostly; now and then something really grabs them
+  const r = cust.who.rnd;
+  return (2 + r() * 5) * cust.who.persona.dwell * (r() < 0.1 ? 2.5 : 1);
+}
+function custPickTheaterSeat(cust) {              // pick an open stadium seat and walk to its row on the center ramp
+  const free = theaterSeats.filter(s =>
+    !custs.some(k => k !== cust && k.thSeat === s) &&
+    !(seated && seatAt && Math.hypot(seatAt.x - s.x, seatAt.z - s.z) < 0.3)
+  );
+  if (!free.length) return false;
+  const s = free[Math.floor(cust.who.rnd() * free.length)];
+  cust.thSeat = s;
+  custGo(cust, "thAisle", { x: -2.87, z: s.rowZ, ry: 0 });
+  return true;
+}
+function custDone(cust) {                         // out of shelves to look at: grab a snack, catch a movie, or head out
   if (!cust.snackDone) {
     cust.snackDone = true;
     const spots = snackSpots();
-    if (spots.length && Math.random() < (cust.holding ? 0.4 : 0.15)) return custGo("snack", spots[Math.floor(Math.random() * spots.length)]);
+    if (spots.length && Math.random() < (cust.holding ? 0.4 : 0.25)) return custGo(cust, "snack", spots[Math.floor(Math.random() * spots.length)]);
   }
-  if (cust.holding || cust.snacks.length) { cust.c.setMood("happy"); custGo("counter", CUST_COUNTER); }
-  else { cust.c.setMood("meh"); custGo("leave", CUST_DOOR); }
+  if (!cust.holding && !cust.watchedTheater && Math.random() < (playing ? 0.75 : 0.35) && custPickTheaterSeat(cust)) return;
+  if (cust.holding || cust.snacks.length) { cust.c.setMood("happy"); custLine.push(cust); custToLine(cust); }
+  else { cust.c.setMood("meh"); custGo(cust, "leave", CUST_DOOR); }
 }
-function custDecide() {                           // done browsing this shelf: take one, put one back, or move on
-  const { rnd, persona } = cust.who, likes = custLikes(cust.spot), last = cust.stopsLeft <= 1;
+function custDecide(cust) {                       // done browsing this shelf: take one, put one back, or move on
+  const { rnd, persona } = cust.who, likes = custLikes(cust, cust.spot), last = cust.stopsLeft <= 1;
   cust.stopsLeft--;
   const take = ((persona.taste.cats.length ? persona.picky * likes * 1.2 : 0.25) + (last && !cust.holding ? 0.3 : 0.03)) * 0.7 ** cust.holding;   // each extra tape is a harder sell
   if (cust.holding < persona.maxTapes && rnd() < take) cust.reach = "take";
@@ -4040,14 +4388,14 @@ function custDecide() {                           // done browsing this shelf: t
   else if (cust.holding && rnd() < 0.12) cust.reach = "return";   // second thoughts
   else cust.reach = null;
   if (cust.reach) {
-    cust.reachCopy = cust.reach === "return" ? null : custPickCopy();   // decided now, so the hand goes to the copy they'll take
+    cust.reachCopy = cust.reach === "return" ? null : custPickCopy(cust);   // decided now, so the hand goes to the copy they'll take
     const aim = cust.reachCopy || cust.tapes[cust.tapes.length - 1];   // ...or the slot theirs goes back into
     if (aim?.pos) cust.c.reachTo(aim.pos); else cust.c.setPose("reach");
     cust.c.setMood(cust.reach === "return" ? "meh" : likes > 0.4 ? "love" : "happy"); cust.state = "reach"; cust.t = 1.3;
   }
-  else { cust.c.setMood(cust.holding ? "happy" : "neutral"); cust.stopsLeft > 0 ? custNextStop() : custDone(); }
+  else { cust.c.setMood(cust.holding ? "happy" : "neutral"); cust.stopsLeft > 0 ? custNextStop(cust) : custDone(cust); }
 }
-function custPickCopy() {                        // a copy still on this shelf, favoring their kind of thing
+function custPickCopy(cust) {                     // a copy still on this shelf, favoring their kind of thing
   const cs = cust.spot.copies.filter(c => !c.offShelf), cats = cust.who.persona.taste.cats;
   if (!cs.length) return null;
   const w = cs.map(c => cats.includes(c.category) ? 6 : 1);
@@ -4055,58 +4403,135 @@ function custPickCopy() {                        // a copy still on this shelf, 
   return cs[i];
 }
 const registerStaffed = () => emp.state === "post" || Math.hypot(player.x - EMP_POST.x, player.z - EMP_POST.z) < 1.5;   // Dana at her post, or you behind the register
-function custGone() {
+function custGone(cust) {
+  custLeaveLine(cust);
+  if (co?.cust === cust) { co = null; coHud(); drawerOpen = 0; }
   if (cust.tagged) for (const c of cust.tapes) c.lost = true;   // walked out with them: gone for good (order a replacement on the POS)
   cust.snacks.forEach(restock);                   // lifted snacks just restock, no loss tracking
   const c = cust.c;
   scene.remove(c.group); c.dispose();
   for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
   colliders.splice(colliders.indexOf(cust.box), 1);
-  cust.c = null; cust.state = "gone"; cust.t = 20 + Math.random() * 20;
+  custs.splice(custs.indexOf(cust), 1);
+  cust.c = null; cust.state = "gone";
+  custArrivals.t = Math.max(custArrivals.t, 6 + Math.random() * 14);   // not a revolving door
 }
-function custInteract() {                        // E on a customer: ring them up at the counter, or just say hi
+function custInteract(cust) {                     // E on a customer: ring them up at the counter, or just say hi
   const c = cust.c;
-  if (["wait", "impatient", "angry"].includes(cust.state) && !co) { coStart("player"); coAct("customer"); }   // start ringing them up
-  else if (co?.by === "player") coAct("customer");
+  if (["wait", "impatient", "angry"].includes(cust.state) && !co) { coStart("player", cust); coAct("customer"); }   // start ringing them up
+  else if (co?.cust === cust && co.by === "player") coAct("customer");
   else if (!["paid", "leave", "out"].includes(cust.state)) { cust.hi = 1.4; c.setMood("happy"); }
 }
 function custTick(dt) {
-  if (!cust.c) { if ((cust.t -= dt) <= 0 && !frontLock.locked) custSpawn(); return; }   // locked: whoever's inside finishes up; nobody new
+  if (custs.length < CUST_MAX && !frontLock.locked && (custArrivals.t -= dt) <= 0) {   // locked: whoever's inside finishes up; nobody new
+    if (custs.some(k => Math.hypot(k.c.group.position.x - CUST_DOOR.x, k.c.group.position.z - CUST_DOOR.z) < 1.2)) custArrivals.t = 1;   // someone's in the doorway: give them a sec
+    else { custSpawn(); custArrivals.t = 6 + Math.random() * 20; }
+  }
+  for (const k of [...custs]) custStep(k, dt);
+}
+function custStep(cust, dt) {
   const c = cust.c, p = c.group.position, P = cust.who.persona;
   let speed = 0;
-  if (cust.path.length) {                         // walking: follow the path, waiting politely if you're in the way
+  if (cust.path.length) {                         // walking: follow the path, waiting politely if you (or someone else) is in the way
     const [tx, tz] = cust.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
     if (d < 0.05) cust.path.shift();
-    else if (yieldTo(cust, p, dx, dz, dt, av => custGo(cust.state, cust.spot, av))) {}   // you're in the way
+    else if (yieldTo(cust, p, dx, dz, dt, av => custGo(cust, cust.state, cust.spot, av))) {}   // you're in the way
+    else if (custBumps(cust, p, dx, dz, dt)) {}                                                 // another shopper is
     else {
       speed = P.speed * (cust.state === "leave" && cust.tagged ? 1.4 : 1);
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
+      p.y = floorHeightAt(p.x, p.z);
       cust.ry = Math.atan2(dx, dz);
+      // open any unlocked closed door right in front of them
+      for (const door of doors) if (!door.open && !door.locked) {
+        const dcx = (door.shut.x0 + door.shut.x1) / 2, dcz = (door.shut.z0 + door.shut.z1) / 2;
+        if (Math.hypot(p.x - dcx, p.z - dcz) < 1.1) toggleDoor(door);
+      }
     }
     if (cust.tagged && !cust.alarmed && Math.abs(p.x) < 2 && cust.lastZ >= GATE_Z && p.z < GATE_Z) {   // out through the gates with a tagged tape
       cust.alarmed = true; startGateAlarm(); c.setMood("alarm");
     }
     if (!cust.path.length && cust.spot?.ry !== undefined) cust.ry = cust.spot.ry;
   } else {                                        // arrived: do this stop's thing
-    cust.t -= dt;
+    cust.t -= dt; cust.waitFor = null;
     switch (cust.state) {
-      case "boot": if (cust.t <= 0) { c.setMood("neutral"); cust.returning.length ? custGo("dropoff", custReturnsSpot()) : custNextStop(); } break;
-      case "dropoff": c.reachTo(returnSlotMesh.getWorldPosition(new THREE.Vector3())); cust.state = "dropping"; cust.t = 1.2; break;   // tapes in the slot...
-      case "dropping": if (cust.t <= 0) {                                               // ...and checked back in
+      case "boot": if (cust.t <= 0) {
+        c.setMood("neutral");
+        if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
+        else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
+        else custNextStop(cust);
+      } break;
+      case "dropoff": c.reachTo(returnSlotMesh.getWorldPosition(new THREE.Vector3())); cust.state = "dropping"; cust.t = 1.2; break;
+      case "dropping": if (cust.t <= 0) {
         for (const copy of cust.returning) {
           posTerm.checkIn(copy);
-          if (Math.random() < 0.4) setWindFrac(copy, 0.15 + Math.random() * 0.85);   // be kind, rewind — not everyone is
+          if (Math.random() < 0.4) setWindFrac(copy, 0.15 + Math.random() * 0.85);
           const k = rentedCopies.indexOf(copy); if (k >= 0) rentedCopies.splice(k, 1);
           returnBin.push(copy);
         }
         refreshReturnsBin(); cust.returning = []; c.holdTape(0); c.setPose("idle"); c.reachTo(null); c.setMood("happy");
-        if (Math.random() < 0.5) custNextStop(); else custGo("leave", CUST_DOOR);   // stay and browse, or just a drop-off
+        if (Math.random() < (playing ? 0.45 : 0.2) && custPickTheaterSeat(cust)) {}
+        else if (Math.random() < 0.5) custNextStop(cust);
+        else custGo(cust, "leave", CUST_DOOR);
       } break;
-      case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = 3 + cust.who.rnd() * 4; break;
-      case "browse": if (cust.t <= 0) custDecide(); break;
-      case "snack":                               // reach in (the cooler door swings open for it), take one if any are left
+      case "thAisle": cust.state = "thRow"; break;
+      case "thRow": {                             // sidestep from the center ramp into their stadium row
+        const s = cust.thSeat, dx = s.x - p.x, dz = s.rowZ - p.z, d = Math.hypot(dx, dz);
+        if (d < 0.04) {
+          c.setPose("sit"); cust.from = { x: p.x, y: p.y, z: p.z };
+          cust.state = "thSitDown"; cust.t = 0.6; cust.ry = 0;
+        } else {
+          speed = P.speed * 0.85;
+          const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step; p.y = s.y;
+          cust.ry = Math.atan2(dx, dz);
+        }
+        break;
+      }
+      case "thSitDown": {
+        const s = cust.thSeat, k = 1 - Math.max(0, cust.t) / 0.6;
+        p.x = cust.from.x + (s.x - cust.from.x) * k;
+        p.y = cust.from.y + (s.y - cust.from.y) * k;
+        p.z = cust.from.z + (s.z - cust.from.z) * k;
+        cust.ry = 0;
+        if (cust.t <= 0) {
+          cust.state = "thWatch"; cust.t = 40 + cust.who.rnd() * 80; cust.moodT = 4;
+          c.setMood(playing ? "watch" : "neutral");
+        }
+        break;
+      }
+      case "thWatch": {
+        const s = cust.thSeat;
+        // if the player sits right in their seat, or their watch timer finishes, stand up
+        if (cust.t <= 0 || (seated && seatAt && Math.hypot(seatAt.x - s.x, seatAt.z - s.z) < 0.25)) {
+          c.setPose("idle"); c.setMood(playing ? "happy" : "neutral");
+          cust.state = "thRowOut"; break;
+        }
+        if ((cust.moodT -= dt) <= 0) {
+          cust.moodT = 5 + cust.who.rnd() * 8;
+          c.setMood(playing ? ["watch", "watch", "happy", "love"][Math.floor(cust.who.rnd() * 4)] : ["neutral", "meh", "sleep"][Math.floor(cust.who.rnd() * 3)]);
+        }
+        break;
+      }
+      case "thRowOut": {                          // step out of the row back onto the center ramp
+        const s = cust.thSeat, tx = -2.87, tz = s.rowZ, dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+        if (d < 0.05) {
+          cust.thSeat = null; cust.watchedTheater = true;
+          p.y = floorHeightAt(p.x, p.z);
+          if (!cust.holding && !cust.snacks.length && cust.stopsLeft > 0 && Math.random() < 0.5) custNextStop(cust);
+          else if (cust.holding || cust.snacks.length) { custLine.push(cust); custToLine(cust); }
+          else custGo(cust, "leave", CUST_DOOR);
+        } else {
+          speed = P.speed * 0.85;
+          const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step; p.y = s.y;
+          cust.ry = Math.atan2(dx, dz);
+        }
+        break;
+      }
+      case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = custDwell(cust); break;
+      case "browse": if (cust.t <= 0) custDecide(cust); break;
+      case "snack":
         { const left = cust.spot.units.filter(u => u.visible && u !== heldSnack); cust.snackUnit = left[Math.floor(Math.random() * left.length)] || null; }
-        if (cust.snackUnit) c.reachTo(cust.snackUnit.getWorldPosition(new THREE.Vector3())); else c.setPose("reach");   // hand to the one they're taking
+        if (cust.snackUnit) c.reachTo(cust.snackUnit.getWorldPosition(new THREE.Vector3())); else c.setPose("reach");
         c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
         if (cust.spot.drinks && !coolerOpen) { coolerOpen = true; cust.openedCooler = true; }
         break;
@@ -4115,41 +4540,44 @@ function custTick(dt) {
         if (u) { u.visible = false; cust.snacks.push(u); }
         c.reachTo(null);
         if (cust.openedCooler) { coolerOpen = false; cust.openedCooler = false; }
-        c.setPose(cust.holding ? "hold" : "idle"); custDone();
+        c.setPose(cust.holding ? "hold" : "idle"); custDone(cust);
       } break;
       case "reach": if (cust.t <= 0) {
-        if (cust.reach !== "take") setOnShelf(cust.tapes.pop(), true);   // put back (a swap trades one for one)
-        const got = cust.reachCopy && !cust.reachCopy.offShelf ? cust.reachCopy : cust.reach !== "return" && custPickCopy();   // the one they reached for (unless someone beat them to it)
-        if (cust.reach !== "return" && got) { setOnShelf(got, false); cust.tapes.push(got); }   // an actual copy off this shelf
+        if (cust.reach !== "take") setOnShelf(cust.tapes.pop(), true);
+        const got = cust.reachCopy && !cust.reachCopy.offShelf ? cust.reachCopy : cust.reach !== "return" && custPickCopy(cust);
+        if (cust.reach !== "return" && got) { setOnShelf(got, false); cust.tapes.push(got); }
         c.reachTo(null);
         cust.holding = cust.tapes.length;
         c.holdTape(cust.holding); c.setPose(cust.holding ? "hold" : "idle");
-        cust.stopsLeft > 0 ? custNextStop() : custDone();
+        cust.stopsLeft > 0 ? custNextStop(cust) : custDone(cust);
       } break;
-      case "checkout":                           // mid-sale: the clerk walked off?
+      case "checkout":
         if (co && (co.idle = (co.idle || 0) + dt) > 30) {
-          if (co.by === "player" && emp.state === "post") { co.by = "dana"; co.idle = 0; coHud(); }   // Dana steps in
-          else if (co.idle > 45) {                 // gone too long: they leave with whatever's in their hands
-            c.holdTape(cust.tapes.length);           // (snatching back anything you'd taken)
+          if (co.by === "player" && emp.state === "post") { co.by = "dana"; co.idle = 0; coHud(); }
+          else if (co.idle > 45) {
+            c.holdTape(cust.tapes.length);
             cust.tagged = cust.tapes.some(t => !t.desens); drawerOpen = 0; co = null; coHud();
-            c.setMood("angry"); c.holdProp(null); c.setPose(cust.tapes.length ? "hold" : "idle"); custGo("leave", CUST_DOOR);
+            c.setMood("angry"); c.holdProp(null); c.setPose(cust.tapes.length ? "hold" : "idle"); custGo(cust, "leave", CUST_DOOR);
           }
         }
         break;
-      case "counter": if (!registerStaffed()) { dingBell(); empSummon(); } c.setPose("wait"); c.holdProp(cust.tapes.length ? "card" : "cash");   // card out, ready c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience; break;   // ding! then a fair wait
-      case "wait": if (cust.t <= 0) { dingBell(); empSummon(); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;   // ding ding, hello?
+      case "queue": c.setPose("wait"); c.setMood("wait"); cust.state = "inLine"; cust.t = 45 * P.patience; break;
+      case "inLine": if (cust.t <= 0 && c.mood !== "impatient") c.setMood("impatient"); break;
+      case "counter": if (!registerStaffed()) { dingBell(); empSummon(); } c.setPose("wait"); c.holdProp(cust.tapes.length ? "card" : "cash");
+        c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience; break;
+      case "wait": if (cust.t <= 0) { dingBell(); empSummon(); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;
       case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
-      case "angry": if (cust.t <= 0) { cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo("leave", CUST_DOOR); } break;   // storms out with it
-      case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo("leave", CUST_DOOR); } break;
-      case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;   // screen clicks off at the door...
-      case "out": if (cust.t <= 0) custGone(); return;                               // ...and they're gone
+      case "angry": if (cust.t <= 0) { cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
+      case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
+      case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
+      case "out": if (cust.t <= 0) custGone(cust); return;
     }
   }
-  if (cust.hi > 0 && (cust.hi -= dt) <= 0) c.setMood({ browse: "browse", wait: "wait", impatient: "impatient", angry: "angry" }[cust.state] || (cust.holding ? "happy" : "neutral"));   // the hello wears off
+  if (cust.hi > 0 && (cust.hi -= dt) <= 0) c.setMood({ browse: "browse", thWatch: playing ? "watch" : "neutral", wait: "wait", inLine: "wait", impatient: "impatient", angry: "angry" }[cust.state] || (cust.holding ? "happy" : "neutral"));
   cust.lastZ = p.z;
-  cust.face += Math.atan2(Math.sin(cust.ry - cust.face), Math.cos(cust.ry - cust.face)) * Math.min(1, dt * 8);   // turn smoothly, the short way round
+  cust.face += Math.atan2(Math.sin(cust.ry - cust.face), Math.cos(cust.ry - cust.face)) * Math.min(1, dt * 8);
   c.group.rotation.y = cust.face;
-  const cr = cust.squeeze > 0 ? 0 : 0.22;          // slipping past you: no body to bump for a moment
+  const cr = cust.squeeze > 0 ? 0 : 0.22;
   Object.assign(cust.box, { x0: p.x - cr, x1: p.x + cr, z0: p.z - cr, z1: p.z + cr });
   c.tick(dt, speed);
 }
@@ -4167,7 +4595,7 @@ const emp = { coT: 0, coReached: false, c: null, task: "register", state: "", pa
 function empCoTarget(at) {                     // where Dana's hand goes for each checkout step
   if (at === "pad") return new THREE.Vector3(-3.95, 1.12, 3.9);
   if (at === "register") return co?.i >= CO_STEPS.findIndex(q => q.id === "ring") ? cashDrawer.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, -0.3)) : new THREE.Vector3(-5.45, 1.12, 3.8);   // the drawer / the keyboard
-  const q = cust.c.group.position; return new THREE.Vector3(q.x, 1.2, 3.95);   // over the counter, where their hand meets hers
+  const q = co.cust.c.group.position; return new THREE.Vector3(q.x, 1.2, 3.95);   // over the counter, where their hand meets hers
 }
 function empSpawn() {
   const outfit = { ...VaultCustomers.randomOutfit(seeded(417), true), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
@@ -4240,9 +4668,9 @@ function tvLevel() {                              // RMS of the TV's audio right
   let sum = 0; for (const v of tvAudio.buf) sum += v * v;
   return Math.sqrt(sum / tvAudio.buf.length);
 }
-const empCanWatch = () => frontLock.locked && !cust.c && emp.task === "register" && seated;   // what brings her over
+const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated;   // what brings her over
 const inLounge = () => Math.hypot(player.x - TV.x, player.z - (TV.z - 2.5)) < 5.5;
-const empKeepWatching = () => frontLock.locked && !cust.c && emp.task === "register" && (seated || inLounge());   // what keeps her there
+const empKeepWatching = () => frontLock.locked && !custs.length && emp.task === "register" && (seated || inLounge());   // what keeps her there
 function empWatch(dt) {                           // on the couch: pick a face from the sound
   const c = emp.c, w = emp.watch, lvl = tvLevel();
   w.cool -= dt;
@@ -4277,7 +4705,7 @@ const EMP_STOOL = { x: -4.75, z: 2.7 };          // where she parks it: beside t
 const EMP_STOOL_WAIT = 8;                        // seconds of nothing going on before she goes for it
 const EMP_BORED_AT = 25;                         // seconds up there before she's bored enough to really spin
 const STOOL_STATES = ["toStool", "stoolGrab", "stoolCarry", "stoolSitDown", "stoolSit", "stoolStandUp"];
-const empIdle = () => emp.task === "register" && !emp.paused && !cust.c && !co && !gateAlarm.on && !empCanWatch();
+const empIdle = () => emp.task === "register" && !emp.paused && !custs.length && !co && !gateAlarm.on && !empCanWatch();
 const stoolFree = () => !stool.carried && !onStool && !stool.by && !eHoldStool;
 const clearFor = (x, z, r, skip) => !colliders.some(c => !skip.includes(c) && x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
 function stoolSide(fx, fz) {                      // a clear spot to stand beside the stool, on the side nearest (fx, fz), facing it
@@ -4339,17 +4767,17 @@ function empTick(dt) {
     switch (emp.state) {
       case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
       case "post":                                // ring up whoever's waiting; shut the gates up
-        if (cust.c && ["wait", "impatient", "angry"].includes(cust.state)) {
+        if (custWaiting()) {
           c.setMood("happy");
           if (!co && (emp.ringT += dt) > 1.5) { emp.ringT = 0; coStart("dana"); }   // her turn: start ringing them up
         } else emp.ringT = 0;
-        const mine = co?.by === "dana" && cust.c;
+        const mine = co?.by === "dana" && co.cust.c;
         // she shuffles over to the pad for the desensitize step and back after — never leans across for it
         const wantX = mine && coStep()?.at === "pad" ? -4.2 : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // home = wherever she parked (beside you, if you're on her spot)
         if (Math.abs(gap) > 0.02) { const st = Math.sign(gap) * Math.min(Math.abs(gap), 1.0 * dt); p.x += st; speed = 1.0; }
         if (mine) {                                // chatting while she works: faces them, nods, smiles
           c.talk(true);
-          const q = cust.c.group.position, rel = Math.atan2(q.x - p.x, q.z - p.z) - emp.face;
+          const q = co.cust.c.group.position, rel = Math.atan2(q.x - p.x, q.z - p.z) - emp.face;
           c.lookAt(coStep()?.at === "customer" ? Math.atan2(Math.sin(rel), Math.cos(rel)) : null);
           if ((emp.chatT = (emp.chatT || 0) - dt) <= 0) { emp.chatT = 1.5 + Math.random() * 2; c.setMood(["happy", "happy", "neutral", "love"][Math.floor(Math.random() * 4)]); }
         } else { c.talk(false); if (emp.coWas) c.lookAt(null); }
@@ -4359,11 +4787,11 @@ function empTick(dt) {
           if (emp.coReached) { emp.coReached = false; coAct(s.at); c.reachTo(null); emp.coT = 0.35; }
           else { emp.coReached = true; c.reachTo(empCoTarget(s.at), 1, { lean: false }); emp.coT = s.at === "customer" ? 0.9 : 0.7; }
         }
-        if (co?.by === "dana" && !cust.c) { co = null; coHud(); drawerOpen = 0; }
+        if (co?.by === "dana" && !co.cust.c) { co = null; coHud(); drawerOpen = 0; }
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 2.5) { emp.alarmT = 0; silenceGateAlarm(); } } else emp.alarmT = 0;
         if (emp.t <= 0 && co?.by !== "dana") c.reachTo(null);
-        if (emp.t <= 0 && !co && c.mood === "happy" && !(cust.c && ["wait", "impatient", "angry"].includes(cust.state))) { c.setPose("idle"); c.setMood("neutral"); }
-        if (emp.paused && emp.t <= 0 && !co && !(cust.c && ["counter", "wait", "impatient", "angry", "checkout"].includes(cust.state))) { emp.paused = false; empNext(); break; }   // served: back to the returns
+        if (emp.t <= 0 && !co && c.mood === "happy" && !custWaiting()) { c.setPose("idle"); c.setMood("neutral"); }
+        if (emp.paused && emp.t <= 0 && !co && !custLine.length) { emp.paused = false; empNext(); break; }   // served: back to the returns
         if (!co && empCanWatch()) {                       // closed up and you're on the couch: take the next cushion over
           const side = seatAt.x > 0 ? -1 : seatAt.x < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);   // the end cushion farthest from you
           emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
@@ -4435,7 +4863,7 @@ function empTick(dt) {
       case "watching":
         empWatch(dt);
         if (!empKeepWatching()) {                  // you wandered off (she gives it a bit) / the store opened up (back to work now)
-          if ((emp.leaveT += dt) > (frontLock.locked && !cust.c ? 8 : 1.5)) { emp.state = "standUp"; emp.t = 0.6; c.setPose("idle"); c.setMood("neutral"); }
+          if ((emp.leaveT += dt) > (frontLock.locked && !custs.length ? 8 : 1.5)) { emp.state = "standUp"; emp.t = 0.6; c.setPose("idle"); c.setMood("neutral"); }
         }
         else emp.leaveT = 0;
         break;
@@ -4491,47 +4919,47 @@ function setFrontLock(on) {
 // on the pad → take the cash → ring it up (the drawer opens) → change → tapes
 // back. Snack-only sales skip the card and the pad. Skip the pad and the
 // gates will tell you about it on their way out
-let co = null;                                  // { by: "player"|"dana", step, tapes, total, bill, change, des }
+let co = null;                                  // { by: "player"|"dana", cust, step, tapes, total, bill, change, des }
 const money = n => "$" + n.toFixed(2);
-const coTotal = () => cust.tapes.reduce((a, t) => a + posTerm.rentPrice(t), 0) + cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0);
-const coTapes = () => cust.tapes.length === 1 ? cust.tapes[0].title : `${cust.tapes.length} tapes`;
+const coTotal = cust => cust.tapes.reduce((a, t) => a + posTerm.rentPrice(t), 0) + cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0);
+const coTapes = () => co.cust.tapes.length === 1 ? co.cust.tapes[0].title : `${co.cust.tapes.length} tapes`;
 const CO_STEPS = [
-  { id: "card", at: "customer", need: () => cust.tapes.length, tip: () => "take their member card",
-    do() { cust.c.holdProp(null); co.hand = "card"; } },
-  { id: "tap", at: "register", need: () => cust.tapes.length, tip: () => "tap the member card on the register",
-    do() { posBeep(1900); const m = cust.member, late = m.rentals.filter(r => posTerm.dueIn(r) < 0).length;
+  { id: "card", at: "customer", need: () => co.cust.tapes.length, tip: () => "take their member card",
+    do() { co.cust.c.holdProp(null); co.hand = "card"; } },
+  { id: "tap", at: "register", need: () => co.cust.tapes.length, tip: () => "tap the member card on the register",
+    do() { posBeep(1900); const m = co.cust.member, late = m.rentals.filter(r => posTerm.dueIn(r) < 0).length;
       toast(`#${m.num} ${memberName(m)}${late ? ` · ${late} late` : " · account OK"}`, !late); } },
-  { id: "cardBack", at: "customer", need: () => cust.tapes.length, tip: () => "hand their card back",
+  { id: "cardBack", at: "customer", need: () => co.cust.tapes.length, tip: () => "hand their card back",
     do() { co.hand = null; } },
-  { id: "tapes", at: "customer", need: () => cust.tapes.length, tip: () => `take ${coTapes()}`,
-    do() { cust.c.holdTape(0); co.hand = "tapes"; } },
-  { id: "desens", at: "pad", need: () => cust.tapes.some(t => !t.desens), repeat: () => cust.tapes.some(t => !t.desens),
-    tip: () => { const t = cust.tapes.find(t => !t.desens); return `desensitize ${t.title}${cust.tapes.length > 1 ? ` (${cust.tapes.filter(t => t.desens).length + 1} of ${cust.tapes.length})` : ""}`; },
-    do() { desensitize(cust.tapes.find(t => !t.desens)); } },
+  { id: "tapes", at: "customer", need: () => co.cust.tapes.length, tip: () => `take ${coTapes()}`,
+    do() { co.cust.c.holdTape(0); co.hand = "tapes"; } },
+  { id: "desens", at: "pad", need: () => co.cust.tapes.some(t => !t.desens), repeat: () => co.cust.tapes.some(t => !t.desens),
+    tip: () => { const t = co.cust.tapes.find(t => !t.desens); return `desensitize ${t.title}${co.cust.tapes.length > 1 ? ` (${co.cust.tapes.filter(t => t.desens).length + 1} of ${co.cust.tapes.length})` : ""}`; },
+    do() { desensitize(co.cust.tapes.find(t => !t.desens)); } },
   { id: "cash", at: "customer", need: () => true, tip: () => `take the cash · ${money(co.total)} due`,
-    do() { cust.c.holdProp(null); co.cashIn = co.bill; co.hand = "cash"; } },
+    do() { co.cust.c.holdProp(null); co.cashIn = co.bill; co.hand = "cash"; } },
   { id: "ring", at: "register", need: () => true, tip: () => `ring it up · ${money(co.bill)} in${co.change ? `, ${money(co.change)} change` : ""}`,
     do() {
-      for (const t of cust.tapes) { posTerm.checkOut(t, cust.member); rentedCopies.push(t); }   // on their account
-      if (cust.snacks.length) posTerm.sale(cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0));
-      cust.snacks.forEach(restock);
+      for (const t of co.cust.tapes) { posTerm.checkOut(t, co.cust.member); rentedCopies.push(t); }   // on their account
+      if (co.cust.snacks.length) posTerm.sale(co.cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0));
+      co.cust.snacks.forEach(restock);
       drawerOpen = 1; posBeep(1200); co.hand = co.change ? "change" : "tapes";
     } },
   { id: "change", at: "customer", need: () => co.change > 0, tip: () => `give ${money(co.change)} change`,
     do() { co.hand = "tapes"; drawerOpen = 0; } },
-  { id: "handback", at: "customer", need: () => true, tip: () => cust.tapes.length ? `hand over ${coTapes()}` : "hand over their snacks",
+  { id: "handback", at: "customer", need: () => true, tip: () => co.cust.tapes.length ? `hand over ${coTapes()}` : "hand over their snacks",
     do() {
       drawerOpen = 0; co.hand = null;
-      cust.c.holdTape(cust.tapes.length); cust.snacks = [];
-      cust.tagged = cust.tapes.some(t => !t.desens);          // anything still tagged sets the gates off
-      cust.c.setMood("thanks"); cust.c.setPose("hold"); cust.state = "paid"; cust.t = 1.8;
+      co.cust.c.holdTape(co.cust.tapes.length); co.cust.snacks = [];
+      co.cust.tagged = co.cust.tapes.some(t => !t.desens);          // anything still tagged sets the gates off
+      co.cust.c.setMood("thanks"); co.cust.c.setPose("hold"); co.cust.state = "paid"; co.cust.t = 1.8;
       co = null; coHud();
     } },
 ];
-function coStart(by) {
-  const total = coTotal(), bills = [1, 5, 10, 20, 50].filter(b => b >= total);
+function coStart(by, cust = custLine[0]) {
+  const total = coTotal(cust), bills = [1, 5, 10, 20, 50].filter(b => b >= total);
   const bill = Math.random() < 0.25 ? total : (bills[0] ?? 50);          // exact change now and then
-  co = { by, i: 0, total, bill, change: +(bill - total).toFixed(2), hand: null };
+  co = { by, cust, i: 0, total, bill, change: +(bill - total).toFixed(2), hand: null };
   cust.state = "checkout"; cust.c.setMood("happy"); cust.c.setPose("wait");
   coSkip(); coHud();
 }
@@ -4539,7 +4967,7 @@ function coSkip() { while (co && co.i < CO_STEPS.length && !CO_STEPS[co.i].need(
 function coProps() {                              // what the customer's holding out for this step
   if (!co) return;
   const id = CO_STEPS[co.i]?.id;
-  cust.c.holdProp(id === "card" ? "card" : id === "cash" ? "cash" : null);
+  co.cust.c.holdProp(id === "card" ? "card" : id === "cash" ? "cash" : null);
 }
 const coStep = () => co && CO_STEPS[co.i];
 function coWants(at) {
@@ -4563,7 +4991,7 @@ function coHud() {
   if (!co) { el.style.display = "none"; return; }
   const s = coStep(), who = co.by === "dana" ? "Dana is ringing up" : "Ringing up";
   el.style.display = "block";
-  el.innerHTML = `<div class="h">CHECKOUT</div>${who} ${memberName(cust.member)} · ${money(co.total)}` +
+  el.innerHTML = `<div class="h">CHECKOUT</div>${who} ${memberName(co.cust.member)} · ${money(co.total)}` +
     (co.by === "player" && s ? `<div class="next">Next: ${s.tip()}</div>` : "");
 }
 // what you're holding mid-checkout, drawn in your hand like a held tape: their
@@ -4572,7 +5000,7 @@ const coHand = new THREE.Group(); coHand.visible = false;
 let coHandKey = "";
 function coHandShow() {
   const want = co?.by === "player" ? co.hand || "" : "";
-  const key = want + (want === "tapes" ? cust.tapes.map(t => t.desens ? 1 : 0).join("") : "");
+  const key = want + (want === "tapes" ? co.cust.tapes.map(t => t.desens ? 1 : 0).join("") : "");
   if (key === coHandKey) return; coHandKey = key;
   coHand.clear(); coHand.visible = !!want;
   if (!coHand.parent) camera.add(coHand);
@@ -4580,7 +5008,7 @@ function coHandShow() {
   const card = (m, w, h) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.003), m); o.rotation.x = -0.25; coHand.add(o); };
   if (want === "card") card(coHandMats.card, 0.086, 0.054);
   if (want === "cash" || want === "change") card(coHandMats.cash, 0.156, 0.066);
-  if (want === "tapes") cust.tapes.forEach((t, i) => {             // fanned out a little, covers toward you
+  if (want === "tapes") co.cust.tapes.forEach((t, i) => {             // fanned out a little, covers toward you
     const g = new THREE.Group(); g.position.set(-0.05 + i * 0.045, i * 0.01, -0.03 - i * 0.012); g.rotation.set(-0.15, Math.PI / 2 + 0.35 - i * 0.12, 0.08 * i); coHand.add(g);   // cover toward you, fanned
     g.add(new THREE.Mesh(new THREE.BoxGeometry(TAPE.w, TAPE.h, TAPE.d), t.sideMat || mat.tapeBody));
     const art = new THREE.Mesh(new THREE.PlaneGeometry(TAPE.d, TAPE.h), new THREE.MeshBasicMaterial({ color: 0x333333 }));
@@ -4646,9 +5074,9 @@ function pickHover() {
     let aim = raycaster.intersectObjects(aimables, false)[0];
     const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
     if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
-    if (aim?.object === screenMesh && aim.distance < 4.5) aimTV = true;         // TV/couch hints show in tvHint
+    if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
-    else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; }
+    else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
     else if (aim?.object.userData.returns && aim.distance < 2.4) aimReturns = true;
     else if ((aim?.object.userData.unit || aim?.object.userData.snack) && (aim.object.userData.unit || aim.object).visible && aim.distance < 2.4)
       aimSnack = aim.object.userData.unit || aim.object;   // the exact unit you pointed at (a drink's whole group, not just the label you hit)
@@ -4667,7 +5095,7 @@ function pickHover() {
     else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
     else if (aim?.object.userData.stool && aim.distance < 2.2) aimStool = true;
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = true;
-    else if (aim?.object.userData.customer && aim.distance < 2.6 && cust.c && !cust.path.length) aimCustomer = true;
+    else if (aim?.object.userData.customer?.c && aim.distance < 2.6 && !aim.object.userData.customer.path.length) aimCustomer = aim.object.userData.customer;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
@@ -4689,8 +5117,8 @@ function pickHover() {
       + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
     else if (aimStool) tip.innerHTML = stool.by ? "Dana's using the stool" : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
-    else if (aimCustomer) tip.innerHTML = `${co ? (co.by === "player" && coWants("customer") ? `E — ${coWants("customer").tip()}` : co.by === "dana" ? "Dana's ringing them up" : `Next: ${coStep().tip()}`)
-      : ["wait", "impatient", "angry"].includes(cust.state) ? "E — take their member card" : "E — say hi"}<div class="cat">${memberName(cust.member)} · #${cust.member.num}</div>`;
+    else if (aimCustomer) tip.innerHTML = `${co?.cust === aimCustomer ? (co.by === "player" && coWants("customer") ? `E — ${coWants("customer").tip()}` : co.by === "dana" ? "Dana's ringing them up" : `Next: ${coStep().tip()}`)
+      : !co && ["wait", "impatient", "angry"].includes(aimCustomer.state) ? "E — take their member card" : "E — say hi"}<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
     else if (aimDesens && co?.by === "player" && coWants("pad")) tip.innerHTML = `E — ${coWants("pad").tip()}`;
     else if (aimDrawer) tip.innerHTML = co?.by === "player" && coWants("register") ? `E — ${coWants("register").tip()}` : "Cash drawer";
@@ -5092,15 +5520,15 @@ function onE() {
   if (seated) {                             // E always stands you up
     player.x = stoodAt.x; player.z = stoodAt.z; player.yaw = stoodAt.yaw; seated = false; return;
   }
-  if (aimCouch) {                            // aim at the couch from any side to sit
+  if (aimCouch) {
     stoodAt = { x: player.x, z: player.z, yaw: player.yaw };
-    seatAt = SEATS.reduce((a, s) => Math.abs(s.x - aimSeatX) < Math.abs(a.x - aimSeatX) ? s : a);   // cushion nearest the aim point
-    seated = true; player.yaw = Math.PI; player.pitch = 0;   // facing the TV
+    seatAt = aimSeatObj || SEATS.reduce((a, s) => Math.abs(s.x - aimSeatX) < Math.abs(a.x - aimSeatX) ? s : a);
+    seated = true; player.yaw = Math.PI; player.pitch = 0;
     return;
   }
   if (cutout.carried) { cutoutPutDown(); return; }
   if (stool.carried) { stoolPutDown(); return; }
-  if (aimCustomer) { custInteract(); return; }
+  if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
   if (aimEmp) { empToggle(); return; }
   if (aimLock) { setFrontLock(!frontLock.locked); toast(frontLock.locked ? "Front doors locked — no new customers" : "Front doors unlocked — open for business", true); return; }   // stays in your arms if it won't fit there
@@ -5367,11 +5795,14 @@ renderer.setAnimationLoop(() => {
   if (desensFlash > 0) { desensFlash -= dt; desensLed.material.color.set(desensFlash > 0 ? 0x2bff6a : 0xff3020); }
   if (playing && video.currentTime > 0 && !video.paused)   // the tape winds on
     playing.tape.tapePos = { ep: playing.idx, t: video.currentTime, d: isFinite(video.duration) ? video.duration : undefined };
-  if (!playing) screenMesh.material = tvMenu ? videoMat : screensaverMat;   // menu over a blank screen when no tape's in
+  if (!playing) {
+    screenMesh.material = tvMenu ? videoMat : screensaverMat;
+    if (theaterScreenMesh) theaterScreenMesh.material = tvMenu ? videoMat : screensaverMat;
+  }  // menu over a blank screen when no tape's in
   if (tvMenu) {                                   // what the crosshair (the remote) is pointing at on the menu
     const hit = tvScreenHit();
     tvHover = hit ? tvMenuHit(hit.x, hit.y) : null;
-  }   // pauses while a tape's actually in, like a real screensaver would
+  }   // pauses whie a tape's actually in, like a real screensaver would
   lightingTick(dt);
   if (cashDrawer) cashDrawer.position.z += ((4 - 0.35 - 0.01 - drawerOpen * 0.26) - cashDrawer.position.z) * Math.min(1, dt * 12);   // till slides out toward the clerk
   for (const t of switchToggles) t.mesh.rotation.x += ((zoneOn[t.zone] ? -0.32 : 0.32) - t.mesh.rotation.x) * Math.min(1, dt * 25);   // rocker snaps up/down
@@ -5395,7 +5826,22 @@ renderer.setAnimationLoop(() => {
     tvBackGlow.color.copy(tvLight.avg); tvBackGlow.intensity = tvLight.base * (lightsOut ? 0.8 : 0.3);   // a hint of bleed, not a second light
     const crtBase = tvLight.base ? 0.9 : 0;   // ceiling CRTs tint/dim with whatever's actually playing
     crtGlows.forEach(cg => { cg.color.copy(tvLight.avg); cg.intensity = crtBase * (lightsOut ? 1.8 : 1); });
-    if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
+    if (projBeamMat) {
+      if (tvLight.base) {
+        projBeamMat.color.copy(tvLight.avg).lerp(new THREE.Color(0xfff6e5), 0.45);
+        const luma = Math.max(projBeamMat.color.r, projBeamMat.color.g, projBeamMat.color.b, 0.01);
+        if (luma < 0.5) projBeamMat.color.multiplyScalar(0.5 / luma);
+      } else {
+        projBeamMat.color.setHex(0xd8e8ff);
+      }
+      const lookBack = Math.max(0, (Math.cos(player.yaw) + 0.05) / 1.05);     // 0 when facing the screen, >0 when turning back
+      const lookUp = Math.max(0, (player.pitch - 0.20) / 0.45);               // 0 at normal viewing pitch, >0 when looking up
+      const attention = Math.min(1, Math.max(lookBack, lookUp));
+      const darkRoom = 0.45 + 0.55 * (1 - (zoneLvl.theater ?? 1));
+      const flicker = 0.95 + 0.05 * Math.sin(clockT * 44) * Math.cos(clockT * 19);
+      projBeamMat.opacity = (0.004 + 0.09 * attention * attention) * darkRoom * flicker;
+    }
+	if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
   }
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
   flapPivot.rotation.z += ((flapOpen ? Math.PI / 2 * 0.97 : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
@@ -5417,7 +5863,7 @@ renderer.setAnimationLoop(() => {
   else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
   else {
     eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
-    camera.position.set(player.x, eyeY, player.z);
+    camera.position.set(player.x, eyeY + floorHeightAt(player.x, player.z), player.z);
   }
   if (!seated) seatFov = 70;                     // walking resets the couch zoom
   const fovTarget = seated ? seatFov : 70;
@@ -5463,5 +5909,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  emp, cust, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinder, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
