@@ -313,15 +313,31 @@ window.createPOS = function createPOS(api) {
         (c, n) => ` ${R(n, 3)}  ${L(up(c.title), 44)} ${L(priceOf(c).cls, 12)} ${R(money(replaceCost(c)), 7)}`,
         c => go({ title: "ORDER REPLACEMENT", prompt: "Y TO ORDER, ESC TO CANCEL", lines: () => ["",
           ` TITLE....: ${up(c.title)}`.slice(0, COLS), ` COST.....: ${money(replaceCost(c))}`, ` BUDGET...: ${money(budget)}`, "",
-          budget >= replaceCost(c) ? " SHIPS WITH TODAY'S DELIVERY - CHECK THE RETURNS BIN." : " *** INSUFFICIENT BUDGET ***"],
+          budget >= replaceCost(c) ? " ARRIVES WITH TOMORROW'S DELIVERY - IN THE RETURNS BIN." : " *** INSUFFICIENT BUDGET ***"],
           submit(v) {
             if (v !== "Y") { msg = "TYPE Y TO ORDER."; return draw(); }
             if (!c.lost) { back(); return; }
             if (budget < replaceCost(c)) { msg = "INSUFFICIENT BUDGET."; return draw(); }
-            budget -= replaceCost(c); c.lost = false; api.replace(c);   // ponytail: arrives instantly; add a delivery delay if it should take a day
+            budget -= replaceCost(c); c.lost = false; api.replace(c);   // store.js delivers it next morning
             back(); back(); msg = `ORDERED: ${up(c.title)}. BUDGET NOW ${money(budget)}.`; draw();
           } }),
         "NO LOST COPIES ON FILE."));
+    }],
+    ["O", "SUPPLIES - ORDER SNACKS & DRINKS", () => {
+      const items = api.supplies?.() || [];
+      go(listScreen(`SUPPLIES - BUDGET ${money(budget)}`, `      ${L("ITEM", 26)} ${L("TYPE", 6)} RACK   STOCK  ON ORDER   CASE`, items,
+        (x, n) => ` ${R(n, 3)}  ${L(up(x.name), 26)} ${L(x.drink ? "DRINK" : "SNACK", 6)} ${R(`${x.out}/${x.spots}`, 5)} ${R(x.back, 6)} ${R(x.ordered || "-", 9)} ${R(money(x.caseCost), 7)}`,
+        x => go({ title: "ORDER SUPPLIES", prompt: "CASES (1-9), ESC TO CANCEL", lines: () => ["",
+          ` ITEM.....: ${up(x.name)} (${x.drink ? "DRINK" : "SNACK"})`, ` ON RACKS.: ${x.out} OF ${x.spots} SPOTS`, ` IN STOCK.: ${x.back}`, ` ON ORDER.: ${x.ordered}`,
+          ` CASE.....: ${x.caseQty} FOR ${money(x.caseCost)}`, ` BUDGET...: ${money(budget)}`, "", " ORDERS ARRIVE WITH TOMORROW MORNING'S DELIVERY, BOXED BY THE FRONT DOOR."],
+          submit(v) {
+            const n = parseInt(v, 10);
+            if (!(n >= 1 && n <= 9)) { msg = "ENTER 1-9 CASES."; return draw(); }
+            if (budget < n * x.caseCost) { msg = "INSUFFICIENT BUDGET."; return draw(); }
+            budget -= n * x.caseCost; api.order(x.name, n);
+            back(); back(); msg = `ORDERED ${n} CASE${n > 1 ? "S" : ""} OF ${up(x.name)}. BUDGET NOW ${money(budget)}.`; draw();
+          } }),
+        "NO SUPPLIES ON FILE."));
     }],
     ["0", "LOG OFF", () => logoff()],
     // only listed while the entry gates are going off
