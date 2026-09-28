@@ -8,6 +8,7 @@
 //   rented,             the copies store.js pulled off the shelves as "out on rental"
 //   savedRental(copy),  [member #, out ms] from last visit, if this copy's rental was saved
 //   budget,             store budget from last visit (a fresh store starts with $300)
+//   activeMembers,      member #s signed up (saved), or startMembers: how many a new store begins with (else: everyone)
 //   savedRecords,       { member #: { incidents, status, until } } from last visit
 //   savedOwed,          { member #: late fees owed } from last visit
 //   today, clock(),     the shift's date (ms) and its clock ("HH:MM") — store.js runs its own calendar
@@ -19,7 +20,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), join(n), prospect(skip), enroll(member), activeNums(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -78,13 +79,20 @@ window.createPOS = function createPOS(api) {
   customers.sort((a, b) => a.last.localeCompare(b.last) || a.first.localeCompare(b.first));
   for (const [num, owed] of Object.entries(api.savedOwed || {})) { const c = customers.find(c => c.num === +num); if (c) c.owed = owed; }
   for (const [num, r] of Object.entries(api.savedRecords || {})) { const c = customers.find(c => c.num === +num); if (c) Object.assign(c, r); }   // incidents, bans
-  const heavy = customers.filter(c => c.heavy);
+  // who's actually a member: everyone, unless store.js says otherwise (simulation
+  // starts with a small base: api.startMembers of them, the rest sign up over time)
+  if (api.activeMembers) { const on = new Set(api.activeMembers); for (const c of customers) c.active = on.has(c.num); }
+  else if (api.startMembers) { for (const c of customers) c.active = false; for (let n = 0; n < api.startMembers;) { const c = pick(customers); if (!c.active) { c.active = true; n++; } } }
+  else for (const c of customers) c.active = true;
+  const members = () => customers.filter(c => c.active);
+  const heavy = customers.filter(c => c.heavy && c.active).length ? customers.filter(c => c.heavy && c.active) : members();
   const fullName = c => `${c.last}, ${c.first}`;
   // every copy store.js pulled off the shelf is checked out to somebody —
   // regulars take the lion's share
   const rentals = api.rented.map(copy => {
     const saved = api.savedRental?.(copy), p = priceOf(copy);
-    const cust = saved && customers.find(c => c.num === saved[0]) || (rnd() < 0.55 ? pick(heavy) : pick(customers));
+    const cust = saved && customers.find(c => c.num === saved[0]) || (rnd() < 0.55 ? pick(heavy) : pick(members()));
+    cust.active = true;                            // (anyone with a tape out is a member, whatever the list said)
     const out = saved ? new Date(saved[1]) : new Date(TODAY - int(0, p.nights + 4) * DAY), due = new Date(+out + p.nights * DAY);
     const r = { copy, cust, out, due };
     copy.rental = r; cust.rentals.push(r); return r;
@@ -239,7 +247,7 @@ window.createPOS = function createPOS(api) {
   const custRow = (c, n) => ` ${R(n, 3)}  ${R(c.num, 6)}  ${L(fullName(c), 26)} ${L(c.phone, 9)} ${R(c.rentals.length, 3)}  ${custFees(c) ? R(money(custFees(c)), 8) : R("-", 8)}`;
   const custHead = `       MEMBR  ${L("NAME", 26)} ${L("PHONE", 9)} OUT      FEES`;
   const findTitles = q => api.catalog.filter(t => up(t.title).includes(q));
-  const findCusts = q => customers.filter(c => String(c.num) === q || fullName(c).includes(q) || c.phone.endsWith(q));
+  const findCusts = q => members().filter(c => String(c.num) === q || fullName(c).includes(q) || c.phone.endsWith(q));
 
   const MENU = [
     ["1", "INVENTORY - TITLE SEARCH", () => go(prompt("INVENTORY - TITLE SEARCH", "TITLE (OR PART)", ["ENTER ANY PART OF A TITLE.  EXAMPLE: ALIEN"],
@@ -253,9 +261,9 @@ window.createPOS = function createPOS(api) {
     }],
     ["3", "MEMBERS - LOOKUP (NAME / MEMBER # / PHONE)", () => go(prompt("MEMBER LOOKUP", "NAME, MEMBER # OR PHONE", ["LAST NAME, PART OF A NAME, 5-DIGIT MEMBER #, OR LAST 4 OF PHONE."],
       q => go(listScreen(`MEMBER SEARCH: ${q}`, custHead, findCusts(q), custRow, custDetail))))],
-    ["4", "MEMBERS - ALL ACCOUNTS", () => go(listScreen("ALL MEMBERS", custHead, customers, custRow, custDetail))],
+    ["4", "MEMBERS - ALL ACCOUNTS", () => go(listScreen("ALL MEMBERS", custHead, members(), custRow, custDetail))],
     ["5", "REPORTS - OVERDUE / LATE FEES", () => {
-      const od = customers.filter(c => custFees(c) > 0).sort((a, b) => custFees(b) - custFees(a));
+      const od = members().filter(c => custFees(c) > 0).sort((a, b) => custFees(b) - custFees(a));
       go(listScreen("OVERDUE ACCOUNTS", custHead, od, custRow, custDetail, "NO OVERDUE ACCOUNTS. NICE."));
     }],
     ["6", "REPORTS - RENTALS OUT", () => {
@@ -273,8 +281,8 @@ window.createPOS = function createPOS(api) {
       const fees = rentals.reduce((a, r) => a + lateFee(r), 0);
       const top = [...api.catalog].filter(t => t.copies?.length).sort((a, b) => (copiesOf(b).length - copyIn(b)) - (copiesOf(a).length - copyIn(a))).slice(0, 5);
       go({ title: `DAILY SUMMARY - ${fmtD(TODAY)}`, prompt: "ESC TO RETURN", lines: () => [
-        ` TITLES IN SYSTEM........ ${R(api.catalog.length, 8)}      MEMBERS............ ${R(customers.length, 8)}`,
-        ` COPIES IN SYSTEM........ ${R(allC, 8)}      ACCOUNTS W/ FEES... ${R(customers.filter(c => custFees(c)).length, 8)}`,
+        ` TITLES IN SYSTEM........ ${R(api.catalog.length, 8)}      MEMBERS............ ${R(members().length, 8)}`,
+        ` COPIES IN SYSTEM........ ${R(allC, 8)}      ACCOUNTS W/ FEES... ${R(members().filter(c => custFees(c)).length, 8)}`,
         ` COPIES ON SHELF......... ${R(inC, 8)}      LATE FEES OWED..... ${R(money(fees), 8)}`,
         ` COPIES OUT.............. ${R(allC - inC, 8)}      RETURNS BIN........ ${R(api.returnBin().length, 8)}`,
         ` OVERDUE COPIES.......... ${R(od.length, 8)}`, "",
@@ -293,6 +301,8 @@ window.createPOS = function createPOS(api) {
       "   OVERDUE          LATE FEE REPORT         OUT               RENTALS OUT",
       "   RETURNS          RETURNS BIN             REPORT            DAILY SUMMARY",
       "   VER              VERSION                 LOGOFF / EXIT     END SESSION",
+      "   SUPPLIES         ORDER SNACKS/DRINKS     UPGRADES          STORE IMPROVEMENTS",
+      "   THEATER          TONIGHT'S FEATURE       REPLACE           ORDER LOST COPIES",
       "   SYSRESET         WIPE THE SAVED STORE AND START FRESH", "",
       " ESC GOES BACK ONE SCREEN. F10 LOGS OFF FROM ANYWHERE.", "",
       " SYSTEM PROBLEMS? CALL DENNIS (DISTRICT) - DO NOT REBOOT THE SERVER.",
@@ -372,7 +382,7 @@ window.createPOS = function createPOS(api) {
     title: "MAIN MENU", prompt: "SELECTION OR COMMAND",
     pick: { cur: 0, count: () => menuItems().length, value: i => menuItems()[i][0], line: i => i },
     lines: () => [...menuItems().map(([k, label]) => `      ${k}.  ${label}`),   // (no spacer lines: 16 items and the status lines just fit)
-      `      ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS ON FILE.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`,
+      `      ${members().length} MEMBERS.  ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`,
       api.reputation ? `      STORE RATING: ${"*".repeat(api.reputation().stars).padEnd(5, ".")}${api.feature?.() ? `   TONIGHT: ${up(api.feature().title).slice(0, 30)} (${api.feature().sold} SOLD)` : ""}` : ""],
     submit(v) {
       const [cmd, ...rest] = v.split(/\s+/), arg = rest.join(" ");
@@ -380,7 +390,8 @@ window.createPOS = function createPOS(api) {
       if (m) return m[2]();
       if ((cmd === "FIND" || cmd === "INV") && arg) return go(listScreen(`TITLE SEARCH: ${arg}`, titleHead, findTitles(arg), titleRow, titleDetail));
       if ((cmd === "MEMBER" || cmd === "CUST") && arg) return go(listScreen(`MEMBER SEARCH: ${arg}`, custHead, findCusts(arg), custRow, custDetail));
-      const alias = { OVERDUE: "5", OUT: "6", RETURNS: "7", REPORT: "8", HELP: "H", "?": "H", LOGOFF: "0", EXIT: "0", LOGOUT: "0" }[cmd];
+      const alias = { OVERDUE: "5", OUT: "6", RETURNS: "7", REPORT: "8", HELP: "H", "?": "H", LOGOFF: "0", EXIT: "0", LOGOUT: "0",
+        SUPPLIES: "O", ORDER: "O", UPGRADES: "U", UPGRADE: "U", THEATER: "T", FEATURE: "T", GATES: "S", REPLACE: "B" }[cmd];
       if (alias) return MENU.find(([k]) => k === alias)[2]();
       if (cmd === "SYSRESET") return go({ title: "SYSTEM RESET", prompt: "TYPE RESET TO CONFIRM, ESC TO CANCEL", lines: () => ["",
         " THIS WIPES THE SAVED STORE: INVENTORY, RETURNS, RENTALS, LIGHTS, WHERE YOU", " ARE STANDING, THE TAPE IN THE VCR. THE STORE RELOADS FRESH.", "",
@@ -459,6 +470,14 @@ window.createPOS = function createPOS(api) {
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
     loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
     recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty }])),
+    join(n) {                                    // n new sign-ups (not anyone who's banned or been sent packing) -> who
+      const pool = customers.filter(c => !c.active && !c.status), got = [];
+      while (got.length < n && pool.length) { const c = pool.splice(Math.floor(rnd() * pool.length), 1)[0]; c.active = true; got.push(c); }
+      if (open && mode === "app") draw(); return got;
+    },
+    prospect: skip => { const pool = customers.filter(c => !c.active && !c.status && !skip.includes(c)); return pool.length ? pool[Math.floor(rnd() * pool.length)] : null; },   // somebody who isn't a member yet
+    enroll(m) { m.active = true; m.since = new Date(TODAY).getFullYear(); if (open && mode === "app") draw(); },   // typed into the system: a member now
+    activeNums: () => customers.filter(c => c.active).map(c => c.num),
     owedAll: () => Object.fromEntries(customers.filter(c => c.owed).map(c => [c.num, c.owed])),
     setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total

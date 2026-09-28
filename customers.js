@@ -20,7 +20,7 @@
 //                         hip height (couch: 0.5) and extra knee bend to pull the feet back (a stool's footring)
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
-//     holdProp(name),     "card" / "cash" / "receipt" in the other hand, or null
+//     holdProp(name),     "card" / "cash" / "receipt" / "form" in the other hand, or null
 //     holdItem(obj|null), something real in the other hand (a snack off the rack), sized to the world; null empties it
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
 //     talk(bool),         conversational head motion
@@ -349,7 +349,8 @@ window.VaultCustomers = (() => {
     const cardM = patterned("memberCard", (g, n) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, n, n); g.fillStyle = "#ffd400"; g.fillRect(0, n * 0.62, n, n * 0.14); g.fillStyle = "#fff"; g.fillRect(n * 0.08, n * 0.12, n * 0.5, n * 0.1); });
     const cashM = patterned("cash", (g, n) => { g.fillStyle = "#8fbf8a"; g.fillRect(0, 0, n, n); g.strokeStyle = "#3d6b3a"; g.lineWidth = 4; g.strokeRect(4, 4, n - 8, n - 8); g.fillStyle = "#3d6b3a"; g.beginPath(); g.arc(n / 2, n / 2, n * 0.18, 0, 7); g.fill(); });
     const props = { card: part(arms[0].el, BOX, cardM, 0.006, 0.054, 0.086, 0, -0.37, 0.05), cash: part(arms[0].el, BOX, cashM, 0.004, 0.066, 0.156, 0, -0.37, 0.07),
-      receipt: part(arms[0].el, BOX, solid("#f4f1e6"), 0.003, 0.15, 0.056, 0, -0.4, 0.06) };
+      receipt: part(arms[0].el, BOX, solid("#f4f1e6"), 0.003, 0.15, 0.056, 0, -0.4, 0.06),
+      form: part(arms[0].el, BOX, solid("#fbfbf4"), 0.003, 0.21, 0.15, 0, -0.42, 0.08) };   // a filled-out membership form
     for (const m of Object.values(props)) m.visible = false;
     const item = new THREE.Group(); item.position.set(0, -0.4, 0.07); arms[0].el.add(item);   // holdItem's slot, in the same hand
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
