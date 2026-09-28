@@ -88,6 +88,12 @@
   #actLog .row.bad .x { color: #ffb3b3; }
   #actLog .row.bad .a { color: #ff7b7b; }
   body.nohud #actLog { display: none !important; }
+  /* ---------- caught a shoplifter: pick what happens (keys 1-5) ---------- */
+  #catchCall { position: fixed; z-index: 11; left: 50%; top: 24%; transform: translateX(-50%); display: none; max-width: calc(100vw - 32px);
+    background: rgba(40, 6, 10, .72); border: 1px solid #ff6b6b66; border-radius: 6px; padding: 10px 16px; color: #fff; font-size: 13px; text-align: center; }
+  #catchCall .h { color: #ffb3b3; font-weight: bold; letter-spacing: 1px; margin-bottom: 8px; }
+  #catchCall span { display: inline-block; margin: 2px 8px; white-space: nowrap; }
+  #catchCall b { color: var(--bb-yellow); margin-right: 3px; }
 
   #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 96px; transform: translateX(-50%);   /* clear of the inventory bar */
     color: #fff; font-size: 13px; font-weight: bold; display: none; }
@@ -160,6 +166,7 @@
 <div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
 <div id="checkoutTag"></div>
 <div id="shiftClock"></div>
+<div id="catchCall"></div>
 <div id="actLog"><div class="h" onclick="logToggle()">LOG<span class="n"></span><span class="k">J hide · PgUp/PgDn</span></div><div id="actLogList"></div></div>
 <div id="shiftReport"><pre id="shiftSlip"></pre><button id="shiftNext">NEXT SHIFT ▸</button></div>
 <div id="invBar"></div>

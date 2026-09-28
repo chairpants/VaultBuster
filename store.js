@@ -4181,7 +4181,8 @@ addEventListener("keydown", e => {
     }
     else onE();                              // one press, one action — holding E doesn't machine-gun bites, doors, the flap
   }
-  if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
+  if (catchCall && /^Digit[1-5]$/.test(e.code)) catchDecide(+e.code[5]);   // deciding what happens to a shoplifter
+  else if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
   if (e.code === "Period") stepEpisode(1);
@@ -4532,7 +4533,7 @@ const custWaiting = () => custLine[0] && ["wait", "impatient", "angry"].includes
 // About half the time it's someone with tapes out, bringing them back — most
 // likely whoever's due today or late
 function custPickMember() {
-  const ms = posTerm.members.filter(m => m !== custArrivals.lastMember && !custs.some(k => k.member === m));   // not someone who's already in here
+  const ms = posTerm.members.filter(m => m !== custArrivals.lastMember && !custs.some(k => k.member === m) && posTerm.canVisit(m));   // not someone who's already in here, or who's banned
   const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
   const due = ms.filter(m => m.rentals.length && soonest(m) <= 1);
   if (due.length && Math.random() < 0.5) {
@@ -4651,7 +4652,7 @@ function custPickTheaterSeat(cust) {              // pick an open stadium seat a
   return true;
 }
 function custDone(cust) {                         // out of shelves to look at: grab a snack, catch a movie, or head out
-  if (cust.thief && cust.holding) return custSneak(cust);
+  if (cust.thief && cust.holding && !(cust.known && Math.random() < 0.35)) return custSneak(cust);   // you've had an eye on them: maybe not today
   if (!cust.snackDone) {
     cust.snackDone = true;
     const spots = snackSpots();
@@ -4691,7 +4692,9 @@ function custGone(cust) {
   if (cust.tagged && !cust.paid && cust.tapes.length) {   // walked out with them unpaid: gone for good (order a replacement on the POS). A paid one with a missed tag is still just a rental
     for (const c of cust.tapes) c.lost = true;
     shift.stats.stolen += cust.tapes.length; shiftScore(-75 * cust.tapes.length);
-    logAct(`${memberName(cust.member)} walked out with ${cust.tapes.length === 1 ? cust.tapes[0].title : cust.tapes.length + " tapes"}: stolen`, "bad", null, -75 * cust.tapes.length);
+    const what = cust.tapes.length === 1 ? cust.tapes[0].title : cust.tapes.length + " tapes";
+    if (cust.known) posTerm.incident(cust.member, `${cust.sneaking ? "SHOPLIFTED" : "LEFT WITHOUT PAYING FOR"} ${what}`);   // you know who it was: it goes on their account
+    logAct(`${cust.known ? memberName(cust.member) : "Someone"} walked out with ${what}: stolen`, "bad", null, -75 * cust.tapes.length);
   }   // walked out with them: gone for good (order a replacement on the POS)
   cust.snacks.forEach(restock);                   // lifted snacks just restock, no loss tracking
   const c = cust.c;
@@ -4707,7 +4710,25 @@ function custInteract(cust) {                     // E on a customer: ring them 
   if (cust.sneaking) return custCatch(cust);
   if (["wait", "impatient", "angry"].includes(cust.state) && !co) { coStart("player", cust); coAct("customer"); }   // start ringing them up
   else if (co?.cust === cust && co.by === "player") coAct("customer");
-  else if (cust.state !== "out") { cust.hi = 1.4; c.setMood("happy"); }
+  else if (cust.state !== "out") {
+    cust.hi = 1.4; c.setMood("happy");
+    if (cust.thief && !cust.greeted && Math.random() < 0.7) cust.thief = false;   // a friendly hello: suddenly they'd rather just rent it
+    cust.greeted = true;
+  }
+}
+// someone sneaking out notices you watching (aimed at them a moment): half the
+// time they lose their nerve and bring it to the counter
+function custWatched(cust, dt) {
+  if (!cust.sneaking || cust.alarmed || cust.fessRolled) return;
+  if (aimCustomer !== cust) { cust.watchT = 0; return; }
+  if ((cust.watchT = (cust.watchT || 0) + dt) < 0.8) return;
+  cust.fessRolled = true;
+  if (Math.random() >= 0.5) return;               // ...or they keep going
+  const c = cust.c;
+  cust.sneaking = false; cust.tagged = false; cust.thief = false;
+  c.holdTape(cust.tapes.length); c.setPose("hold"); c.setMood("meh"); cust.hi = 2;
+  logAct(`${memberName(cust.member)} saw you watching and brought ${cust.tapes.length === 1 ? cust.tapes[0].title : "the tapes"} to the counter`, "good");
+  custLine.push(cust); custToLine(cust);
 }
 function custSneak(cust) {                        // a shoplifter: tapes under the jacket, eyes everywhere, straight for the door
   const c = cust.c;
@@ -4722,7 +4743,32 @@ function custCatch(cust) {                        // E on one before they're out
   c.holdTape(0); c.setMood("shock"); cust.hi = 1.5;
   shift.stats.caught++; shiftScore(150, "you");
   logAct(`Caught ${memberName(cust.member)} sneaking out with ${what} (back in the returns bin)`, "good", null, 150);
-  custGo(cust, "leave", CUST_DOOR);               // ...and out, sheepish
+  posTerm.incident(cust.member, `CAUGHT SHOPLIFTING ${what}`);
+  if (catchCall) catchDecide(5);                  // one at a time: the last one gets a warning
+  cust.path = []; cust.state = "caught"; cust.t = 20; cust.caughtWhat = what;
+  catchCall = cust; catchHud();
+}
+// what happens to them: you decide (1-5), or after 20 s they get a warning
+let catchCall = null;
+const CATCH_CALLS = [
+  { key: 1, label: "Ban 1 week", log: "banned for a week", rec: "BANNED 1 WEEK", act: m => posTerm.setStatus(m, "banned", 7) },
+  { key: 2, label: "Ban 1 month", log: "banned for a month", rec: "BANNED 1 MONTH", act: m => posTerm.setStatus(m, "banned", 30) },
+  { key: 3, label: "Cancel membership", log: "membership cancelled", rec: "MEMBERSHIP CANCELLED", act: m => posTerm.setStatus(m, "cancelled") },
+  { key: 4, label: "Call the police", log: "arrested", rec: "ARRESTED", act: m => posTerm.setStatus(m, "arrested") },
+  { key: 5, label: "Let them go with a warning", log: "let off with a warning", rec: "WARNED", act: () => {} },
+];
+function catchDecide(key) {
+  const cust = catchCall, k = CATCH_CALLS.find(q => q.key === key); if (!cust || !k) return;
+  catchCall = null; catchHud();
+  k.act(cust.member); posTerm.incident(cust.member, k.rec);
+  logAct(`${memberName(cust.member)}: ${k.log}`, key === 5 ? "" : "good");
+  if (cust.c) { cust.c.setMood(key === 4 ? "alarm" : "meh"); cust.hi = 0; custGo(cust, "leave", CUST_DOOR); }   // ...and out
+}
+function catchHud() {
+  const el = $("catchCall"); if (!catchCall) { el.style.display = "none"; return; }
+  el.innerHTML = `<div class="h">CAUGHT \u00b7 ${memberName(catchCall.member)} #${catchCall.member.num} \u00b7 ${catchCall.caughtWhat}</div>` +
+    CATCH_CALLS.map(q => `<span><b>${q.key}</b> ${q.label}</span>`).join("");
+  el.style.display = "block";
 }
 // a snack from the rack, rebuilt as a plain copy for a customer's hand (the
 // rack's own unit stays put, hidden until it restocks)
@@ -4738,7 +4784,7 @@ function custTick(dt) {
     if (custs.some(k => Math.hypot(k.c.group.position.x - CUST_DOOR.x, k.c.group.position.z - CUST_DOOR.z) < 1.2)) custArrivals.t = 1;   // someone's in the doorway: give them a sec
     else { custSpawn(); custArrivals.t = 6 + Math.random() * 20; }
   }
-  for (const k of [...custs]) { custHearAlarm(k, dt); custStep(k, dt); }
+  for (const k of [...custs]) { custHearAlarm(k, dt); custWatched(k, dt); custStep(k, dt); }
 }
 // the gate alarm going off: everyone's head snaps round to the gates for a
 // moment; let it keep ringing and they get fed up — anyone waiting to pay
@@ -4785,6 +4831,11 @@ function custStep(cust, dt) {
     cust.t -= dt; cust.waitFor = null;
     switch (cust.state) {
       case "repath": if (cust.t <= 0) custGo(cust, cust.repath.state, cust.repath.spot); break;
+      case "caught": {                            // caught red-handed: facing you, waiting to hear what happens
+        cust.ry = Math.atan2(player.x - p.x, player.z - p.z);
+        if (cust.t <= 0 && catchCall === cust) catchDecide(5);
+        break;
+      }
       case "boot": if (cust.t <= 0) {
         c.setMood("neutral");
         if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
@@ -5518,6 +5569,7 @@ function posBeep(f) {
   } catch {}
 }
 function custTip(k) {                           // what E (and Q) do to this customer right now
+  if (catchCall === k) return "Caught · 1–5 to decide";
   const mine = co?.cust === k && co.by === "player";
   if (mine && co.away) return "Grabbing a snack…";
   if (mine && coStep()?.id === "fees" && coWants("customer")) return `E — ${coStep().tip()}<br>Q — waive them`;
@@ -5591,7 +5643,7 @@ function pickHover() {
     else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
     else if (aim?.object.userData.stool && aim.distance < 2.2) aimStool = true;
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = true;
-    else if (aim?.object.userData.customer?.c && aim.distance < 2.6 && aim.object.userData.customer.state !== "out") aimCustomer = aim.object.userData.customer;   // walking ones too: a shoplifter doesn't stop
+    else if (aim?.object.userData.customer?.c && aim.distance < 2.6 && aim.object.userData.customer.state !== "out") { aimCustomer = aim.object.userData.customer; aimCustomer.known = true; }   // walking ones too: a shoplifter doesn't stop. known: you've had their name up
     else if (aim?.object.userData.printer && aim.distance < 2.4) aimPrinter = true;
     const tip = $("hoverTip");
     if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
@@ -6152,7 +6204,7 @@ function armGates(on) {                      // disarmed gates go dark and ignor
 let gateLastZ = player.z;
 
 const posTerm = window.createPOS({
-  catalog, rented: rentedCopies, budget: SAVE?.budget, savedOwed: SAVE?.owed,
+  catalog, rented: rentedCopies, budget: SAVE?.budget, savedOwed: SAVE?.owed, savedRecords: SAVE?.records,
   today: +shiftDate(), clock: () => { const m = Math.floor(shift.h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; },   // the shift's date and clock on the screen
   savedRental: c => SAVE?.rentals?.[copyKey(c)],
   replace(c) { returnBin.push(c); refreshReturnsBin(); toast(`Replacement arrived: ${c.title} · in the returns bin`, true); },
@@ -6239,7 +6291,7 @@ function saveState() {
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
-    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), returns: returnBin.map(copyKey), rewinders: rewinders.map(rw => rw.tape && copyKey(rw.tape)),
+    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), records: posTerm.recordsAll(), returns: returnBin.map(copyKey), rewinders: rewinders.map(rw => rw.tape && copyKey(rw.tape)),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
@@ -6515,5 +6567,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
