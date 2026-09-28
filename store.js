@@ -1666,6 +1666,7 @@ let posScreen;                                // the register monitor's glass (p
 // the counter's VHS rewinders (models built with the counter, logic near the
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
 const rewinders = [];
+const PHONE_AT = new THREE.Vector3(), HOLDS_AT = new THREE.Vector3();   // the desk phone / the holds tray, on the back cabinet (set when it's built)
 const PRN_AT = { x: -4.45, z: 3.93 };           // the receipt printer's paper slot
 const printer = { strip: null, tex: null, job: null };   // the receipt feeding out of it (see printReceipt)
 const DESENS_AT = { x: -4.95, z: 3.92 };       // the desensitizer pad, beside the register
@@ -1964,17 +1965,21 @@ const GATE_Z = 4.0;                           // security gate line across the e
     }
     colliders.push({ x0: bx0, x1: bx1, z0: FRONT, z1: bz + 0.25, y1: BHt });
     // multi-line desk phone
-    const ph = new THREE.Group(); ph.position.set(-6.4, BHt, bz); ph.rotation.y = Math.PI; scene.add(ph);
+    const ph = new THREE.Group(); ph.position.set(-6.4, BHt, bz); ph.rotation.y = Math.PI; scene.add(ph); PHONE_AT.set(-6.4, BHt + 0.08, bz);
     const base = put(new THREE.BoxGeometry(0.22, 0.06, 0.2), beigeP, 0, 0.03, 0, ph); base.rotation.x = -0.15;
     put(new THREE.BoxGeometry(0.22, 0.04, 0.06), beigeP, 0, 0.085, -0.06, ph);                 // handset
     for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.018, 0.006, 0.014), i < 2 ? new THREE.MeshBasicMaterial({ color: 0xff4020 }) : blackC, -0.06 + (i % 3) * 0.03, 0.065, 0.04 + Math.floor(i / 3) * 0.025, ph);
+    ph.traverse(m => { if (m.isMesh) { m.userData.phone = true; aimables.push(m); } });
     // stack of brown paper bags
     const kraft = new THREE.MeshLambertMaterial({ color: 0xa8804f });
     for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.3, 0.008, 0.2), kraft, -5.6 + (i % 2) * 0.01, BHt + 0.004 + i * 0.008, bz);
-    // reserved holds: a few tapes rubber-banded with a slip on top
-    const slip = new THREE.MeshLambertMaterial({ color: 0xfff59a });
-    [0x8c2a1e, 0x1f3f86, 0x2f6b3a, 0xd8c9a0, 0x3a3a3a].forEach((c, i) => put(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), new THREE.MeshLambertMaterial({ color: c }), -4.4 + (i % 2) * 0.01, BHt + TAPE.w / 2 + i * TAPE.w, bz));
-    put(new THREE.BoxGeometry(0.1, 0.002, 0.07), slip, -4.4, BHt + 5 * TAPE.w + 0.001, bz);
+    // reserved holds: whatever's been put aside for someone, stacked with a slip on each (see holdsRender)
+    const pad = put(new THREE.BoxGeometry(0.4, 0.2, 0.34), new THREE.MeshBasicMaterial({ visible: false }), -4.4, BHt + 0.1, bz);
+    pad.userData.holds = true; aimables.push(pad);
+    const tray = put(new THREE.BoxGeometry(0.34, 0.012, 0.26), new THREE.MeshLambertMaterial({ color: 0x2a2e35 }), -4.4, BHt + 0.006, bz);
+    const lbl = textPlane("HOLDS", 0.12, 0.035, "#222", "#fff59a", "Arial Black", 60); lbl.material = new THREE.MeshLambertMaterial({ map: lbl.material.map });
+    lbl.position.set(-4.4, BHt + 0.0125, bz + 0.1); lbl.rotation.x = -Math.PI / 2; lbl.rotation.z = Math.PI; scene.add(lbl);
+    HOLDS_AT.set(-4.4, BHt + 0.012, bz);
   }
 
   const kind = textPlane("BE KIND, REWIND", 1.6, 0.55); kind.position.set(0, 3.1, 0.16);
@@ -4094,6 +4099,7 @@ function shiftTick(dt) {
     if (crossed(SHIFT.close)) toast("Midnight — closing time. Lock up and head out the front doors when you're done", true);
   }
   showTick();
+  if (started && (document.pointerLockElement === canvas || posTerm.isOpen())) { phoneTick(dt); holdsTick(); }
   shiftHud();
 }
 function skipHour() {                             // L: fast-forward an hour (the sky eases through it). Never past close: after that the clock's real
@@ -4308,6 +4314,7 @@ addEventListener("keydown", e => {
     else onE();                              // one press, one action — holding E doesn't machine-gun bites, doors, the flap
   }
   if (catchCall && /^Digit[1-5]$/.test(e.code)) catchDecide(+e.code[5]);   // deciding what happens to a shoplifter
+  else if (phone.call && /^Digit[12]$/.test(e.code)) callAnswer(+e.code[5]);   // on the phone
   else if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
@@ -4389,7 +4396,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -5071,6 +5078,18 @@ function custStep(cust, dt) {
         c.setMood("neutral");
         if (cust.moviegoer) { if (!custPickTheaterSeat(cust)) { cust.moviegoer = false; custNextStop(cust); } break; }   // ticket in hand: straight in
         if (cust.prospect) { custLine.push(cust); custToLine(cust); }   // straight to the counter, form in hand
+        else if (cust.pickup) {                   // here for their hold
+          const h = cust.pickup, i = holds.indexOf(h); if (i >= 0) holds.splice(i, 1);
+          if (h.copy) {                           // right there on the shelf: it goes on the counter with them
+            cust.tapes.push(h.copy); cust.holding = 1; c.holdTape(0); holdsRender(); shiftScore(40, h.by); posTerm.loyal(cust.member, 8);
+            logAct(`${memberName(cust.member)} came in for their hold: ${h.copy.title}`, "good", null, 40);
+            custLine.push(cust); custToLine(cust);
+          } else {                                // "you said you'd hold it!"
+            shiftScore(-30); posTerm.loyal(cust.member, -8); c.setMood("angry"); cust.hi = 2.5;
+            logAct(`${memberName(cust.member)} came in for ${h.title.title} on hold, and there wasn't one`, "bad", null, -30);
+            custNextStop(cust);
+          }
+        }
         else if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
         else if (custWant(cust)) custAskGo(cust);
         else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
@@ -5302,6 +5321,7 @@ function empFetchDrop() {                          // whatever she was fetching 
   const f = emp.fetch; if (!f) return;
   if (f.got) { setOnShelf(f.copy, true); emp.c.holdTape(0); }
   if (f.cust) f.cust.danaOn = false;
+  if (f.hold && !f.hold.copy) f.hold.by = "you";   // (a hold she didn't get to is yours to do)
   emp.fetch = null;
 }
 function empSummon() {                           // the bell: drop what she's doing (tapes stay in hand), ring them up, then back to it
@@ -5440,18 +5460,21 @@ function empTick(dt) {
       case "fetchGo": c.reachTo(emp.fetch.copy.pos); emp.state = "fetchTake"; emp.t = 0.8; break;
       case "fetchTake": if (emp.t <= 0) {
         const f = emp.fetch; c.reachTo(null);
-        if (f.copy.offShelf || f.cust.state !== "asking") { empFetchDrop(); empGo("toPost", EMP_POST); break; }   // somebody beat her to it / they've gone
+        if (f.copy.offShelf || (f.cust && f.cust.state !== "asking")) { if (f.hold) f.hold.by = "you"; empFetchDrop(); empGo("toPost", EMP_POST); break; }   // somebody beat her to it / they've gone (a hold's on you now)
         setOnShelf(f.copy, false); f.got = true; c.holdTape(1); c.setPose("hold");
+        if (f.hold) { empGo("fetchBack", { x: HOLDS_AT.x, z: HOLDS_AT.z + 0.6, ry: Math.PI }); break; }   // to the holds shelf
         const a = f.cust.c.group.position; empGo("fetchBack", { x: a.x, z: EMP_POST.z, ry: 0 });   // back behind the counter, across from them
       } break;
       case "fetchBack": {
         const f = emp.fetch;
+        if (f.hold) { c.reachTo(HOLDS_AT.clone().setY(HOLDS_AT.y + 0.1)); emp.state = "fetchGive"; emp.t = 0.9; break; }
         if (f.cust.state !== "asking" || !f.cust.c) { empFetchDrop(); empGo("toPost", EMP_POST); break; }
         c.reachTo(f.cust.c.group.position.clone().setY(1.2)); emp.state = "fetchGive"; emp.t = 0.9; break;
       }
       case "fetchGive": if (emp.t <= 0) {
         const f = emp.fetch; c.reachTo(null); c.holdTape(0); c.setPose("idle");
-        if (f.cust.state === "asking" && custHandTape(f.cust, f.copy, "dana")) { f.got = false; }   // they took it
+        if (f.hold) { f.hold.copy = f.copy; f.got = false; holdsRender(); shiftScore(15, "dana"); logAct(`Dana put ${f.copy.title} on the holds shelf for ${memberName(f.hold.member)}`, "good", null, 15); }
+        else if (f.cust.state === "asking" && custHandTape(f.cust, f.copy, "dana")) { f.got = false; }   // they took it
         empFetchDrop(); empGo("toPost", EMP_POST);
       } break;
       case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
@@ -5926,7 +5949,7 @@ function custTip(k) {                           // what E (and Q) do to this cus
   return t;
 }
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (stool.carried) {                       // arms full: setting the stool down is the only thing E does
@@ -5992,6 +6015,8 @@ function pickHover() {
     else if (aim?.object.userData.stock && aim.distance < 2.2) aimCupboard = aim.object.userData.stock;
     else if (aim?.object.userData.box && aim.distance < 2.4) aimBox = aim.object.userData.box;
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
+    else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
+    else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
     else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
@@ -6037,6 +6062,9 @@ function pickHover() {
     else if (aimCupboard) { const n = emptySpots().filter(u => isDrink(u.userData.snack) === (aimCupboard === "drinks")).length;
       tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : " · the racks are full"}`; }
     else if (aimBox) tip.innerHTML = `E — pick up the box: ${aimBox.name} \u00d7${aimBox.qty}`;
+    else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
+    else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
+      tip.innerHTML = h ? `E — put ${held.title} on hold for ${memberName(h.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${h.title.title} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
     else if (aimMess) tip.innerHTML = `E — clean up the ${MESS[aimMess.kind].label}`;
     else if (aimPrinter) tip.innerHTML = co?.by === "player" && coStep()?.id === "tear" ? (printer.job?.done ? "E — tear off the receipt" : "Printing…") : "Receipt printer";
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
@@ -6306,6 +6334,115 @@ function libUnlock(tier) {                       // -> tapes put out
   }
   upg.library = tier; custSpots = null;
   return n;
+}
+
+// ---------------- the phone: "do you have ... in?" ----------------
+// Every couple of hours it rings. Answer (E) and a member asks after a title:
+// 1 — yes, you'll hold one for them; 2 — sorry, all out. Promise a hold and a
+// copy had better be on the holds shelf (E with it in hand) by the time they
+// come in for it. Customers in the store come first: a call you miss while
+// you're with someone costs nothing (they'll call back), but pick up while
+// someone's waiting at the counter and they notice. Dana takes calls too, but
+// only when nobody in the store needs her
+const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null };   // next: the game hour of the next call
+const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by }
+const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
+let ringAc = null;
+function ringBurst() {                            // a desk phone: two tones together, twice
+  try {
+    const ac = ringAc ||= new AudioContext(), t = ac.currentTime, g = ac.createGain(); g.gain.value = 0; g.connect(ac.destination);
+    for (const f of [440, 480]) { const o = ac.createOscillator(); o.frequency.value = f; o.connect(g); o.start(t); o.stop(t + 1.6); }
+    for (const [a, b] of [[0, 0.7], [0.85, 1.55]]) { g.gain.setValueAtTime(0.03, t + a); g.gain.setValueAtTime(0, t + b); }
+  } catch {}
+}
+function phoneCaller() {                          // an active member, not in the store, asking after something in their taste
+  const ms = posTerm.members.filter(m => m.active !== false && posTerm.canVisit(m) && !custs.some(k => k.member === m) && !holds.some(h => h.member === m));
+  const m = ms[Math.floor(Math.random() * ms.length)]; if (!m) return null;
+  const cats = customerFor(Math.imul(m.num, 2654435761) >>> 0, m.female).persona.taste.cats;
+  const pool = catalog.filter(t => t.pos && !t.libLocked && (!cats.length || cats.includes(t.category)));
+  const inNow = pool.filter(onShelfCopy), out = pool.filter(t => !onShelfCopy(t));
+  const from = Math.random() < 0.65 || !out.length ? inNow : out;
+  return from.length ? { member: m, title: from[Math.floor(Math.random() * from.length)] } : null;
+}
+function phoneTick(dt) {                          // (runs with the clock)
+  if (phone.next == null) phone.next = Math.max(shift.h, SHIFT.open) + 1 + Math.random() * 1.5;
+  if (!phone.ring && !phone.call && shiftOpen() && shift.h >= phone.next) {
+    phone.next = shift.h + 2 + Math.random() * 1.5;   // semi-infrequent: every two to three and a half hours
+    const c = phoneCaller(); if (c) { phone.ring = { ...c, t: 0, rang: 0 }; logAct("The phone's ringing (behind the counter)"); }
+  }
+  const r = phone.ring; if (!r) { phoneCallTick(dt); return; }
+  r.t += dt;
+  if (r.t >= r.rang) { r.rang += 3; ringBurst(); }
+  if (r.t > 6 && emp.c && emp.state === "post" && !storeBusy() && emp.t <= 0) return danaCall();   // nobody needs her: Dana gets it
+  if (r.t > 20) {                                 // rang out
+    phone.ring = null;
+    if (storeBusy()) { logAct(`Missed a call from ${memberName(r.member)} while you were with customers: they'll call back`); phone.next = shift.h + 0.4 + Math.random() * 0.4; }
+    else { shiftScore(-10); posTerm.loyal(r.member, -2); logAct(`Missed a call from ${memberName(r.member)}`, "bad", null, -10); }
+  }
+}
+function phoneAnswer() {                          // E on the phone while it's ringing
+  const r = phone.ring; if (!r) return;
+  phone.ring = null;
+  const waiting = [custWaiting(), ...custAsks.filter(k => k.state === "asking")].filter(Boolean);
+  if (waiting.length) {                           // they're standing right there
+    for (const k of waiting) { k.t -= 10; posTerm.loyal(k.member, -2); k.c.setMood("impatient"); k.hi = 2; }
+    logAct(`Picked up the phone with ${waiting.length === 1 ? "a customer" : waiting.length + " customers"} waiting at the counter`, "bad");
+  }
+  phone.call = { member: r.member, title: r.title, t: 30 };
+  callHud();
+}
+function phoneCallTick(dt) {
+  const c = phone.call; if (!c) return;
+  if ((c.t -= dt) <= 0) { phone.call = null; callHud(); shiftScore(-5); logAct(`${memberName(c.member)} got tired of waiting on the line and hung up`, "bad", null, -5); }
+}
+function callAnswer(key, by = "you") {            // 1: yes, I'll hold one · 2: sorry, all out
+  const c = phone.call; if (!c) return;
+  phone.call = null; callHud();
+  const name = memberName(c.member), inNow = !!onShelfCopy(c.title), Who = by === "dana" ? "Dana" : "You";
+  if (key === 1) {
+    const at = Math.min(SHIFT.lastIn - 0.1, shift.h + 1 + Math.random() * 1.2);
+    holds.push({ member: c.member, title: c.title, at, day: shift.day, copy: null, by });
+    logAct(`${Who} told ${name} there's a copy of ${c.title.title} on hold for them: they'll be in around ${fmtClock(at)}${by === "you" ? ". Put a copy on the holds shelf" : ""}`);
+    return holds[holds.length - 1];
+  }
+  if (inNow) { shiftScore(-10, by); posTerm.loyal(c.member, -3); logAct(`${Who} told ${name} ${c.title.title} was all out, but there's one on the shelf`, "bad", null, -10); }
+  else { shiftScore(10, by); posTerm.loyal(c.member, 1); logAct(`${Who} told ${name} ${c.title.title} is all out`, "", null, 10); }
+}
+function callHud() {
+  const el = $("callPanel"), c = phone.call; if (!c) { el.style.display = "none"; return; }
+  el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${c.title.title}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
+    `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
+  el.style.display = "block";
+}
+function holdPlace(tape) {                        // E on the holds shelf with a tape in hand
+  const h = holds.find(h => !h.copy && titleOfCopy(tape) === h.title);
+  if (!h) { toast("Nobody's asked for that one to be held"); return; }
+  tape.fromReturns = tape.strayFix = false; releaseFromHand(); invSync();
+  h.copy = tape; holdsRender(); shiftScore(15, "you");
+  logAct(`Put ${tape.title} on the holds shelf for ${memberName(h.member)}`, "good", null, 15);
+}
+let holdMeshes = [];
+function holdsRender() {                          // the held tapes, stacked in the tray with a yellow slip on each
+  for (const m of holdMeshes) scene.remove(m); holdMeshes = [];
+  holds.filter(h => h.copy).forEach((h, i) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), h.copy.sideMat || mat.tapeBody);
+    m.position.set(HOLDS_AT.x + (i % 2) * 0.012, HOLDS_AT.y + TAPE.w / 2 + i * TAPE.w, HOLDS_AT.z); scene.add(m); holdMeshes.push(m);
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.002, 0.07), holdSlip); s.position.set(m.position.x, m.position.y + TAPE.w / 2 + 0.001, m.position.z); scene.add(s); holdMeshes.push(s);
+  });
+}
+const holdSlip = new THREE.MeshLambertMaterial({ color: 0xfff59a });
+function holdsTick() {                           // callers come in for their holds
+  for (const h of holds.filter(h => !h.coming && h.day === shift.day && shift.h >= h.at && shiftOpen() && !frontLock.locked)) {
+    if (custs.some(k => k.member === h.member)) continue;
+    h.coming = true; const k = custSpawn(h.member); k.pickup = h; k.thief = false; k.returning = [];
+  }
+}
+function danaCall() {                            // Dana picks up: she checks, tells the truth, and fetches it herself if it's in
+  const r = phone.ring; phone.ring = null; phone.call = { member: r.member, title: r.title, t: 30 };
+  const copy = onShelfCopy(r.title);
+  if (!copy) { callAnswer(2, "dana"); return; }
+  const h = callAnswer(1, "dana");
+  emp.fetch = { copy, hold: h }; emp.c.setMood("happy"); empGo("fetchGo", shelfSpot(copy));
 }
 
 // ---------------- misshelved tapes ----------------
@@ -6658,6 +6795,8 @@ function onE() {
   if (aimCupboard) { stockTake(aimCupboard); return; }
   if (aimStockSlot) { stockPlace(aimStockSlot); return; }
   if (aimMess) { messClean(aimMess); return; }
+  if (aimPhone) { phoneAnswer(); return; }
+  if (aimHolds && held && !inspecting) { holdPlace(held); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
   if (aimEmp) { empToggle(); return; }
@@ -6879,6 +7018,8 @@ function beginShift() {                        // first thing in the morning: 9:
   posTerm.setDate(shiftDate());
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   boxDeliver();                                // yesterday's orders, by the front door
+  for (const h of holds) if (h.day < shift.day) { h.day = shift.day; h.at = 11 + Math.random() * 3; h.coming = false; }   // didn't make it in: they'll come today
+  phone.next = null;
   if (SIM && growth.pending) {                 // word got around: people will be in today to sign up at the counter
     growth.prospects = (growth.prospects || 0) + growth.pending; growth.pending = 0; growth.pT = 30;
     logAct(`Word's getting around: ${growth.prospects} ${growth.prospects > 1 ? "people" : "person"} might come in to sign up today`, "good");
@@ -6919,6 +7060,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by })),
     rep: rep.v, upg, members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
@@ -6980,6 +7122,11 @@ function loadState(S) {
     }
     if (S.show) { const t = copyByKey(S.show.title); if (t) Object.assign(show, S.show, { title: t }); }
     upgVisuals();
+    for (const h of S.holds || []) {             // promised holds (and what's on the shelf for them)
+      const m = posTerm.members.find(m => m.num === h.member), t = copyByKey(h.title), c = h.copy && copyByKey(h.copy);
+      if (m && t) { if (c) setOnShelf(c, false); holds.push({ member: m, title: t, at: h.at, day: h.day, copy: c || null, by: h.by }); }
+    }
+    holdsRender();
     for (const [k, at] of S.strays || []) { const c = copyByKey(k), a = copyByKey(at); if (c && a?.pos) { setOnShelf(c, false); misshelve(c, null, a); } }
     for (const [kind, x, z, y] of S.messes || []) if (MESS[kind]) messAdd(kind, x, z, y);
     if (inv.length) invSelect(S.invSel >= 0 ? S.invSel : S.invEmpty >= 0 ? S.invEmpty : inv.length - 1);
@@ -7220,5 +7367,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
