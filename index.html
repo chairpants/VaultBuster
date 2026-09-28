@@ -112,6 +112,19 @@
   #callPanel .q { margin-bottom: 8px; font-size: 14px; } #callPanel .q .cat { color: #ffffff90; font-size: 12px; }
   #callPanel span { display: inline-block; margin: 2px 8px; white-space: nowrap; }
   #callPanel > span b { color: var(--bb-yellow); margin-right: 3px; }
+  /* ---------- Dana's job board ---------- */
+  #jobBoard { position: fixed; z-index: 11; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; width: min(560px, calc(100vw - 32px));
+    background: rgba(40, 26, 12, .9); border: 2px solid #b98a55; border-radius: 8px; padding: 12px 16px; color: #fff; font-size: 13px; }
+  #jobBoard .h { color: #ffd98a; font-weight: bold; letter-spacing: 2px; margin-bottom: 8px; text-align: center; }
+  #jobBoard .warn { color: #ffb3b3; text-align: center; margin-bottom: 8px; }
+  #jobBoard .job { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 4px; border: 1px solid transparent; }
+  #jobBoard .job .pri { display: inline-block; width: 22px; text-align: center; font-weight: bold; border-radius: 3px; background: #ffffff18; }
+  #jobBoard .job .pri.p1 { color: #7ee08f; } #jobBoard .job .pri.p2 { color: #d8e87e; } #jobBoard .job .pri.p3 { color: #f0c070; } #jobBoard .job .pri.p4 { color: #e09a7e; }
+  #jobBoard .job .d { flex: 1; color: #ffffffa0; font-size: 12px; }
+  #jobBoard .job .st { font-weight: bold; color: #7ee08f; font-size: 11px; }
+  #jobBoard .job.off { opacity: .45; } #jobBoard .job.off .st { color: #ff7b7b; }
+  #jobBoard .job.sel { background: #ffffff14; border-color: #ffd98a; }
+  #jobBoard .keys { margin-top: 10px; text-align: center; color: #ffffff90; font-size: 11px; }
 
   #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 96px; transform: translateX(-50%);   /* clear of the inventory bar */
     color: #fff; font-size: 13px; font-weight: bold; display: none; }
@@ -199,6 +212,7 @@
 <div id="shiftClock"></div>
 <div id="catchCall"></div>
 <div id="callPanel"></div>
+<div id="jobBoard"></div>
 <div id="actLog"><div class="h" onclick="logToggle()">LOG<span class="n"></span><span class="k">J hide · PgUp/PgDn</span></div><div id="actLogList"></div></div>
 <div id="shiftReport"><pre id="shiftSlip"></pre><button id="shiftNext">NEXT SHIFT ▸</button></div>
 <div id="invBar"></div>
