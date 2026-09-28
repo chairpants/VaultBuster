@@ -3966,6 +3966,10 @@ function shiftTick(dt) {
     const crossed = at => was < at && shift.h >= at;
     if (crossed(SHIFT.open)) toast(frontLock.locked ? "10:00 AM — opening time. Unlock the front doors" : "10:00 AM — we're open", true);
     if (crossed(SHIFT.lastIn)) toast("11:45 PM — last customers of the night", true);
+    const d = shiftDate().getDay(), weekend = d === 5 || d === 6;
+    if (crossed(12)) logAct("The lunch crowd's starting to come in");
+    if (crossed(15)) logAct(weekend ? "Afternoon's picking up" : "School's out: here comes the after-school crowd");
+    if (crossed(18.5)) logAct(weekend ? `${d === 5 ? "Friday" : "Saturday"} night rush: it's about to get busy` : "The evening rush is starting");
     if (crossed(SHIFT.close)) toast("Midnight — closing time. Lock up and head out the front doors when you're done", true);
   }
   shiftHud();
@@ -4520,7 +4524,16 @@ function customerFor(seed, female) {
 // everyone in the store: up to CUST_MAX at once, each with their own visit.
 // One at a time at the register; the rest line up behind them (custLine[0] is
 // the one at the counter). Someone new wanders in every so often while there's room
-const CUST_MAX = 4;
+// how busy it is: slow mornings, a lunch bump, the after-school wave, the
+// evening rush (bigger Friday and Saturday nights), a trickle before close
+function rushLevel() {
+  const h = shift.h, d = shiftDate().getDay(), weekend = d === 5 || d === 6;
+  let r = h < 12 ? 0.5 : h < 14 ? 0.9 : h < 15 ? 0.7 : h < 17.5 ? 1.2 : h < 18.5 ? 0.9 : h < 21.5 ? 1.5 : h < 23 ? 0.9 : 0.5;
+  if (weekend && h >= 18) r *= 1.35;
+  if (d === 2) r *= 1.15;                         // new release Tuesday
+  return r;
+}
+const custMax = () => Math.min(6, Math.round(2 + 2 * rushLevel()));
 const custs = [], custLine = [];
 const custArrivals = { t: 3, lastMember: null };
 const custLikes = (cust, spot) => {               // 0..1: how much of this shelf is their kind of thing
@@ -4533,7 +4546,7 @@ const custWaiting = () => custLine[0] && ["wait", "impatient", "angry"].includes
 // About half the time it's someone with tapes out, bringing them back — most
 // likely whoever's due today or late
 function custPickMember() {
-  const ms = posTerm.members.filter(m => m !== custArrivals.lastMember && !custs.some(k => k.member === m) && posTerm.canVisit(m));   // not someone who's already in here, or who's banned
+  const ms = posTerm.members.filter(m => m !== custArrivals.lastMember && !custs.some(k => k.member === m) && posTerm.canVisit(m) && (m.loyalty || 0) > -60);   // not someone who's already in here, banned, or fed up with the place
   const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
   const due = ms.filter(m => m.rentals.length && soonest(m) <= 1);
   if (due.length && Math.random() < 0.5) {
@@ -4541,13 +4554,20 @@ function custPickMember() {
     let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < due.length - 1 && (r -= w[i]) > 0) i++;
     return due[i];
   }
-  return ms[Math.floor(Math.random() * ms.length)];
+  const w = ms.map(m => Math.max(0.2, 1 + (m.loyalty || 0) / 40));   // regulars come in more often
+  let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < ms.length - 1 && (r -= w[i]) > 0) i++;
+  return ms[i];
 }
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
 function custSpawn(member = custPickMember()) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
   custArrivals.lastMember = member; shift.stats.visitors++;
+  const loyal = member.loyalty || 0;
+  who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
+  member.likes = who.persona.taste.name;          // (for the POS: now somebody's noticed)
+  if (shift.h >= 23 && Math.random() < 0.5) { who.persona.stops = 7 + Math.floor(Math.random() * 4); who.persona.dwell *= 1.5; }   // the 11:30 walk-in, in no hurry at all
+  if (loyal >= 40) logAct(`${memberName(member)}, one of the regulars, came in`);
   cust.thief = Math.random() < 0.06;              // now and then somebody means to walk out with it
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   const c = cust.c = VaultCustomers.build(who.outfit);
@@ -4703,11 +4723,13 @@ function custGone(cust) {
   colliders.splice(colliders.indexOf(cust.box), 1);
   custs.splice(custs.indexOf(cust), 1);
   cust.c = null; cust.state = "gone";
-  custArrivals.t = Math.max(custArrivals.t, 6 + Math.random() * 14);   // not a revolving door
+  custArrivals.t = Math.max(custArrivals.t, (6 + Math.random() * 14) / rushLevel());   // not a revolving door
+  const a = custAsks.indexOf(cust); if (a >= 0) custAsks.splice(a, 1);
 }
 function custInteract(cust) {                     // E on a customer: ring them up at the counter, or just say hi
   const c = cust.c;
   if (cust.sneaking) return custCatch(cust);
+  if (cust.state === "asking") return custAskInteract(cust);
   if (["wait", "impatient", "angry"].includes(cust.state) && !co) { coStart("player", cust); coAct("customer"); }   // start ringing them up
   else if (co?.cust === cust && co.by === "player") coAct("customer");
   else if (cust.state !== "out") {
@@ -4729,6 +4751,77 @@ function custWatched(cust, dt) {
   c.holdTape(cust.tapes.length); c.setPose("hold"); c.setMood("meh"); cust.hi = 2;
   logAct(`${memberName(cust.member)} saw you watching and brought ${cust.tapes.length === 1 ? cust.tapes[0].title : "the tapes"} to the counter`, "good");
   custLine.push(cust); custToLine(cust);
+}
+// ---- wanting something: a title they came in for, or "got anything good?" ----
+// They wait at the counter (beside the line) until someone helps. Hand them a
+// tape from your hand (E); Q tells them a title's all out. Leave them long
+// enough and Dana goes and gets it; longer still and they give up and look
+// for themselves
+const TASTE_ASK = { "horror fan": "something scary", parent: "something for the kids", "couch potato": "a show to binge",
+  "action junkie": "something with some action", "date night": "something for date night", "anime kid": "some anime" };
+const custAsks = [];                              // who's waiting at the counter for help, in order
+const ASK_SPOT = i => ({ x: CUST_COUNTER.x + 1.2 + 0.7 * i, z: CUST_COUNTER.z + 0.1, ry: Math.PI });
+const titleCopies = t => [t, ...(t.copies || [])];
+const onShelfCopy = t => titleCopies(t).find(c => !c.offShelf && !c.lost && c.pos);
+function custWant(cust) {
+  if (custAsks.length >= 3) return false;
+  const cats = cust.who.persona.taste.cats, r = Math.random();
+  if (r < 0.16) {                                 // a title in mind: usually one that's in; now and then one that's all out
+    const pool = catalog.filter(t => t.pos && (!cats.length || cats.includes(t.category)));
+    const inNow = pool.filter(onShelfCopy), out = pool.filter(t => !onShelfCopy(t));
+    const from = Math.random() < 0.75 || !out.length ? inNow : out; if (!from.length) return false;
+    cust.want = { kind: "title", title: from[Math.floor(Math.random() * from.length)] };
+  } else if (r < 0.28 && cats.length) cust.want = { kind: "rec" };
+  else return false;
+  cust.tries = 0; return true;
+}
+function custAskGo(cust) { custAsks.push(cust); custGo(cust, "toAsk", ASK_SPOT(custAsks.indexOf(cust))); }
+function custAskDone(cust, then) {                // helped (or gave up): off the counter, and on with it
+  const i = custAsks.indexOf(cust); if (i >= 0) custAsks.splice(i, 1);
+  if (then === "pay") { custLine.push(cust); custToLine(cust); }
+  else if (then === "leave") custGo(cust, "leave", CUST_DOOR);
+  else if (cust.stopsLeft > 0) custNextStop(cust); else custDone(cust);
+}
+function custAskInteract(cust) {                  // E: hand over what's in your hand, or just "be right with you"
+  if (held && !inspecting) return custHandTape(cust, held, "you");
+  if (!cust.acked) { cust.acked = true; cust.t += 30; }   // "I'll go look": they'll wait a bit longer
+  cust.hi = 1.2; cust.c.setMood("happy");
+}
+function custHandTape(cust, tape, by) {           // -> true if they took it
+  const c = cust.c, w = cust.want, cats = cust.who.persona.taste.cats, likes = cats.includes(tape.category), name = memberName(cust.member);
+  const exact = w.kind === "title" && titleOfCopy(tape) === w.title;
+  const ok = exact || Math.random() < (w.kind === "title" ? (tape.category === w.title.category ? 0.6 : likes ? 0.4 : 0.12) : likes ? 0.85 : 0.2);
+  const who = by === "dana" ? "dana" : "you", Who = by === "dana" ? "Dana" : "You";
+  if (!ok) {
+    cust.tries++; c.setMood("meh"); cust.hi = 1.6;
+    logAct(`${Who} offered ${name} ${tape.title}: \u201cNah, not really my thing\u201d`);
+    if (cust.tries >= 2) { posTerm.loyal(cust.member, -3); custAskDone(cust); }   // they'll find something themselves
+    return false;
+  }
+  if (by === "you") { tape.fromReturns = false; releaseFromHand(); }
+  cust.tapes.push(tape); cust.holding = cust.tapes.length;
+  c.holdTape(Math.min(3, cust.holding)); c.setPose("hold"); c.setMood("love"); cust.hi = 1.8;
+  const fast = Math.max(0, Math.round(60 - (clockT - cust.askAt))), pts = exact ? 80 + fast : w.kind === "title" ? 40 : likes ? 80 + fast : 30;
+  shiftScore(pts, who); posTerm.loyal(cust.member, exact ? 10 : w.kind === "title" ? 4 : likes ? 8 : 2);
+  logAct(exact ? `${Who} found ${name} ${tape.title}` : w.kind === "title" ? `${name} took ${tape.title} instead of ${w.title.title}` : `${Who} recommended ${tape.title} to ${name}${likes ? ": right up their alley" : ""}`, "good", null, pts);
+  custAskDone(cust, "pay");
+  return true;
+}
+function custAllOut(cust, by = "you") {          // "sorry, all our copies are out"
+  const copy = onShelfCopy(cust.want.title), name = memberName(cust.member), who = by === "dana" ? "dana" : "you";
+  if (copy) {                                     // ...it was right there
+    shiftScore(-30, who); posTerm.loyal(cust.member, -5); cust.c.setMood("meh"); cust.hi = 1.5;
+    logAct(`Told ${name} ${cust.want.title.title} was out, but there's one on the shelf`, "bad", null, -30);
+    return custAskDone(cust);                     // they'll have a look themselves
+  }
+  shiftScore(10, who); posTerm.loyal(cust.member, 2); cust.c.setMood("meh"); cust.hi = 1.5;
+  logAct(`${by === "dana" ? "Dana told" : "Told"} ${name} ${cust.want.title.title} is all out`, "", null, 10);
+  custAskDone(cust, Math.random() < 0.5 ? "leave" : null);
+}
+function custAskGiveUp(cust) {
+  shiftScore(-20); posTerm.loyal(cust.member, -8); cust.c.setMood("meh");
+  logAct(`${memberName(cust.member)} gave up waiting for help at the counter`, "bad", null, -20);
+  custAskDone(cust);
 }
 function custSneak(cust) {                        // a shoplifter: tapes under the jacket, eyes everywhere, straight for the door
   const c = cust.c;
@@ -4780,9 +4873,9 @@ function snackProxy(u) {
   return g;
 }
 function custTick(dt) {
-  if (custs.length < CUST_MAX && !frontLock.locked && shiftOpen() && (custArrivals.t -= dt) <= 0) {   // locked: whoever's inside finishes up; nobody new
+  if (custs.length < custMax() && !frontLock.locked && shiftOpen() && (custArrivals.t -= dt) <= 0) {   // locked: whoever's inside finishes up; nobody new
     if (custs.some(k => Math.hypot(k.c.group.position.x - CUST_DOOR.x, k.c.group.position.z - CUST_DOOR.z) < 1.2)) custArrivals.t = 1;   // someone's in the doorway: give them a sec
-    else { custSpawn(); custArrivals.t = 6 + Math.random() * 20; }
+    else { custSpawn(); custArrivals.t = (6 + Math.random() * 20) / rushLevel(); }
   }
   for (const k of [...custs]) { custHearAlarm(k, dt); custWatched(k, dt); custStep(k, dt); }
 }
@@ -4839,9 +4932,18 @@ function custStep(cust, dt) {
       case "boot": if (cust.t <= 0) {
         c.setMood("neutral");
         if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
+        else if (custWant(cust)) custAskGo(cust);
         else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
         else custNextStop(cust);
       } break;
+      case "toAsk":                               // at the counter: "excuse me..."
+        cust.state = "asking"; cust.t = 75 * P.patience; cust.askAt = clockT; c.setMood("ask"); c.setPose("idle");
+        logAct(cust.want.kind === "title" ? `${memberName(cust.member)} is at the counter looking for ${cust.want.title.title}` : `${memberName(cust.member)} is at the counter wanting ${TASTE_ASK[cust.who.persona.taste.name] || "something good"}`);
+        break;
+      case "asking":
+        if (cust.hi <= 0 && c.mood !== "ask") c.setMood("ask");
+        if (cust.t <= 0) custAskGiveUp(cust);
+        break;
       case "dropoff": c.reachTo(returnSlotMesh.getWorldPosition(new THREE.Vector3())); cust.state = "dropping"; cust.t = 1.2; break;
       case "dropping": if (cust.t <= 0) {
         const owedWas = posTerm.owed(cust.member), nBack = cust.returning.length;
@@ -4950,7 +5052,7 @@ function custStep(cust, dt) {
         if (co && (co.idle = (co.idle || 0) + dt) > 30) {
           if (co.by === "player" && emp.state === "post") { co.by = "dana"; co.idle = 0; coHud(); }
           else if (co.idle > 45) {
-            shift.stats.walkouts++; shiftScore(-100); logAct(`${memberName(cust.member)} gave up on the checkout and walked out`, "bad", -co.total, -100);
+            shift.stats.walkouts++; shiftScore(-100); posTerm.loyal(cust.member, -15); logAct(`${memberName(cust.member)} gave up on the checkout and walked out`, "bad", -co.total, -100);
             c.holdTape(cust.tapes.length);
             cust.tagged = cust.tapes.some(t => !t.desens); drawerOpen = 0; co = null; coHud();
             c.setMood("angry"); c.holdProp(null); c.setPose(cust.tapes.length ? "hold" : "idle"); custGo(cust, "leave", CUST_DOOR);
@@ -4963,7 +5065,7 @@ function custStep(cust, dt) {
         c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience; break;
       case "wait": if (cust.t <= 0) { dingBell(); empSummon(); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;
       case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
-      case "angry": if (cust.t <= 0) { shift.stats.walkouts++; shiftScore(-100); logAct(`${memberName(cust.member)} got tired of waiting and walked out`, "bad", null, -100); cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
+      case "angry": if (cust.t <= 0) { shift.stats.walkouts++; shiftScore(-100); posTerm.loyal(cust.member, -15); logAct(`${memberName(cust.member)} got tired of waiting and walked out`, "bad", null, -100); cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
       case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
       case "out": if (cust.t <= 0) custGone(cust); return;
@@ -5004,6 +5106,7 @@ function empSpawn() {
   c.setMood("neutral"); emp.state = "post";
 }
 function empGo(state, spot, avoidPlayer = false) {
+  if (emp.fetch && !["fetchGo", "fetchBack", "repath"].includes(state)) empFetchDrop();   // called away mid-fetch: the tape goes back
   if (STOOL_STATES.includes(emp.state) && !STOOL_STATES.includes(state)) empLeaveStool();
   const p = emp.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
@@ -5035,6 +5138,24 @@ function empToggle() {                            // E on Dana: returns <-> regi
     if (!returnBin.length) { toast("Dana: returns bin's empty!", true); c.setMood("happy"); emp.t = 1; return; }
     emp.task = "returns"; c.setMood("happy"); empGo("toTote", EMP_TOTE);
   } else empBackToRegister();
+}
+function empFetch(cust) {                         // off to the shelves for them: the title they asked for, or a pick from their kind of thing
+  const w = cust.want, cats = cust.who.persona.taste.cats;
+  let copy = w.kind === "title" ? onShelfCopy(w.title) : null;
+  if (w.kind === "title" && !copy) { custAllOut(cust, "dana"); emp.t = 1; return; }   // she checks the screen: all out
+  if (!copy) {
+    const pool = catalog.filter(t => t.pos && (Math.random() < 0.6 ? cats.includes(t.category) : true)).map(onShelfCopy).filter(Boolean);
+    copy = pool[Math.floor(Math.random() * pool.length)]; if (!copy) return;
+  }
+  cust.danaOn = true; emp.fetch = { cust, copy };
+  emp.c.setMood("happy"); logAct(`Dana went to find ${w.kind === "title" ? w.title.title : "something"} for ${memberName(cust.member)}`);
+  empGo("fetchGo", shelfSpot(copy));
+}
+function empFetchDrop() {                          // whatever she was fetching goes back where it came from
+  const f = emp.fetch; if (!f) return;
+  if (f.got) { setOnShelf(f.copy, true); emp.c.holdTape(0); }
+  if (f.cust) f.cust.danaOn = false;
+  emp.fetch = null;
 }
 function empSummon() {                           // the bell: drop what she's doing (tapes stay in hand), ring them up, then back to it
   if (emp.task !== "returns" || emp.paused) return;
@@ -5169,6 +5290,23 @@ function empTick(dt) {
     emp.t -= dt;
     switch (emp.state) {
       case "repath": if (emp.t <= 0) empGo(emp.repath.state, emp.repath.spot); break;
+      case "fetchGo": c.reachTo(emp.fetch.copy.pos); emp.state = "fetchTake"; emp.t = 0.8; break;
+      case "fetchTake": if (emp.t <= 0) {
+        const f = emp.fetch; c.reachTo(null);
+        if (f.copy.offShelf || f.cust.state !== "asking") { empFetchDrop(); empGo("toPost", EMP_POST); break; }   // somebody beat her to it / they've gone
+        setOnShelf(f.copy, false); f.got = true; c.holdTape(1); c.setPose("hold");
+        const a = f.cust.c.group.position; empGo("fetchBack", { x: a.x, z: EMP_POST.z, ry: 0 });   // back behind the counter, across from them
+      } break;
+      case "fetchBack": {
+        const f = emp.fetch;
+        if (f.cust.state !== "asking" || !f.cust.c) { empFetchDrop(); empGo("toPost", EMP_POST); break; }
+        c.reachTo(f.cust.c.group.position.clone().setY(1.2)); emp.state = "fetchGive"; emp.t = 0.9; break;
+      }
+      case "fetchGive": if (emp.t <= 0) {
+        const f = emp.fetch; c.reachTo(null); c.holdTape(0); c.setPose("idle");
+        if (f.cust.state === "asking" && custHandTape(f.cust, f.copy, "dana")) { f.got = false; }   // they took it
+        empFetchDrop(); empGo("toPost", EMP_POST);
+      } break;
       case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
       case "post":                                // ring up whoever's waiting; shut the gates up
         if (custWaiting()) {
@@ -5200,6 +5338,10 @@ function empTick(dt) {
           const side = seatAt.x > 0 ? -1 : seatAt.x < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1);   // the end cushion farthest from you
           emp.seat = { x: side * (Math.abs(SEATS[0].x) - 0.04), z: TV.z - 3.3 }; c.setMood("happy");   // on it, a hair inboard so elbows clear the arm
           empGo("toCouch", { x: emp.seat.x, z: TV.z - 2.425, ry: 0 });   // the strip between the couch and the coffee table
+        }
+        if (emp.state === "post" && !co && !custWaiting() && !emp.paused && emp.t <= 0) {   // someone's been waiting for help: she'll go find it
+          const k = custAsks.find(k => k.state === "asking" && !k.danaOn && clockT - k.askAt > 20);
+          if (k) { empFetch(k); break; }
         }
         if (emp.state === "post" && empIdle() && emp.t <= 0 && stoolFree()) { if ((emp.idleT = (emp.idleT || 0) + dt) > EMP_STOOL_WAIT) { emp.idleT = 0; empFetchStool(); } }
         else emp.idleT = 0;
@@ -5378,6 +5520,7 @@ const CO_STEPS = [
         const secs = clockT - co.start, missed = co.cust.tapes.filter(t => !t.desens).length;
         co.why = [secs < 40 ? "quick" : secs > 110 ? "slow" : "", co.upsold ? "upsold a snack" : "", co.feesIn ? "fees collected" : "", missed ? `${missed} tag${missed > 1 ? "s" : ""} missed` : ""].filter(Boolean);
         co.score = 100 + Math.max(0, Math.round((90 - secs) * 2)) + co.pts - 75 * missed; shiftScore(co.score, co.by === "player" ? "you" : "dana");
+        posTerm.loyal(co.cust.member, secs < 40 ? 7 : 4);
       }
       const nT = co.cust.tapes.length, nS = co.bought || 0;
       logAct(`${co.by === "dana" ? "Dana rang up" : "Rang up"} ${memberName(co.cust.member)}: ${[nT ? `${nT} tape${nT > 1 ? "s" : ""}` : "", nS ? `${nS} snack${nS > 1 ? "s" : ""}` : "", co.fees ? "late fees" : ""].filter(Boolean).join(", ")}${co.why?.length ? ` (${co.why.join(", ")})` : ""}`,
@@ -5401,6 +5544,7 @@ function coRebill() {                            // the total changed (fees char
 function coFees(charge) {                        // late fees on their account: charge them (money, a grumpier customer) or waive them (goodwill)
   const m = co.cust.member, amt = posTerm.owed(m);
   posTerm.settle(m, charge); co.cust.hi = 1.6;
+  posTerm.loyal(m, charge ? -3 : 6);
   if (charge) { co.fees += amt; co.feesIn = true; coRebill(); shift.stats.feesCollected += amt; co.cust.c.setMood("meh"); co.pts += 20; logAct(`${co.by === "dana" ? "Dana charged" : "Charged"} ${memberName(m)} their late fees`, "good", amt); }
   else { shift.stats.feesWaived += amt; co.cust.c.setMood("love"); logAct(`Waived ${memberName(m)}'s ${money(amt)} in late fees`); }
 }
@@ -5420,6 +5564,7 @@ function coOffer() {                             // "grab a snack for the movie?
   coHud();
 }
 function coQ() {                                 // Q at the counter: waive their late fees, or offer a snack
+  if (aimCustomer?.state === "asking" && aimCustomer.want.kind === "title") return custAllOut(aimCustomer);   // (or: sorry, it's all out)
   if (co?.by !== "player" || aimCustomer !== co.cust) return;
   if (coStep()?.id === "fees") { coFees(false); co.i++; coSkip(); coHud(); }
   else coOffer();
@@ -5570,6 +5715,11 @@ function posBeep(f) {
 }
 function custTip(k) {                           // what E (and Q) do to this customer right now
   if (catchCall === k) return "Caught · 1–5 to decide";
+  if (k.state === "asking") {
+    const w = k.want, give = held ? `<br>E — hand them ${held.title}` : "";
+    return w.kind === "title" ? `Looking for <b>${w.title.title}</b> (${w.title.category})${give}<br>Q — tell them it's all out`
+      : `Wants ${TASTE_ASK[k.who.persona.taste.name] || "something good"}${give || "<br>Bring them a tape"}`;
+  }
   const mine = co?.cust === k && co.by === "player";
   if (mine && co.away) return "Grabbing a snack…";
   if (mine && coStep()?.id === "fees" && coWants("customer")) return `E — ${coStep().tip()}<br>Q — waive them`;
@@ -6567,5 +6717,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
