@@ -652,6 +652,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const g = new THREE.ExtrudeGeometry(sh, { depth: 0.045, bevelEnabled: false, curveSegments: 24 }); g.translate(0, 0, -0.0225);
     leaf = new THREE.Mesh(g, leafMat); leaf.position.set(lx, 0.01, 0); pivot.add(leaf);
     const glass = new THREE.Mesh(new THREE.CircleGeometry(PORT.r, 32), doorGlass); glass.position.set(lx, PORT.y, 0); pivot.add(glass);
+    if (push) aimBlockers.push(glass);          // you can see through it, not reach through it
   } else {
     leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, DOOR_H - 0.02, 0.045), leafMat);
     leaf.position.set(lx, DOOR_H / 2, 0); pivot.add(leaf);
@@ -691,6 +692,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   const d = { pivot, base, a: 0, openA: Math.PI / 2 * hinge * toLocal(swing), open: false, locked, rattle: 0, shut, openBox,
     push, at, c, alongX, hinge, v: 0, side: 0 };
   if (!push) { colliders.push(shut); leaf.userData.door = d; aimables.push(leaf); }   // a push door never blocks: it gets out of your way
+  else aimBlockers.push(leaf);                  // ...but you can't reach through it (it goes wherever the leaf swings)
   doors.push(d);
   return d;
 }
@@ -5996,7 +5998,7 @@ function regionTick() {
   hallDoor ??= doors.find(d => d.push && !d.alongX); cinemaDoor ??= doors.find(d => d.push && d.alongX);
   const open = d => !d || Math.abs(d.a) > 0.01;
   let nearPort = false;                          // the hall door's porthole is a window, shut or not: it counts as open while it's close and on screen
-  if (hallDoor && Math.hypot(camera.position.x - hallDoor.at, camera.position.z - hallDoor.c) < 8) {
+  if (hallDoor && Math.hypot(camera.position.x - hallDoor.at, camera.position.z - hallDoor.c) < STORE.x - BOH.x0 + 1) {   // "close": anywhere down the hall
     camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
   }
