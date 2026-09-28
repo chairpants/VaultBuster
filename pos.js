@@ -8,6 +8,7 @@
 //   rented,             the copies store.js pulled off the shelves as "out on rental"
 //   savedRental(copy),  [member #, out ms] from last visit, if this copy's rental was saved
 //   budget,             store budget from last visit (a fresh store starts with $300)
+//   savedRecords,       { member #: { incidents, status, until } } from last visit
 //   savedOwed,          { member #: late fees owed } from last visit
 //   today, clock(),     the shift's date (ms) and its clock ("HH:MM") — store.js runs its own calendar
 //   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
@@ -18,7 +19,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), setDate(date), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), incident(member, what), setStatus(member, status, days), canVisit(member), recordsAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -76,6 +77,7 @@ window.createPOS = function createPOS(api) {
   }
   customers.sort((a, b) => a.last.localeCompare(b.last) || a.first.localeCompare(b.first));
   for (const [num, owed] of Object.entries(api.savedOwed || {})) { const c = customers.find(c => c.num === +num); if (c) c.owed = owed; }
+  for (const [num, r] of Object.entries(api.savedRecords || {})) { const c = customers.find(c => c.num === +num); if (c) Object.assign(c, r); }   // incidents, bans
   const heavy = customers.filter(c => c.heavy);
   const fullName = c => `${c.last}, ${c.first}`;
   // every copy store.js pulled off the shelf is checked out to somebody —
@@ -223,8 +225,10 @@ window.createPOS = function createPOS(api) {
         ` NAME.....: ${fullName(c)}`,
         ` ADDRESS..: ${c.addr}`,
         ` PHONE....: ${c.phone}                LIFETIME RENTALS: ${c.lifetime + c.rentals.length}`,
-        ` STATUS...: ${custFees(c) ? `FEES DUE ${money(custFees(c))} - COLLECT BEFORE RENTAL` : c.rentals.length ? "ACTIVE" : "GOOD STANDING"}`,
-        ` NOTES....: ${c.notes || "-"}`, "",
+        ` STATUS...: ${c.status === "arrested" ? "*** ARRESTED - DO NOT RENT ***" : c.status === "cancelled" ? "*** MEMBERSHIP CANCELLED ***"
+          : c.status === "banned" && c.until > +TODAY ? `*** BANNED UNTIL ${fmtD(new Date(c.until))} ***` : custFees(c) ? `FEES DUE ${money(custFees(c))} - COLLECT BEFORE RENTAL` : c.rentals.length ? "ACTIVE" : "GOOD STANDING"}`,
+        ` NOTES....: ${c.notes || "-"}`,
+        ...(c.incidents || []).slice(-3).map((x, i) => ` ${i ? "         " : "INCIDENT."}: ${fmtD(new Date(x.at))} ${up(x.what)}`.slice(0, COLS)), "",
         c.rentals.length ? `  #   ${L("OUT", 9)}${L("DUE", 9)}${L("TITLE", 38)}LATE FEE` : "  NO RENTALS OUT.",
         ...c.rentals.slice(0, 9).map((r, i) => `  ${i + 1}   ${L(fmtD(r.out), 9)}${L(fmtD(r.due), 9)}${L(up(r.copy.title), 38)}${daysLate(r) ? money(lateFee(r)) : "-"}`),
       ],
@@ -412,6 +416,10 @@ window.createPOS = function createPOS(api) {
     budget: () => budget,
     owed: m => m.owed || 0,                    // late fees on a member's account
     settle(m, paid) { if (paid) budget += m.owed || 0; m.owed = 0; if (open && mode === "app") draw(); },   // charged (into the budget) or waived
+    incident(m, what) { (m.incidents ||= []).push({ at: +TODAY, what }); if (open && mode === "app") draw(); },   // on their record
+    setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
+    canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until }])),
     owedAll: () => Object.fromEntries(customers.filter(c => c.owed).map(c => [c.num, c.owed])),
     setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
