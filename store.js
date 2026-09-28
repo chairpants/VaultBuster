@@ -260,6 +260,8 @@ const catalog = window.VAULT_CATALOG || [];
 const SAVE_KEY = "vaultbuster-save";
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
+const rep = { v: SAVE?.rep ?? 50 };             // store reputation 0..100 (see repStars)
+const upg = { ...SAVE?.upg };                   // upgrades bought (see UPGRADES)
 // a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
 // [tape, ...tape.copies] (shelving is deterministic, so n holds every load).
 // id + season is unique per tape; the id alone isn't (every season of a show shares it)
@@ -311,7 +313,7 @@ const REWIND_SECS = 10;
 let rewindAc = null;
 function rewinderLoad(rw, tape) {
   Object.assign(rw, { tape, f0: windFrac(tape), t: 0, done: false });
-  rw.dur = Math.max(1, rw.f0 * REWIND_SECS);
+  rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (upg.rewinders ? 0.5 : 1);
   rw.tapeMesh.material = tape.sideMat || mat.tapeBody; rw.tapeMesh.visible = true;
   if (rw.f0 > 0) rewinderSound(rw, true); else rewinderFinish(rw, false);
 }
@@ -2244,7 +2246,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     coolerThermo = {
       temp: 36, shown: null,
       tick(dt) {                              // climbs toward room temperature while the door's open; pulls back down to 36°F (slowly) once it shuts
-        this.temp += ((coolerOpen ? 66 : 36) - this.temp) * Math.min(1, dt * (coolerOpen ? 0.02 : 0.012));
+        this.temp += ((coolerOpen ? 66 : 36) - this.temp) * Math.min(1, dt * (coolerOpen ? (upg.compressor ? 0.012 : 0.02) : (upg.compressor ? 0.03 : 0.012)));
         const t = Math.round(this.temp);
         if (t === this.shown) return;
         this.shown = t;
@@ -3892,7 +3894,7 @@ function applyLighting() {
 // you're in the store (not on the title screen). L fast-forwards an hour ----
 const SHIFT = { start: 9.75, open: 10, lastIn: 23.75, close: 24, hour: 90 };   // hours since the shift day's midnight; hour: real seconds per store hour while open (a ~21 minute shift)
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-const shiftStats = () => ({ score: 0, you: 0, dana: 0, visitors: 0, served: 0, rentals: 0, rentalTake: 0, snackTake: 0, returns: 0, walkouts: 0, stolen: 0, caught: 0, upsells: 0, feesCollected: 0, feesWaived: 0 });
+const shiftStats = () => ({ score: 0, you: 0, dana: 0, tickets: 0, refunds: 0, visitors: 0, served: 0, rentals: 0, rentalTake: 0, snackTake: 0, returns: 0, walkouts: 0, stolen: 0, caught: 0, upsells: 0, feesCollected: 0, feesWaived: 0 });
 // points for the shift. The store's score is everything; your own and Dana's are
 // the parts each of you earned (walkouts and theft hit only the store's)
 function shiftScore(n, who = null) { const s = shift.stats; s.score += n; if (who) s[who] += n; }   // who: "you" | "dana" | null
@@ -3924,6 +3926,84 @@ const shift = {
   stats: { ...shiftStats(), ...SAVE?.shift?.stats }, greet: null, report: false,
 };
 const shiftDate = () => new Date(shift.date0 + (shift.day - 1) * 864e5);
+// ---- reputation: 0..100 (1-5 stars), moved each night by how the shift went.
+// A better name brings more people in (and sells more tickets) ----
+const repStars = (v = rep.v) => Math.max(1, Math.min(5, Math.round(1 + v / 25)));
+const starStr = n => "\u2605".repeat(n) + "\u2606".repeat(5 - n);
+const repMult = () => 0.7 + rep.v / 100 * 0.6;
+// ---- upgrades, bought on the register out of the store budget ----
+const UPGRADES = [
+  { id: "cameras", name: "SECURITY CAMERAS", cost: 450, desc: "EVERY SHOPLIFTER ON TAPE; FEWER TRY" },
+  { id: "sign", name: "ANTI-THEFT SIGNAGE", cost: 60, desc: "\"SHOPLIFTERS WILL BE PROSECUTED\"" },
+  { id: "rewinders", name: "HIGH-SPEED REWINDERS", cost: 180, desc: "REWINDS IN HALF THE TIME" },
+  { id: "compressor", name: "COOLER COMPRESSOR", cost: 220, desc: "COOLER STAYS COLD, RECOVERS FASTER" },
+  { id: "dana", name: "STAFF TRAINING (DANA)", cost: 250, desc: "DANA MOVES AND RINGS UP FASTER" },
+  { id: "ad", name: "NEWSPAPER AD", cost: 120, repeat: true, desc: "+REPUTATION (ONE A DAY)" },
+];
+function upgBuy(id) {                            // -> null if bought, else why not
+  const u = UPGRADES.find(q => q.id === id); if (!u) return "NO SUCH UPGRADE.";
+  if (!u.repeat && upg[id]) return "ALREADY INSTALLED.";
+  if (id === "ad") { if (upg.adDay === shift.day) return "AN AD ALREADY RAN TODAY."; upg.adDay = shift.day; rep.v = Math.min(100, rep.v + 8); logAct("Ran an ad in the paper: the word's getting out", "good"); return null; }
+  upg[id] = true; upgVisuals(); logAct(`Installed: ${u.name.toLowerCase()}`, "good");
+  return null;
+}
+function upgVisuals() {                          // what you can see of what you've bought
+  if (upg.cameras && !upgVisuals.cams) {
+    upgVisuals.cams = true;
+    const dome = new THREE.MeshPhongMaterial({ color: 0x1a1a1e, specular: 0x666666, shininess: 60, transparent: true, opacity: 0.85 }), base = new THREE.MeshLambertMaterial({ color: 0xe8e8e8 });
+    for (const [x, z] of [[0, 3.2], [-5, 12], [5, 18], [-2, 24]]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 16), base); b.position.set(x, STORE.h - 0.02, z); scene.add(b);
+      const d = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), dome); d.position.set(x, STORE.h - 0.035, z); scene.add(d);
+      const led = glow(new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2020 }))); led.position.set(x + 0.05, STORE.h - 0.06, z); scene.add(led);
+    }
+  }
+  if (upg.sign && !upgVisuals.sign) {
+    upgVisuals.sign = true;
+    const t = textPlane("SHOPLIFTERS WILL BE PROSECUTED", 0.9, 0.16, "#fff", "#8c1c1c", "Arial Black", 60);
+    t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(-1.9, 2.3, 0.22); scene.add(t);
+  }
+}
+// ---- tonight's feature: pick a film on the register; customers buy tickets at
+// checkout; ticket holders come in at 7:45 and take their seats. It has to be
+// playing (in the theater deck or the lounge VCR, same feed) by 8:15, or it's
+// refunds all round ----
+const SHOW = { at: 20, grace: 0.25, len: 1.75, ticket: 4 };
+const show = { title: null, day: 0, sold: 0, status: "", spawned: 0 };   // status: "" | arriving | late | on | failed | done
+const filmOn = () => show.title && playing && !video.paused && titleOfCopy(playing.tape) === show.title;
+function showTick() {
+  if (!show.title || show.day !== shift.day || ["failed", "done"].includes(show.status)) return;
+  const h = shift.h, goers = () => custs.filter(k => k.moviegoer);
+  if (!show.status && h >= SHOW.at - 0.25) { show.status = "arriving"; logAct(show.sold ? `Ticket holders arriving for ${show.title.title} (${show.sold})` : `No tickets sold for ${show.title.title} tonight`); if (!show.sold) { show.status = "done"; return; } }
+  if (show.status === "arriving" && show.spawned < show.sold && h >= SHOW.at - 0.25 + show.spawned * 0.02) {   // they trickle in
+    const m = custPickMember(); if (m) { const k = custSpawn(m); k.moviegoer = true; k.returning = []; k.thief = false; show.spawned++; }
+  }
+  if (show.status === "arriving" && h >= SHOW.at) {
+    if (filmOn()) { show.status = "on"; logAct(`Showtime: ${show.title.title} is playing`, "good"); }
+    else { show.status = "late"; toast(`8:00 — ${show.title.title} should be starting! Put it in the VCR`); logAct(`It's 8 and ${show.title.title} isn't on: load it in the VCR`, "bad"); }
+  }
+  if (show.status === "late") {
+    if (filmOn()) { show.status = "on"; logAct(`${show.title.title} started late`); }
+    else if (h >= SHOW.at + SHOW.grace) {        // refunds, and a lot of unhappy people
+      show.status = "failed"; posTerm.sale(-show.sold * SHOW.ticket); shift.stats.refunds += show.sold * SHOW.ticket; shiftScore(-20 * show.sold);
+      for (const k of goers()) { posTerm.loyal(k.member, -6); k.c.setMood("angry"); k.hi = 2; if (k.state === "thWatch") k.t = 0; else custGo(k, "leave", CUST_DOOR); }
+      logAct(`${show.title.title} never started: refunded ${show.sold} ticket${show.sold > 1 ? "s" : ""}`, "bad", -show.sold * SHOW.ticket, -20 * show.sold);
+    }
+  }
+  if (show.status === "on" && h >= SHOW.at + SHOW.len) {
+    show.status = "done"; const n = goers().length; shiftScore(10 * n);
+    for (const k of goers()) { posTerm.loyal(k.member, 3); if (k.state === "thWatch") k.t = 0; }
+    logAct(`${show.title.title} let out: ${n} happy moviegoer${n === 1 ? "" : "s"}`, "good", null, 10 * n);
+  }
+}
+function showSet(title) {                        // from the register: today's 8 PM if there's time to sell tickets, else tomorrow's
+  const day = shift.h < 18 ? shift.day : shift.day + 1;
+  if (show.day === day && show.sold) return `TICKETS ALREADY SOLD FOR ${show.title.title.toUpperCase()}.`;
+  Object.assign(show, { title, day, sold: 0, status: "", spawned: 0 });
+  logAct(`Tonight's feature${day === shift.day ? "" : " (tomorrow)"}: ${title.title} at 8 PM`, "good");
+  return null;
+}
+const ticketChance = () => show.title && show.day === shift.day && !show.status && shift.h < SHOW.at - 0.3
+  ? Math.min(0.4, 0.08 + 0.04 * Math.log10(1 + (window.VAULT_META?.[show.title.id]?.[1] || 0))) * (0.8 + rep.v / 250) : 0;
 const shiftOpen = () => shift.h >= SHIFT.open && shift.h < SHIFT.lastIn;   // new customers still come in
 const afterClose = () => shift.h >= SHIFT.close;
 function fmtClock(h, secs = false) {
@@ -3979,6 +4059,7 @@ function shiftTick(dt) {
     if (crossed(18.5)) logAct(weekend ? `${d === 5 ? "Friday" : "Saturday"} night rush: it's about to get busy` : "The evening rush is starting");
     if (crossed(SHIFT.close)) toast("Midnight — closing time. Lock up and head out the front doors when you're done", true);
   }
+  showTick();
   shiftHud();
 }
 function skipHour() {                             // L: fast-forward an hour (the sky eases through it). Never past close: after that the clock's real
@@ -3987,7 +4068,7 @@ function skipHour() {                             // L: fast-forward an hour (th
 }
 let shiftHudTxt = "";
 function shiftHud() {
-  const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()} · DANA ${shift.stats.dana.toLocaleString()}`;
+  const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} ${starStr(repStars())} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()} · DANA ${shift.stats.dana.toLocaleString()}`;
   if (txt === shiftHudTxt) return; shiftHudTxt = txt;
   const [t, sub] = txt.split("|"), el = $("shiftClock");
   el.innerHTML = `${t}<div class="h">${sub}</div>`; el.classList.toggle("late", late); el.style.display = "block";
@@ -4538,7 +4619,7 @@ function rushLevel() {
   let r = h < 12 ? 0.5 : h < 14 ? 0.9 : h < 15 ? 0.7 : h < 17.5 ? 1.2 : h < 18.5 ? 0.9 : h < 21.5 ? 1.5 : h < 23 ? 0.9 : 0.5;
   if (weekend && h >= 18) r *= 1.35;
   if (d === 2) r *= 1.15;                         // new release Tuesday
-  return r;
+  return r * repMult();
 }
 const custMax = () => Math.min(6, Math.round(2 + 2 * rushLevel()));
 const custs = [], custLine = [];
@@ -4577,7 +4658,7 @@ function custSpawn(member = custPickMember()) {
   if (loyal >= 40) logAct(`${memberName(member)}, one of the regulars, came in`);
   cust.litterT = Math.random() < 0.15 ? 15 + Math.random() * 60 : Infinity;   // now and then somebody drops something
   if (messes.length >= 3) { posTerm.loyal(member, -2); if (clockT - (custSpawn.messNote || -999) > 120) { custSpawn.messNote = clockT; logAct(`Customers are noticing the mess (${messes.length} spots to clean)`, "bad"); } }
-  cust.thief = Math.random() < 0.06;              // now and then somebody means to walk out with it
+  cust.thief = Math.random() < 0.06 * (upg.cameras ? 0.6 : 1) * (upg.sign ? 0.7 : 1);   // now and then somebody means to walk out with it (less, with cameras and signs up)
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   const c = cust.c = VaultCustomers.build(who.outfit);
   c.parts.forEach(m => { m.userData.customer = cust; aimables.push(m); });
@@ -4722,6 +4803,7 @@ function custGone(cust) {
     for (const c of cust.tapes) c.lost = true;
     shift.stats.stolen += cust.tapes.length; shiftScore(-75 * cust.tapes.length);
     const what = cust.tapes.length === 1 ? cust.tapes[0].title : cust.tapes.length + " tapes";
+    if (upg.cameras) cust.known = true;          // it's all on tape
     if (cust.known) posTerm.incident(cust.member, `${cust.sneaking ? "SHOPLIFTED" : "LEFT WITHOUT PAYING FOR"} ${what}`);   // you know who it was: it goes on their account
     logAct(`${cust.known ? memberName(cust.member) : "Someone"} walked out with ${what}: stolen`, "bad", null, -75 * cust.tapes.length);
   }   // walked out with them: gone for good (order a replacement on the POS)
@@ -4943,6 +5025,7 @@ function custStep(cust, dt) {
       }
       case "boot": if (cust.t <= 0) {
         c.setMood("neutral");
+        if (cust.moviegoer) { if (!custPickTheaterSeat(cust)) { cust.moviegoer = false; custNextStop(cust); } break; }   // ticket in hand: straight in
         if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
         else if (custWant(cust)) custAskGo(cust);
         else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
@@ -4994,7 +5077,7 @@ function custStep(cust, dt) {
         p.z = cust.from.z + (s.z - cust.from.z) * k;
         cust.ry = 0;
         if (cust.t <= 0) {
-          cust.state = "thWatch"; cust.t = 40 + cust.who.rnd() * 80; cust.moodT = 4;
+          cust.state = "thWatch"; cust.t = cust.moviegoer && ["arriving", "late", "on"].includes(show.status) ? Infinity : 40 + cust.who.rnd() * 80; cust.moodT = 4;   // here for the show: till it lets out
           c.setMood(playing ? "watch" : "neutral");
         }
         break;
@@ -5300,7 +5383,7 @@ function empTick(dt) {
     if (d < 0.05) emp.path.shift();
     else if (yieldTo(emp, p, dx, dz, dt, av => empGo(emp.state, emp.spot, av))) {}
     else {
-      speed = 1.45;
+      speed = upg.dana ? 1.8 : 1.45;
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
       emp.ry = Math.atan2(dx, dz);
     }
@@ -5346,7 +5429,7 @@ function empTick(dt) {
         if (mine && Math.abs(gap) <= 0.02 && (emp.coT -= dt) <= 0) {   // one step at a time: hand out, then the step happens
           const s = coStep();
           if (emp.coReached) { emp.coReached = false; coAct(s.at); c.reachTo(null); emp.coT = 0.35; }
-          else { emp.coReached = true; c.reachTo(empCoTarget(s.at), 1, { lean: false }); emp.coT = s.at === "customer" ? 0.9 : 0.7; }
+          else { emp.coReached = true; c.reachTo(empCoTarget(s.at), 1, { lean: false }); emp.coT = (s.at === "customer" ? 0.9 : 0.7) * (upg.dana ? 0.7 : 1); }
         }
         if (co?.by === "dana" && !co.cust.c) { co = null; coHud(); drawerOpen = 0; }
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 4) { emp.alarmT = 0; silenceGateAlarm(); logAct("Dana shut off the gate alarm"); } } else emp.alarmT = 0;   // a few seconds' grace: yours if you want it
@@ -5511,7 +5594,7 @@ function setFrontLock(on) {
 // gates will tell you about it on their way out
 let co = null;                                  // { by: "player"|"dana", cust, step, tapes, total, bill, change, des }
 const money = n => "$" + n.toFixed(2);
-const coTotal = cust => cust.tapes.reduce((a, t) => a + posTerm.rentPrice(t), 0) + cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0);
+const coTotal = cust => cust.tapes.reduce((a, t) => a + posTerm.rentPrice(t), 0) + cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0) + (cust.tickets || 0) * SHOW.ticket;
 const coTapes = () => co.cust.tapes.length === 1 ? co.cust.tapes[0].title : `${co.cust.tapes.length} tapes`;
 const CO_STEPS = [
   { id: "card", at: "customer", need: () => co.cust.tapes.length, tip: () => "take their member card",
@@ -5536,7 +5619,8 @@ const CO_STEPS = [
       if (co.cust.snacks.length) posTerm.sale(co.cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0));
       const st = shift.stats; st.served++; st.rentals += co.cust.tapes.length;
       st.rentalTake += co.cust.tapes.reduce((a, t) => a + posTerm.rentPrice(t), 0); st.snackTake += co.cust.snacks.reduce((a, u) => a + snackPrice(u.userData.snack), 0);
-      co.bought = co.cust.snacks.length;           // (sold: their spots on the rack stay empty till restocked)
+      co.bought = co.cust.snacks.length;
+      if (co.cust.tickets) { const n = co.cust.tickets; posTerm.sale(n * SHOW.ticket); show.sold += n; shift.stats.tickets += n; }           // (sold: their spots on the rack stay empty till restocked)
       drawerOpen = 1; posBeep(1200); co.hand = null; printReceipt();
     } },
   { id: "tear", at: "printer", need: () => true, tip: () => printer.job?.done ? "tear off the receipt" : "wait for the receipt to print",
@@ -5558,7 +5642,7 @@ const CO_STEPS = [
         posTerm.loyal(co.cust.member, secs < 40 ? 7 : 4);
       }
       const nT = co.cust.tapes.length, nS = co.bought || 0;
-      logAct(`${co.by === "dana" ? "Dana rang up" : "Rang up"} ${memberName(co.cust.member)}: ${[nT ? `${nT} tape${nT > 1 ? "s" : ""}` : "", nS ? `${nS} snack${nS > 1 ? "s" : ""}` : "", co.fees ? "late fees" : ""].filter(Boolean).join(", ")}${co.why?.length ? ` (${co.why.join(", ")})` : ""}`,
+      logAct(`${co.by === "dana" ? "Dana rang up" : "Rang up"} ${memberName(co.cust.member)}: ${[nT ? `${nT} tape${nT > 1 ? "s" : ""}` : "", nS ? `${nS} snack${nS > 1 ? "s" : ""}` : "", co.cust.tickets ? `${co.cust.tickets} show ticket${co.cust.tickets > 1 ? "s" : ""}` : "", co.fees ? "late fees" : ""].filter(Boolean).join(", ")}${co.why?.length ? ` (${co.why.join(", ")})` : ""}`,
         co.why?.some(w => w.includes("missed")) ? "bad" : "good", co.total, co.score);
       co.cust.c.holdProp("receipt");
       co.cust.c.setMood("thanks"); co.cust.c.setPose("hold"); co.cust.state = "paid"; co.cust.t = 1.8;
@@ -5566,6 +5650,10 @@ const CO_STEPS = [
     } },
 ];
 function coStart(by, cust = custLine[0]) {
+  if (!cust.moviegoer && cust.tickets == null) {  // "two for tonight's show while you're at it"
+    const want = Math.random() < ticketChance() ? (Math.random() < 0.4 ? 2 : 1) : 0;
+    cust.tickets = Math.max(0, Math.min(want, Math.min(10, theaterSeats.length) - show.sold));
+  }
   const total = coTotal(cust), bills = [1, 5, 10, 20, 50].filter(b => b >= total);
   const bill = Math.random() < 0.25 ? total : (bills[0] ?? 50);          // exact change now and then
   co = { by, cust, i: 0, total, bill, change: +(bill - total).toFixed(2), hand: null, start: clockT, pts: 0, fees: 0 };
@@ -5619,6 +5707,7 @@ function printReceipt() {
   for (const t of co.cust.tapes) lr(t.title.toUpperCase(), money(posTerm.rentPrice(t)));
   for (const u of co.cust.snacks) lr(u.userData.snack.name.toUpperCase(), money(snackPrice(u.userData.snack)));
   if (co.fees) lr("LATE FEES", money(co.fees));
+  if (co.cust.tickets) lr(`SHOW TIX x${co.cust.tickets}`, money(co.cust.tickets * SHOW.ticket));
   y += 4; g.fillRect(6, y, W - 12, 1); y += 6;
   lr("TOTAL", money(co.total)); lr("CASH", money(co.bill)); lr("CHANGE", money(co.change));
   if (co.cust.tapes.length) {
@@ -6578,6 +6667,12 @@ const posTerm = window.createPOS({
   supplies: () => stockProducts().map(e => ({ name: e.name, drink: e.drink, spots: e.units.length, out: e.units.filter(u => u.visible).length, back: backstock[e.name] || 0,
     ordered: deliveries.filter(d => d.name === e.name).reduce((a, d) => a + d.qty, 0) + boxes.filter(b => b.name === e.name).reduce((a, b) => a + b.qty, 0), caseCost: caseCost(e), caseQty: CASE_QTY })),
   order: (name, cases) => stockOrder(name, cases),
+  upgrades: () => UPGRADES.map(u => ({ ...u, owned: !u.repeat && !!upg[u.id], ranToday: u.repeat && upg.adDay === shift.day })), buyUpgrade: upgBuy,
+  reputation: () => ({ stars: repStars(), v: rep.v }),
+  feature: () => show.title && { title: show.title.title, day: show.day === shift.day ? "TONIGHT" : "TOMORROW", sold: show.sold, status: show.status },
+  featureChoices: () => catalog.filter(t => t.seasons.length === 1 && t.seasons[0].episodes.length === 1 && onShelfCopy(t))
+    .sort((a, b) => (window.VAULT_META?.[b.id]?.[1] || 0) - (window.VAULT_META?.[a.id]?.[1] || 0)).slice(0, 15),
+  setFeature: t => showSet(t),
   returnBin: () => returnBin, held: () => held, playing: () => playing,
   alarm: () => gateAlarm.on, silenceAlarm: silenceGateAlarm, resetSave: () => resetSave(),
   gatesArmed: () => gateAlarm.armed, armGates,
@@ -6609,6 +6704,10 @@ function clockOut() {
   const s = shift.stats, d = shiftDate(), W = 34, money = n => "$" + n.toFixed(2);
   const row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v;
   const tried = s.served + s.walkouts, score = (tried ? 100 * s.served / tried : 100) - 15 * s.stolen;
+  const gradeOf = sc => sc >= 93 ? "A" : sc >= 85 ? "B" : sc >= 75 ? "C" : sc >= 60 ? "D" : "F";
+  const repD = !s.visitors ? 0 : Math.max(-10, Math.min(8, { A: 5, B: 3, C: 1, D: -2, F: -5 }[gradeOf(score)] - 2 * s.stolen - Math.floor(chk.messes / 2) - (s.refunds ? 3 : 0) + (show.status === "done" && show.sold ? 2 : 0)));
+  const repWas = repStars(); rep.v = Math.max(0, Math.min(100, rep.v + repD));
+  if (repD) logAct(`Reputation ${repD > 0 ? "up" : "down"}: ${starStr(repStars())}${repStars() !== repWas ? (repStars() > repWas ? " (a star up!)" : " (a star down)") : ""}`, repD > 0 ? "good" : "bad");
   const grade = !s.visitors ? "-" : score >= 93 ? "A" : score >= 85 ? "B" : score >= 75 ? "C" : score >= 60 ? "D" : "F";
   const line = "-".repeat(W), date = `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`;
   $("shiftSlip").textContent = [
@@ -6617,11 +6716,12 @@ function clockOut() {
     row("CUSTOMERS IN", s.visitors), row("RUNG UP", s.served), row("WALKED OUT", s.walkouts),
     row("TAPES RENTED", s.rentals), row("RETURNS CHECKED IN", s.returns), row("SNACK UPSELLS", s.upsells),
     row("SHOPLIFTERS CAUGHT", s.caught), row("TAPES STOLEN", s.stolen), line,
-    row("RENTALS", money(s.rentalTake)), row("SNACKS", money(s.snackTake)), row("LATE FEES", money(s.feesCollected)),
-    row("FEES WAIVED", money(s.feesWaived)), row("TOTAL TAKE", money(s.rentalTake + s.snackTake + s.feesCollected)),
+    row("RENTALS", money(s.rentalTake)), row("SNACKS", money(s.snackTake)), row("SHOW TICKETS", money(s.tickets * SHOW.ticket - s.refunds)), row("LATE FEES", money(s.feesCollected)),
+    row("FEES WAIVED", money(s.feesWaived)), row("TOTAL TAKE", money(s.rentalTake + s.snackTake + s.feesCollected + s.tickets * SHOW.ticket - s.refunds)),
     row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
     row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  EMPTY RACK SPOTS", chk.empty),
     row("  POINTS", chkPts.toLocaleString()), line, "",
+    row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`),
     row("STORE SCORE", s.score.toLocaleString()), row("  YOURS", s.you.toLocaleString()), row("  DANA'S", s.dana.toLocaleString()),
     row("  LOST (WALKOUTS, THEFT)", (s.score - s.you - s.dana).toLocaleString()), "", `SHIFT GRADE:  ${grade}`.padStart(22), "", "THANK YOU - BE KIND, REWIND".padStart(30),
   ].join("\n");
@@ -6664,6 +6764,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    rep: rep.v, upg, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
@@ -6722,6 +6823,8 @@ function loadState(S) {
       if (st.air != null) { coolerThermo.temp = st.air; coolerThermo.tick(0); }
       for (const [i, t] of st.warm || []) if (units[i]) units[i].userData.temp = t;
     }
+    if (S.show) { const t = copyByKey(S.show.title); if (t) Object.assign(show, S.show, { title: t }); }
+    upgVisuals();
     for (const [k, at] of S.strays || []) { const c = copyByKey(k), a = copyByKey(at); if (c && a?.pos) { setOnShelf(c, false); misshelve(c, null, a); } }
     for (const [kind, x, z, y] of S.messes || []) if (MESS[kind]) messAdd(kind, x, z, y);
     if (inv.length) invSelect(S.invSel >= 0 ? S.invSel : S.invEmpty >= 0 ? S.invEmpty : inv.length - 1);
@@ -6959,5 +7062,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };

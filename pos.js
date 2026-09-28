@@ -323,6 +323,26 @@ window.createPOS = function createPOS(api) {
           } }),
         "NO LOST COPIES ON FILE."));
     }],
+    ["T", "THEATER - TONIGHT'S FEATURE (8 PM)", () => {
+      const f = api.feature?.(), films = api.featureChoices?.() || [];
+      go(listScreen(`THEATER - ${f ? `${f.day}: ${up(f.title)} (${f.sold} SOLD)` : "NO FEATURE SET"}`.slice(0, COLS - 2), `      ${L("FILM (MOST POPULAR ON THE SHELF)", 50)} YEAR`, films,
+        (t, n) => ` ${R(n, 3)}  ${L(up(t.title), 50)} ${yearOf(t)}`,
+        t => { const err = api.setFeature(t); back(); msg = err || `FEATURE SET: ${up(t.title)} AT 8 PM. TICKETS $4.00 AT THE REGISTER.`; draw(); },
+        "NO FILMS ON THE SHELF."));
+    }],
+    ["U", "UPGRADES - STORE IMPROVEMENTS", () => {
+      const items = api.upgrades?.() || [];
+      go(listScreen(`UPGRADES - BUDGET ${money(budget)}`, `      ${L("UPGRADE", 23)} ${L("", 37)}   COST`, items,
+        (u, n) => ` ${R(n, 3)}  ${L(u.owned ? `${u.name} *` : u.name, 23)} ${L(u.owned ? "INSTALLED" : u.ranToday ? "RAN TODAY" : u.desc, 37)} ${R(money(u.cost), 7)}`,
+        u => go({ title: "PURCHASE UPGRADE", prompt: "Y TO BUY, ESC TO CANCEL", lines: () => ["", ` UPGRADE..: ${u.name}`, ` WHAT.....: ${u.desc}`, ` COST.....: ${money(u.cost)}`, ` BUDGET...: ${money(budget)}`],
+          submit(v) {
+            if (v !== "Y") { msg = "TYPE Y TO BUY."; return draw(); }
+            if (budget < u.cost) { msg = "INSUFFICIENT BUDGET."; return draw(); }
+            const err = api.buyUpgrade(u.id); if (err) { msg = err; return draw(); }
+            budget -= u.cost; back(); back(); msg = `PURCHASED: ${u.name}. BUDGET NOW ${money(budget)}.`; draw();
+          } }),
+        "NO UPGRADES AVAILABLE."));
+    }],
     ["O", "SUPPLIES - ORDER SNACKS & DRINKS", () => {
       const items = api.supplies?.() || [];
       go(listScreen(`SUPPLIES - BUDGET ${money(budget)}`, `      ${L("ITEM", 26)} ${L("TYPE", 6)} RACK   STOCK  ON ORDER   CASE`, items,
@@ -350,9 +370,10 @@ window.createPOS = function createPOS(api) {
   const menuItems = () => MENU.filter(m => !m[3] || m[3]());
   const mainMenu = {
     title: "MAIN MENU", prompt: "SELECTION OR COMMAND",
-    pick: { cur: 0, count: () => menuItems().length, value: i => menuItems()[i][0], line: i => 1 + i },
-    lines: () => ["", ...menuItems().map(([k, label]) => `      ${k}.  ${label}`), "",
-      `      ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS ON FILE.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`],
+    pick: { cur: 0, count: () => menuItems().length, value: i => menuItems()[i][0], line: i => i },
+    lines: () => [...menuItems().map(([k, label]) => `      ${k}.  ${label}`),   // (no spacer lines: 16 items and the status lines just fit)
+      `      ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS ON FILE.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`,
+      api.reputation ? `      STORE RATING: ${"*".repeat(api.reputation().stars).padEnd(5, ".")}${api.feature?.() ? `   TONIGHT: ${up(api.feature().title).slice(0, 30)} (${api.feature().sold} SOLD)` : ""}` : ""],
     submit(v) {
       const [cmd, ...rest] = v.split(/\s+/), arg = rest.join(" ");
       const m = menuItems().find(([k]) => k === v);
