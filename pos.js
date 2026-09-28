@@ -8,6 +8,8 @@
 //   rented,             the copies store.js pulled off the shelves as "out on rental"
 //   savedRental(copy),  [member #, out ms] from last visit, if this copy's rental was saved
 //   budget,             store budget from last visit (a fresh store starts with $300)
+//   savedOwed,          { member #: late fees owed } from last visit
+//   today, clock(),     the shift's date (ms) and its clock ("HH:MM") — store.js runs its own calendar
 //   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
 //   returnBin(), held(), playing(),   live store state, read on demand
 //   alarm(), silenceAlarm(),          security gate alarm: is it going off / shut it up
@@ -16,7 +18,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -33,9 +35,9 @@ window.createPOS = function createPOS(api) {
 
   // ---- formatting ----
   const DAY = 864e5;
-  const TODAY = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d; })();   // real date: the shelves hold titles into the 2000s
+  let TODAY = (() => { const d = api.today ? new Date(api.today) : new Date(); d.setHours(12, 0, 0, 0); return d; })();   // the shift's date (store.js): starts from the real one — the shelves hold titles into the 2000s
   const fmtD = d => `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`;
-  const clock = () => { const n = new Date(); return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`; };
+  const clock = () => { if (api.clock) return api.clock(); const n = new Date(); return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`; };
   const money = n => "$" + n.toFixed(2);
   const L = (s, n) => (String(s) + " ".repeat(n)).slice(0, n);
   const R = (s, n) => (" ".repeat(n) + String(s)).slice(-n);
@@ -73,6 +75,7 @@ window.createPOS = function createPOS(api) {
     });
   }
   customers.sort((a, b) => a.last.localeCompare(b.last) || a.first.localeCompare(b.first));
+  for (const [num, owed] of Object.entries(api.savedOwed || {})) { const c = customers.find(c => c.num === +num); if (c) c.owed = owed; }
   const heavy = customers.filter(c => c.heavy);
   const fullName = c => `${c.last}, ${c.first}`;
   // every copy store.js pulled off the shelf is checked out to somebody —
@@ -86,7 +89,7 @@ window.createPOS = function createPOS(api) {
   });
   const daysLate = r => Math.max(0, Math.round((TODAY - r.due) / DAY));
   const lateFee = r => daysLate(r) * priceOf(r.copy).late;
-  const custFees = c => c.rentals.reduce((a, r) => a + lateFee(r), 0);
+  const custFees = c => (c.owed || 0) + c.rentals.reduce((a, r) => a + lateFee(r), 0);   // on the account, plus what the late ones out now are running up
   let budget = api.budget ?? 300;
   const replaceCost = t => t.newRelease ? 64.95 : 24.95;   // studio pricing: new releases come in at rental-market prices
   const copyStatus = c => c.lost ? "LOST - STOLEN" : c === api.held() ? "IN HAND (STAFF)" : api.returnBin().includes(c) ? "IN RETURNS BIN"
@@ -402,16 +405,21 @@ window.createPOS = function createPOS(api) {
     members: customers,
     dueIn: r => Math.round((r.due - TODAY) / DAY),   // days until a rental's due (negative = late)
     checkOut(copy, cust) {                       // a walk-in rented this copy: on their account, and the money in the budget
-      const p = priceOf(copy), out = new Date(), r = { copy, cust, out, due: new Date(+out + p.nights * DAY) };
+      const p = priceOf(copy), out = new Date(TODAY), r = { copy, cust, out, due: new Date(+out + p.nights * DAY) };
       copy.rental = r; cust.rentals.push(r); rentals.push(r); budget += p.rate;
       if (open && mode === "app") draw();
     },
     budget: () => budget,
+    owed: m => m.owed || 0,                    // late fees on a member's account
+    settle(m, paid) { if (paid) budget += m.owed || 0; m.owed = 0; if (open && mode === "app") draw(); },   // charged (into the budget) or waived
+    owedAll: () => Object.fromEntries(customers.filter(c => c.owed).map(c => [c.num, c.owed])),
+    setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
     sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     checkIn(copy) {                              // a member dropped this copy back off: close out the rental
       const r = copy.rental; if (!r) return;
+      const fee = lateFee(r); if (fee) r.cust.owed = +((r.cust.owed || 0) + fee).toFixed(2);   // back late: the fee goes on their account, settled at their next checkout
       r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); copy.rental = null;   // off their account and out of the reports (null, not delete: an extra copy would fall back to the first copy's rental)
       if (open && mode === "app") draw();
     },
