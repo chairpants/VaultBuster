@@ -19,7 +19,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), incident(member, what), setStatus(member, status, days), canVisit(member), recordsAll(), setDate(date), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 25;
   // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
@@ -227,6 +227,7 @@ window.createPOS = function createPOS(api) {
         ` PHONE....: ${c.phone}                LIFETIME RENTALS: ${c.lifetime + c.rentals.length}`,
         ` STATUS...: ${c.status === "arrested" ? "*** ARRESTED - DO NOT RENT ***" : c.status === "cancelled" ? "*** MEMBERSHIP CANCELLED ***"
           : c.status === "banned" && c.until > +TODAY ? `*** BANNED UNTIL ${fmtD(new Date(c.until))} ***` : custFees(c) ? `FEES DUE ${money(custFees(c))} - COLLECT BEFORE RENTAL` : c.rentals.length ? "ACTIVE" : "GOOD STANDING"}`,
+        ` LOYALTY..: ${"*".repeat(Math.round(((c.loyalty || 0) + 100) / 40)).padEnd(5, ".")}  ${(c.loyalty || 0) >= 40 ? "REGULAR" : (c.loyalty || 0) <= -40 ? "UNHAPPY" : ""}${c.likes ? `      LIKES: ${up(c.likes)}` : ""}`,
         ` NOTES....: ${c.notes || "-"}`,
         ...(c.incidents || []).slice(-3).map((x, i) => ` ${i ? "         " : "INCIDENT."}: ${fmtD(new Date(x.at))} ${up(x.what)}`.slice(0, COLS)), "",
         c.rentals.length ? `  #   ${L("OUT", 9)}${L("DUE", 9)}${L("TITLE", 38)}LATE FEE` : "  NO RENTALS OUT.",
@@ -419,7 +420,8 @@ window.createPOS = function createPOS(api) {
     incident(m, what) { (m.incidents ||= []).push({ at: +TODAY, what }); if (open && mode === "app") draw(); },   // on their record
     setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
-    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until }])),
+    loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty }])),
     owedAll: () => Object.fromEntries(customers.filter(c => c.owed).map(c => [c.num, c.owed])),
     setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total

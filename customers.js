@@ -15,7 +15,7 @@
 //     group,              origin at the floor between the feet, facing +z
 //     screen,             the face mesh (store.js marks it to glow)
 //     parts,              every mesh, for aiming at
-//     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks shifty off on
+//     setMood(name),      neutral browse happy love meh wait impatient angry alarm thanks shifty ask off on
 //     setPose(name, opts), walk idle reach hold wait sit crouch; sit takes { hipY, tuck }:
 //                         hip height (couch: 0.5) and extra knee bend to pull the feet back (a stool's footring)
 //     lookAt(yaw|null),   turn the head relative to the body
@@ -234,6 +234,7 @@ window.VaultCustomers = (() => {
         line(42, 54, 68, 54); line(92, 54, 118, 54); line(70, 92, 90, 92);
         const k = (mt * 0.5) % 1; g.globalAlpha = 1 - k; text("z", 30 - k * 14, 22 + k * 10); g.globalAlpha = 1; break;
       }
+      case "ask": eyes(0, -6); line(68, 92, 92, 92); { const b = Math.sin(t * 4) * 2; text("?", 30 + b, 30); } break;   // hopeful: looking up, a bobbing question mark
       case "shifty": eyes(Math.sin(t * 3.1) > 0 ? 16 : -16, 2); line(70, 92, 90, 90); break;   // eyes darting side to side, lips pressed
       case "thanks": line(40, 52, 52, 40, 64, 52); line(96, 52, 108, 40, 120, 52); text("THANK YOU", 96, 17); break;
       default: eyes(); line(66, 90, 94, 90);            // neutral
