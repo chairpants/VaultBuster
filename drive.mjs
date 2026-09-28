@@ -10,10 +10,14 @@ page.on("console", m => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", e => errors.push(String(e)));
 
 await page.goto("http://localhost:8123/");
-await page.waitForFunction(() => document.getElementById("enterHint").textContent.includes("CLICK"), null, { timeout: 30000 });
+await page.waitForFunction(() => !document.getElementById("mainMenu").hidden, null, { timeout: 30000 });
+if (await page.isHidden("#mmContinue")) {                // no save yet: new sandbox game (the page reloads into it)
+  await page.click("#mmNew"); await page.click('button[data-mode="sandbox"]');
+  await page.waitForFunction(() => !document.getElementById("mainMenu").hidden, null, { timeout: 30000 });
+}
 await page.screenshot({ path: "shot-1-title.png" });
 
-await page.click("#titleScreen");                       // enter -> pointer lock
+await page.click("#mmContinue");                        // enter -> pointer lock
 await page.waitForTimeout(1500);
 await page.screenshot({ path: "shot-2-lobby.png" });
 

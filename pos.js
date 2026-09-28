@@ -94,7 +94,7 @@ window.createPOS = function createPOS(api) {
   const custFees = c => (c.owed || 0) + c.rentals.reduce((a, r) => a + lateFee(r), 0);   // on the account, plus what the late ones out now are running up
   let budget = api.budget ?? 300;
   const replaceCost = t => t.newRelease ? 64.95 : 24.95;   // studio pricing: new releases come in at rental-market prices
-  const copyStatus = c => c.lost ? "LOST - STOLEN" : c === api.held() ? "IN HAND (STAFF)" : api.returnBin().includes(c) ? "IN RETURNS BIN"
+  const copyStatus = c => c.libLocked ? "NOT CARRIED (LIBRARY UPGRADE)" : c.lost ? "LOST - STOLEN" : c === api.held() ? "IN HAND (STAFF)" : api.returnBin().includes(c) ? "IN RETURNS BIN"
     : api.playing()?.tape === c ? "IN LOUNGE VCR" : c.rental ? `OUT #${c.rental.cust.num} DUE ${fmtD(c.rental.due)}${daysLate(c.rental) ? ` LATE ${daysLate(c.rental)}D` : ""}`
     : c.offShelf ? "UNACCOUNTED" : "ON SHELF";
   const copyIn = t => copiesOf(t).filter(c => !c.offShelf).length;
@@ -329,7 +329,7 @@ window.createPOS = function createPOS(api) {
         (t, n) => ` ${R(n, 3)}  ${L(up(t.title), 50)} ${yearOf(t)}`,
         t => { const err = api.setFeature(t); back(); msg = err || `FEATURE SET: ${up(t.title)} AT 8 PM. TICKETS $4.00 AT THE REGISTER.`; draw(); },
         "NO FILMS ON THE SHELF."));
-    }],
+    }, () => api.theaterOpen?.() !== false],
     ["U", "UPGRADES - STORE IMPROVEMENTS", () => {
       const items = api.upgrades?.() || [];
       go(listScreen(`UPGRADES - BUDGET ${money(budget)}`, `      ${L("UPGRADE", 23)} ${L("", 37)}   COST`, items,
@@ -464,6 +464,10 @@ window.createPOS = function createPOS(api) {
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
     sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
+    cancel(copy) {                               // void a rental outright (no fees): the store never had it to rent
+      const r = copy.rental; if (!r) return;
+      r.cust.rentals.splice(r.cust.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); copy.rental = null;
+    },
     checkIn(copy) {                              // a member dropped this copy back off: close out the rental
       const r = copy.rental; if (!r) return;
       const fee = lateFee(r); if (fee) r.cust.owed = +((r.cust.owed || 0) + fee).toFixed(2);   // back late: the fee goes on their account, settled at their next checkout
