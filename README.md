@@ -34,6 +34,8 @@ It's a Friday night and the store is yours. Work the counter, run the register, 
 - **Almost everything is interactive.** Pick things up, carry them around, restock, eat the snacks. Most of it is yours to find.
 - **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
 - **Real light switches:** the store is wired in zones, and the back rooms have their own. Daylight comes in through the front windows.
+- **Work the counter well:** checkouts score points for speed and getting every step right. Late fees owed get charged or waived at the register, a snack can be upsold, and the receipt printer prints a slip you tear off and hand over. Watch for shoplifters: a customer with darting eyes heading for the door has something under their jacket. Stop them before the gates.
+- **A shift on the clock:** the store's open 10 AM to midnight, about 21 minutes of play, and the sky outside slides from morning through golden hour and sunset into night. At midnight the clock slows to real time, and the day ends only when you lock up and walk out the front doors. Each shift ends with a printed slip and a grade.
 - **The store remembers.** Clock out, come back, and everything is where you left it.
 
 ---
@@ -70,7 +72,8 @@ Neither server has any dependencies.
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
 | **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down. On the stool behind the counter, each tap spins you (tap fast to spin harder) and WASD gets you up; hold E on it to carry it somewhere else |
-| **L** | Cycle the time of day outside: day, dusk, night, dawn. The store lights are real switches on the walls: E flips one, and holding E on the panel by the register turns the whole panel on or off |
+| **Q** | At the counter: offer the customer a snack (they'll go grab it and come back), or waive their late fees |
+| **L** | Skip ahead an hour (until close). The store lights are real switches on the walls: E flips one, and holding E on the panel by the register turns the whole panel on or off |
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
 | **1–9** | Pick an inventory slot (carry up to 9 items; the bar appears once you hold 2+) |
 | **H** | Hide the HUD |
