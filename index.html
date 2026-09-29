@@ -200,6 +200,7 @@
       <b>E / Q</b><span>interact</span>         <b>1–9 / WHEEL</b><span>switch items</span>
       <b>SHIFT</b><span>hustle</span>       <b>L</b><span>skip an hour</span>
       <b>J</b><span>the log</span>           <b>H</b><span>hide the HUD</span>
+      <b>M</b><span>store sounds</span>
     </div>
     <div class="more">Most things do something. Poke around. &nbsp;·&nbsp; <b>ESC</b> menu</div>
   </div>
@@ -248,6 +249,7 @@
 <script src="customers.js"></script>  <!-- window.VaultCustomers: TV-head customers, built from store.js -->
 <script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store.js -->
 <script src="pos.js"></script>     <!-- window.createPOS(); the register's terminal, created from store.js -->
+<script src="ambience.js"></script>  <!-- window.VaultAmbience: the store's sound (hum, room tone, traffic, chime, footsteps), modelled not recorded -->
 <script type="module">
   // file:// can't load local files as ES modules, so: import three from the CDN
   // here (https CORS is fine), expose the globals, then load store.js as a
