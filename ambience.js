@@ -204,12 +204,12 @@ window.VaultAmbience = (() => {
     if (!ac || muted || fade === 0) return;
     const t0 = ac.currentTime + 0.01;
     if (kind === "wood") {
-      const out = spot(x, y, z, action === "open" ? 0.4 : 0.22);   // (a latch alone is small: give it some presence)
+      const out = spot(x, y, z, action === "open" ? 0.8 : 0.6);   // (a latch alone is small: give it some presence)
       if (action === "open") { latch(out, t0); if (Math.random() < 0.55) creak(out, t0 + 0.08, 0.35 + Math.random() * 0.4); }
       else if (action === "close") { panel(out, t0, 1); latch(out, t0 + 0.018, 1.1); }
       else if (action === "rattle") for (let i = 0; i < 5; i++) { const t = t0 + i * 0.06 + Math.random() * 0.02; latch(out, t, 0.6); panel(out, t, 0.12, 1.3); }
     } else if (kind === "push") {
-      const out = spot(x, y, z, 0.16);
+      const out = spot(x, y, z, 0.5);
       if (action === "open") { panel(out, t0, 0.25, 1.8); if (Math.random() < 0.3) creak(out, t0 + 0.05, 0.25); }   // a hand on the push plate (and now and then the spring hinge)
       else if (action === "settle") panel(out, t0, 0.3, 1.2);
     } else if (kind === "cooler") {
@@ -233,7 +233,7 @@ window.VaultAmbience = (() => {
       swings.set(key, w = { bp, g });
     }
     const k = Math.min(1, speed / 3), t = ac.currentTime;
-    w.g.gain.setTargetAtTime(0.09 * k * k, t, 0.05); w.bp.frequency.setTargetAtTime(350 + 900 * k, t, 0.05);
+    w.g.gain.setTargetAtTime(0.2 * k * k, t, 0.05); w.bp.frequency.setTargetAtTime(350 + 900 * k, t, 0.05);
   }
   let comp = null;
   function compressor(x, y, z, on) {                // the cooler's compressor and condenser fan
