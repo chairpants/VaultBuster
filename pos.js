@@ -202,13 +202,14 @@ window.createPOS = function createPOS(api) {
     return { title, prompt: label, lines: () => ["", ...help.map(h => " " + h)], submit(v) { if (v) onValue(v); else { msg = "ENTRY REQUIRED."; draw(); } } };
   }
 
-  const titleRow = (t, n) => ` ${R(n, 3)}  ${L(up(t.title), 36)} ${L(up(t.category), 20)} ${L(yearOf(t), 4)} ${R(copiesOf(t).length, 3)} ${R(copyIn(t), 3)}`;
+  const tName = t => /^Season (\d+)/.test(t.seasons?.[0]?.label || "") ? `${t.title} S${t.seasons[0].label.slice(7)}` : t.title;   // which tape of a show
+  const titleRow = (t, n) => ` ${R(n, 3)}  ${L(up(tName(t)), 36)} ${L(up(t.category), 20)} ${L(yearOf(t), 4)} ${R(copiesOf(t).length, 3)} ${R(copyIn(t), 3)}`;
   const titleHead = `      ${L("TITLE", 36)} ${L("SECTION", 20)} YEAR CPY  IN`;
   function titleDetail(t) {
     const p = priceOf(t), eps = t.seasons.reduce((a, s) => a + s.episodes.length, 0);
     const cs = copiesOf(t);
     go({
-      title: `TITLE INQUIRY - ${up(t.title)}`.slice(0, COLS - 2), prompt: api.requests?.(t).length ? "COPY # FOR RENTER, A FOR ALERT, ESC" : "COPY # FOR RENTER, ESC",
+      title: `TITLE INQUIRY - ${up(tName(t))}`.slice(0, COLS - 2), prompt: api.requests?.(t).length ? "COPY # FOR RENTER, A FOR ALERT, ESC" : "COPY # FOR RENTER, ESC",
       lines: () => [
         ` TITLE....: ${up(t.title)}`.slice(0, COLS),
         ` SECTION..: ${up(t.category)}${isTV(t) ? `        FORMAT: TV SERIES, ${t.seasons.length} VOL / ${eps} EP` : "        FORMAT: FEATURE"}`,
