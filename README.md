@@ -83,6 +83,7 @@ Neither server has any dependencies.
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
 | **1–9** | Pick an inventory slot (carry up to 9 items; the bar appears once you hold 2+) |
 | **H** | Hide the HUD |
+| **M** | Store sounds on/off (fluorescent hum, air, traffic outside, the door chime, footsteps, doors, the cooler) |
 | **J** | Show or hide the log (bottom left) · **PgUp / PgDn** scroll it |
 | **1–5** | When you've caught a shoplifter: ban a week / a month, cancel their membership, call the police, or let them off with a warning |
 | **F** | Fullscreen |
@@ -99,6 +100,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `store.js` | The whole game: the building, shelving and packing, the lounge, lighting, the exterior, and the TVs |
 | `couch.js` | The procedurally built parlor sofa |
 | `pos.js` | The register's DOS-style POS terminal |
+| `ambience.js` | The store's ambient sound, modelled from the physics of each source rather than recorded: ballast hum, room tone, Doppler-shifted traffic through the glass, the entry chime, footsteps, latches and hinges, swing doors, the cooler's door and compressor |
 | `monstervision.js` | Splits the single MonsterVision broadcast tape into one tape per film, with each airing mapped to its real title and year |
 | `mv-covers.js` | Generated TMDB posters for the MonsterVision films (kept out of `covers.js`, which is near GitHub's 50 MB warning) |
 | `catalog.js` | Generated tape catalog (`window.VAULT_CATALOG`) |
