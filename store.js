@@ -4334,6 +4334,7 @@ addEventListener("keydown", e => {
   if (e.code === "PageUp" || e.code === "PageDown") { e.preventDefault(); logScroll(e.code === "PageUp" ? -1 : 1); }        // at the counter: waive fees / offer a snack
   if (e.code === "KeyL" && !e.repeat) skipHour();   // the store lights are real switches; L fast-forwards the clock
   if (e.code === "KeyH") document.body.classList.toggle("nohud");
+  if (e.code === "KeyM" && !e.repeat && window.VaultAmbience) { const m = !VaultAmbience.muted(); VaultAmbience.setMuted(m); toast(m ? "Store sounds off (M)" : "Store sounds on (M)", true); }
   if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
 addEventListener("keyup", e => {
@@ -4388,9 +4389,13 @@ function move(dt) {
   const crouched = keys.has("KeyC");
   const spd = sp * (crouched ? 0.55 : 1);
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
+  const x0 = player.x, z0 = player.z;
   if (!blocked(player.x + dx, player.z)) player.x += dx;
   if (!blocked(player.x, player.z + dz)) player.z += dz;
+  if ((playerStepD += Math.hypot(player.x - x0, player.z - z0)) > (sp > 4 ? 0.95 : 0.72)) { playerStepD = 0; ambStep(player.x, player.z, crouched ? 0.35 : 0.6); }   // your own, quieter (you're wearing sneakers)
 }
+let playerStepD = 0;
+const ambStep = (x, z, w) => window.VaultAmbience?.step(x, z, z < 4.35 || (z > STORE.z && x > BOH.x0 && z < BOH.z1), w);   // tile at the front and in back of house; carpet elsewhere
 
 // ---------------- picking / inspecting ----------------
 const raycaster = new THREE.Raycaster();
@@ -4440,21 +4445,26 @@ function pushDoorTick(d, dt) {
     if (Math.abs(along) < DOOR_W / 2 + 0.2 && Math.abs(across) < 0.8 && (near === null || Math.abs(across) < Math.abs(near))) near = across;
   }
   if (near === null) d.side = 0;
-  else if (!d.side) d.side = -Math.sign(near) || 1;   // opens away from them; holds that way until the doorway's clear
+  else if (!d.side) { d.side = -Math.sign(near) || 1; if (Math.abs(d.a) < 0.15) doorSnd(d, "push", "open"); }   // opens away from them; holds that way until the doorway's clear
   const target = d.side ? Math.PI / 2 * 0.95 * d.hinge * (d.alongX ? d.side : -d.side) : 0;
   d.v += ((d.side ? 90 : 30) * (target - d.a) - (d.side ? 16 : 2.2) * d.v) * dt;   // pushed: quick and firm; let go: a loose spring
   d.a += d.v * dt;
-  if (!d.side && Math.abs(d.a) < 0.002 && Math.abs(d.v) < 0.01) { d.a = 0; d.v = 0; }
+  if (Math.abs(d.v) > 0.4) d.moving = true;
+  if (!d.side && Math.abs(d.a) < 0.002 && Math.abs(d.v) < 0.01) { d.a = 0; d.v = 0; if (d.moving) { d.moving = false; doorSnd(d, "push", "settle"); } }
+  window.VaultAmbience?.swing(d, ...doorAt(d), Math.abs(d.v));
   d.pivot.rotation.y = d.base + d.a;
 }
+const doorAt = d => [(d.shut.x0 + d.shut.x1) / 2, 1.05, (d.shut.z0 + d.shut.z1) / 2];
+const doorSnd = (d, kind, action) => window.VaultAmbience?.door(kind, action, ...doorAt(d));
 function toggleDoor(d) {
   if (d.push) return;                        // push doors aren't opened, they're walked through
-  if (d.locked) { d.rattle = 0.35; return; }   // just jiggles in its frame
+  if (d.locked) { d.rattle = 0.35; doorSnd(d, "wood", "rattle"); return; }   // just jiggles in its frame
   const next = d.open ? d.shut : d.openBox;
   if (playerIn(next)) return;                // you're standing where it would swing to
   colliders.splice(colliders.indexOf(d.open ? d.openBox : d.shut), 1);
   colliders.push(next);
   d.open = !d.open;
+  if (d.open) doorSnd(d, "wood", "open"); else d.closing = true;   // (the thump comes when it meets the frame)
 }
 // ---- carrying the standee: E lifts it off the floor and it rides ~1.3 m in
 // front of you, turned to face you (walk around it to choose its angle). E sets
@@ -4704,6 +4714,7 @@ function custSpawn(member = custPickMember()) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
   custArrivals.lastMember = member; shift.stats.visitors++;
+  window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2);   // the entry chime
   const loyal = member.loyalty || 0;
   who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
   member.likes = who.persona.taste.name;          // (for the POS: now somebody's noticed)
@@ -5064,6 +5075,7 @@ function custStep(cust, dt) {
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
       p.y = floorHeightAt(p.x, p.z);
       cust.ry = Math.atan2(dx, dz);
+      if ((cust.stepD = (cust.stepD || 0) + step) > 0.7) { cust.stepD = 0; ambStep(p.x, p.z, 1); }   // footsteps
       // open any unlocked closed door right in front of them
       for (const door of doors) if (!door.open && !door.locked && !door.push) {
         const dcx = (door.shut.x0 + door.shut.x1) / 2, dcz = (door.shut.z0 + door.shut.z1) / 2;
@@ -5240,7 +5252,7 @@ function custStep(cust, dt) {
       case "angry": if (cust.t <= 0) { shift.stats.walkouts++; shiftScore(-100); posTerm.loyal(cust.member, -15); logAct(`${memberName(cust.member)} got tired of waiting and walked out`, "bad", null, -100); cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
       case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
-      case "out": if (cust.t <= 0) custGone(cust); return;
+      case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2); custGone(cust); } return;
     }
   }
   if (cust.hi > 0 && (cust.hi -= dt) <= 0) c.setMood({ browse: "browse", thWatch: playing ? "watch" : "neutral", wait: "wait", inLine: "wait", impatient: "impatient", angry: "angry" }[cust.state] || (cust.holding ? "happy" : "neutral"));
@@ -5575,6 +5587,7 @@ function empTick(dt) {
       speed = upg.dana ? 1.8 : 1.45;
       const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
       emp.ry = Math.atan2(dx, dz);
+      if ((emp.stepD = (emp.stepD || 0) + step) > 0.72) { emp.stepD = 0; ambStep(p.x, p.z, 1); }
     }
     if (!emp.path.length && emp.spot) emp.ry = emp.spot.ry;
   } else {
@@ -7033,7 +7046,7 @@ document.addEventListener("pointerlockchange", () => {
   $("titleScreen").style.display = locked ? "none" : "flex";
   $("crosshair").hidden = !locked;
   if (locked) {
-    started = true;
+    started = true; window.VaultAmbience?.start();
     if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
     $("titleScreen").classList.add("paused");
     titleMenu.refresh?.();
@@ -7348,6 +7361,10 @@ function regionTick() {
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
 }
 let clockT = 0;
+const ambFwd = new THREE.Vector3(), coolerSndAt = new THREE.Vector3();
+let coolerWas = false;
+const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 6, 2.6, 29], ["breakroom", 5, 2.6, 31.5],
+  ["restroom", 9.6, 2.6, 31.5], ["lobby", -2.5, 3, 30.5], ["theater", -3, 5, 38]].map(([zone, x, y, z]) => ({ zone, x, y, z, level: 0 }));   // a hum over each light zone
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (keys.size) lastActive = performance.now();                          // walking counts as moving
@@ -7446,9 +7463,15 @@ renderer.setAnimationLoop(() => {
   flapGate.rotation.y += ((flapOpen ? Math.PI / 2 : 0) - flapGate.rotation.y) * Math.min(1, dt * 5);          // gate swings in behind the counter
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
   coolerThermo.tick(dt); drinkTempTick(dt);
+  if (window.VaultAmbience && coolerDoor) {        // its door, and the compressor working (pulling the temperature down, or its idle cycle)
+    const at = coolerDoor.getWorldPosition(coolerSndAt);
+    if (coolerOpen !== coolerWas) { coolerWas = coolerOpen; VaultAmbience.door("cooler", coolerOpen ? "open" : "close", at.x, 1.1, at.z); }
+    VaultAmbience.compressor(at.x, 0.3, at.z, coolerThermo.temp > 36.4 || clockT % 150 < 45);
+  }
   for (const d of doors) {                   // doors ease open/closed; a locked one rattles briefly when tried
     if (d.push) { pushDoorTick(d, dt); continue; }
     d.a += ((d.open ? d.openA : 0) - d.a) * Math.min(1, dt * 5);
+    if (d.closing && Math.abs(d.a) < 0.04) { d.closing = false; doorSnd(d, "wood", "close"); }
     d.rattle = Math.max(0, d.rattle - dt);
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
@@ -7501,6 +7524,12 @@ renderer.setAnimationLoop(() => {
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
   regionTick();
   cullDarkLights(dt);
+  if (window.VaultAmbience) {                    // the store's sound: where you're listening from, which lights are humming
+    camera.getWorldDirection(ambFwd);
+    AMB_ZONES.forEach(z => z.level = zoneLvl[z.zone] ?? 0);
+    VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
+      night: 1 - tod.level, active: started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
+  }
   renderWithBloom();
 });
 window.__t = {
