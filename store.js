@@ -270,6 +270,7 @@ const upg = { ...SAVE?.upg };                   // upgrades bought (see UPGRADES
 // a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
 // [tape, ...tape.copies] (shelving is deterministic, so n holds every load).
 // id + season is unique per tape; the id alone isn't (every season of a show shares it)
+const tapeName = t => /^Season/.test(t.seasons?.[0]?.label || "") ? `${t.title} (${t.seasons[0].label})` : t.title;   // which tape of a show: "Cheers (Season 3)"
 const titleOfCopy = c => Object.hasOwn(c, "copies") || Object.getPrototypeOf(c) === Object.prototype ? c : Object.getPrototypeOf(c);
 const tapeKey = t => `${t.id}#${t.season ?? ""}`;
 let byTapeKey = null;                        // tape key -> tape, built on first use
@@ -4363,7 +4364,8 @@ let eHoldTimer = null;                     // hold E on the standee to lift it (
 let eHoldStool = false;                    // E went down on the stool: a tap sits on release, a hold picks it up
 let eHoldSwitch = null;                    // E went down on a multi-switch plate: a tap flips this one on release, a hold flips the plate
 addEventListener("keydown", e => {
-  if (posTerm?.isOpen()) return posTerm.key(e);   // typing at the register: no walking, no hotkeys
+  if (relockOnInput && e.code !== "Escape" && !posTerm?.isOpen() && !shift.report) { relockOnInput = false; canvas.requestPointerLock()?.catch?.(() => {}); }
+  if (posTerm?.isOpen()) { posEsc = e.key === "Escape"; return posTerm.key(e); }   // typing at the register: no walking, no hotkeys
   if (shift.report) { if (["Enter", "Space", "KeyE"].includes(e.code) && !e.repeat) nextShift(); return; }   // the end-of-shift slip
   if (board.open) { if (document.pointerLockElement === canvas) boardKey(e); return; }   // arranging Dana's jobs
   if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
@@ -5026,7 +5028,7 @@ function custHandTape(cust, tape, by) {           // -> true if they took it
   c.holdTape(Math.min(3, cust.holding)); c.setPose("hold"); c.setMood("love"); cust.hi = 1.8;
   const fast = Math.max(0, Math.round(60 - (clockT - cust.askAt))), pts = exact ? 80 + fast : w.kind === "title" ? 40 : likes ? 80 + fast : 30;
   shiftScore(pts, who); posTerm.loyal(cust.member, exact ? 10 : w.kind === "title" ? 4 : likes ? 8 : 2);
-  logAct(exact ? `${Who} found ${name} ${tape.title}` : w.kind === "title" ? `${name} took ${tape.title} instead of ${w.title.title}` : `${Who} recommended ${tape.title} to ${name}${likes ? ": right up their alley" : ""}`, "good", null, pts);
+  logAct(exact ? `${Who} found ${name} ${tape.title}` : w.kind === "title" ? `${name} took ${tape.title} instead of ${tapeName(w.title)}` : `${Who} recommended ${tape.title} to ${name}${likes ? ": right up their alley" : ""}`, "good", null, pts);
   custAskDone(cust, "pay");
   return true;
 }
@@ -5037,7 +5039,7 @@ function holdEnd(h) {                            // a hold's done with (picked u
 }
 function custHandHold(cust, tape, by) {           // their hold: only that title will do
   const c = cust.c, w = cust.want, h = w.hold, name = memberName(cust.member), who = by === "dana" ? "dana" : "you", Who = by === "dana" ? "Dana" : "You";
-  if (titleOfCopy(tape) !== w.title) { c.setMood("meh"); cust.hi = 1.4; logAct(`${name}: “That's not what I had on hold. It's ${w.title.title}”`); return false; }
+  if (titleOfCopy(tape) !== w.title) { c.setMood("meh"); cust.hi = 1.4; logAct(`${name}: “That's not what I had on hold. It's ${tapeName(w.title)}”`); return false; }
   const setAside = tape === h.pulled || tape === h.copy;
   if (by === "you") { tape.fromReturns = tape.strayFix = false; releaseFromHand(); }
   if (tape === h.copy) h.copy = null;
@@ -5057,8 +5059,8 @@ function custHoldOut(cust, by = "you") {          // "you said you'd hold it!"
   const w = cust.want, name = memberName(cust.member), who = by === "dana" ? "dana" : "you";
   const had = w.hold.copy || w.hold.pulled || onShelfCopy(w.title);
   shiftScore(had ? -50 : -30, who); posTerm.loyal(cust.member, had ? -12 : -8); cust.c.setMood("angry"); cust.hi = 3;
-  logAct(had ? `Told ${name} their hold for ${w.title.title} wasn't there. There was a copy right there. They were not happy`
-    : `${name} came in for ${w.title.title} on hold, and there wasn't one. “You SAID you'd hold it!”`, "bad", null, had ? -50 : -30);
+  logAct(had ? `Told ${name} their hold for ${tapeName(w.title)} wasn't there. There was a copy right there. They were not happy`
+    : `${name} came in for ${tapeName(w.title)} on hold, and there wasn't one. “You SAID you'd hold it!”`, "bad", null, had ? -50 : -30);
   holdEnd(w.hold);
   custAskDone(cust, Math.random() < 0.6 ? "leave" : null);
 }
@@ -5067,11 +5069,11 @@ function custAllOut(cust, by = "you") {          // "sorry, all our copies are o
   const copy = onShelfCopy(cust.want.title), name = memberName(cust.member), who = by === "dana" ? "dana" : "you";
   if (copy) {                                     // ...it was right there
     shiftScore(-30, who); posTerm.loyal(cust.member, -5); cust.c.setMood("meh"); cust.hi = 1.5;
-    logAct(`Told ${name} ${cust.want.title.title} was out, but there's one on the shelf`, "bad", null, -30);
+    logAct(`Told ${name} ${tapeName(cust.want.title)} was out, but there's one on the shelf`, "bad", null, -30);
     return custAskDone(cust);                     // they'll have a look themselves
   }
   shiftScore(10, who); posTerm.loyal(cust.member, 2); cust.c.setMood("meh"); cust.hi = 1.5;
-  logAct(`${by === "dana" ? "Dana told" : "Told"} ${name} ${cust.want.title.title} is all out`, "", null, 10);
+  logAct(`${by === "dana" ? "Dana told" : "Told"} ${name} ${tapeName(cust.want.title)} is all out`, "", null, 10);
   custAskDone(cust, Math.random() < 0.5 ? "leave" : null);
 }
 function custAskGiveUp(cust) {
@@ -5215,8 +5217,8 @@ function custStep(cust, dt) {
       } break;
       case "toAsk":                               // at the counter: "excuse me..."
         cust.state = "asking"; cust.t = 75 * P.patience; cust.askAt = clockT; c.setMood("ask"); c.setPose("idle");
-        logAct(cust.want.kind === "hold" ? `${memberName(cust.member)} is at the counter to pick up ${cust.want.title.title}: it's on hold for them`
-          : cust.want.kind === "title" ? `${memberName(cust.member)} is at the counter looking for ${cust.want.title.title}` : `${memberName(cust.member)} is at the counter wanting ${TASTE_ASK[cust.who.persona.taste.name] || "something good"}`);
+        logAct(cust.want.kind === "hold" ? `${memberName(cust.member)} is at the counter to pick up ${tapeName(cust.want.title)}: it's on hold for them`
+          : cust.want.kind === "title" ? `${memberName(cust.member)} is at the counter looking for ${tapeName(cust.want.title)}` : `${memberName(cust.member)} is at the counter wanting ${TASTE_ASK[cust.who.persona.taste.name] || "something good"}`);
         break;
       case "asking":
         if (cust.hi <= 0 && c.mood !== "ask") c.setMood("ask");
@@ -5447,7 +5449,7 @@ function empFetch(cust) {                         // off to the shelves for them
     copy = pool[Math.floor(Math.random() * pool.length)]; if (!copy) return;
   }
   cust.danaOn = true; emp.fetch = { cust, copy };
-  emp.c.setMood("happy"); logAct(`Dana went to find ${w.kind === "title" ? w.title.title : "something"} for ${memberName(cust.member)}`);
+  emp.c.setMood("happy"); logAct(`Dana went to find ${w.kind === "title" ? tapeName(w.title) : "something"} for ${memberName(cust.member)}`);
   empGo("fetchGo", shelfSpot(copy));
 }
 function empFetchDrop() {                          // whatever she was fetching goes back where it came from
@@ -6210,9 +6212,9 @@ function custTip(k) {                           // what E (and Q) do to this cus
   if (catchCall === k) return "Caught · 1–5 to decide";
   if (k.state === "tagWait") return "Their tape set off the gates<br>E — desensitize it";
   if (k.state === "asking") {
-    const w = k.want, give = held ? `<br>E — hand them ${held.title}` : "";
-    if (w.kind === "hold") return `Here to pick up <b>${w.title.title}</b> (on hold)${give || "<br>Get it from the holds shelf"}<br>Q — tell them it's not here`;
-    return w.kind === "title" ? `Looking for <b>${w.title.title}</b> (${w.title.category})${give}<br>Q — tell them it's all out`
+    const w = k.want, give = held ? `<br>E — hand them ${tapeName(held)}` : "";
+    if (w.kind === "hold") return `Here to pick up <b>${tapeName(w.title)}</b> (on hold)${give || "<br>Get it from the holds shelf"}<br>Q — tell them it's not here`;
+    return w.kind === "title" ? `Looking for <b>${tapeName(w.title)}</b> (${w.title.category})${give}<br>Q — tell them it's all out`
       : `Wants ${TASTE_ASK[k.who.persona.taste.name] || "something good"}${give || "<br>Bring them a tape"}`;
   }
   const mine = co?.cust === k && co.by === "player";
@@ -6344,7 +6346,7 @@ function pickHover() {
     else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
       const ask = !held && custAsks.find(k => k.state === "asking" && k.want.kind === "hold" && k.want.hold.copy);
-      tip.innerHTML = h ? `E — put ${held.title} on hold for ${memberName(h.member)}` : ask ? `E — take down ${ask.want.title.title} for ${memberName(ask.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${h.title.title} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
+      tip.innerHTML = h ? `E — put ${tapeName(held)} on hold for ${memberName(h.member)}` : ask ? `E — take down ${tapeName(ask.want.title)} for ${memberName(ask.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${tapeName(h.title)} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
     else if (aimMess) tip.innerHTML = `E — clean up the ${MESS[aimMess.kind].label}`;
     else if (aimPrinter) tip.innerHTML = co?.by === "player" && coStep()?.id === "tear" ? (printer.job?.done ? "E — tear off the receipt" : "Printing…") : "Receipt printer";
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
@@ -6692,15 +6694,15 @@ function callAnswer(key, by = "you") {            // 1: yes, I'll hold one · 2:
   if (key === 1) {
     const at = Math.min(SHIFT.lastIn - 0.1, shift.h + 1 + Math.random() * 1.2);
     holds.push({ member: c.member, title: c.title, at, day: shift.day, copy: null, by });
-    logAct(`${Who} told ${name} there's a copy of ${c.title.title} on hold for them: they'll be in around ${fmtClock(at)}${by === "you" ? ". Put a copy on the holds shelf" : ""}`);
+    logAct(`${Who} told ${name} there's a copy of ${tapeName(c.title)} on hold for them: they'll be in around ${fmtClock(at)}${by === "you" ? ". Put a copy on the holds shelf" : ""}`);
     return holds[holds.length - 1];
   }
-  if (inNow) { shiftScore(-10, by); posTerm.loyal(c.member, -3); logAct(`${Who} told ${name} ${c.title.title} was all out, but there's one on the shelf`, "bad", null, -10); }
-  else { shiftScore(10, by); posTerm.loyal(c.member, 1); logAct(`${Who} told ${name} ${c.title.title} is all out`, "", null, 10); }
+  if (inNow) { shiftScore(-10, by); posTerm.loyal(c.member, -3); logAct(`${Who} told ${name} ${tapeName(c.title)} was all out, but there's one on the shelf`, "bad", null, -10); }
+  else { shiftScore(10, by); posTerm.loyal(c.member, 1); logAct(`${Who} told ${name} ${tapeName(c.title)} is all out`, "", null, 10); }
 }
 function callHud() {
   const el = $("callPanel"), c = phone.call; if (!c) { el.style.display = "none"; return; }
-  el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${c.title.title}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
+  el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${tapeName(c.title)}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
     `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
   el.style.display = "block";
 }
@@ -6959,7 +6961,7 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
 }
 function showTape(tape) {                    // the tape in your hand (fresh pickup, or back out of the inventory)
   held = tape; inspecting = false;
-  $("holdingTag").style.display = "block"; $("holdingName").textContent = tape.title;
+  $("holdingTag").style.display = "block"; $("holdingName").textContent = tapeName(tape);
   // embedded shelf art shows instantly; the full-res TMDB version swaps in once
   // it loads (a plain <img> can load cross-origin even from file://). Offline
   // it just stays on the embedded one.
@@ -7183,22 +7185,26 @@ function titleMenu() {
   };
   $("enterHint").style.display = "none"; $("mainMenu").hidden = false;
 }
-let posClosedAt = -1e9;
+let relockOnInput = false;                        // backed out with Escape: the next click or key (not Escape) takes the mouse back
+function backToStore() { relockOnInput = true; keys.clear(); $("crosshair").hidden = true; toast("Click or press any key to get back in", true); }
+let posEsc = false;                              // the key that closed the POS was Escape
 function escClose() {                          // Escape closes whatever's open over the store; true if something was
   if (held && inspecting) { inspecting = false; peek = null; return true; }
   if (tvMenu) { tvMenu = false; return true; }
   if (board.open) { boardClose(); return true; }
   return false;
 }
-canvas.addEventListener("click", () => { if (started && document.pointerLockElement !== canvas && !posTerm?.isOpen() && !shift.report) canvas.requestPointerLock(); });
+canvas.addEventListener("click", () => { relockOnInput = false; if (started && document.pointerLockElement !== canvas && !posTerm?.isOpen() && !shift.report) canvas.requestPointerLock(); });
 document.addEventListener("fullscreenchange", () => document.fullscreenElement ? navigator.keyboard?.lock?.(["Escape"]).catch(() => {}) : navigator.keyboard?.unlock?.());   // fullscreen: Escape comes to us as a key (hold it to leave fullscreen)
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
-  if (!locked && performance.now() - posClosedAt < 1000) { keys.clear(); $("crosshair").hidden = true; return; }   // Chrome can grant the re-lock off the terminal's Escape, then drop it: that Escape closed the POS, it isn't a pause
   if (!locked && (posTerm?.isOpen() || shift.report)) { keys.clear(); $("crosshair").hidden = true; return; }   // the mouse was freed for the terminal / the shift slip, not a pause
-  if (!locked && started && escClose()) { keys.clear(); canvas.requestPointerLock()?.catch?.(() => {}); return; }   // Escape backed out of a sub-screen, not a pause (if the browser won't re-lock yet, a click on the store does)
+  if (!locked && started && escClose()) return backToStore();   // Escape backed out of a sub-screen, not a pause
   $("titleScreen").style.display = locked ? "none" : "flex";
   $("crosshair").hidden = !locked;
+  paused = !locked && started;
+  if (paused && playing && !video.paused) { video.pause(); pausedTape = true; }
+  if (locked) { relockOnInput = false; if (pausedTape) { pausedTape = false; video.play().catch(() => {}); } }
   if (locked) {
     started = true; window.VaultAmbience?.start();
     if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
@@ -7273,10 +7279,9 @@ const posTerm = window.createPOS({
     if (posTex.image !== c) { posTex.image = c; posScreen.material.map = posTex; posScreen.material.needsUpdate = true; }
     posTex.needsUpdate = true;
   },
-  onClose() {                                      // straight back into the store (Esc/F10 keydown counts as the gesture)
-    posClosedAt = performance.now();
-    const p = canvas.requestPointerLock();
-    p?.catch?.(() => {});                          // (Chrome won't count Escape as a gesture: no pause, a click on the store picks the mouse back up)
+  onClose() {                                      // straight back into the store: F10 / Enter count as the gesture, Escape doesn't
+    if (posEsc) return backToStore();
+    canvas.requestPointerLock()?.catch?.(() => backToStore());
   },
 });
 posTerm.idle();
@@ -7522,7 +7527,16 @@ const ambFwd = new THREE.Vector3(), coolerSndAt = new THREE.Vector3();
 let coolerWas = false;
 const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 6, 2.6, 29], ["breakroom", 5, 2.6, 31.5],
   ["restroom", 9.6, 2.6, 31.5], ["lobby", -2.5, 3, 30.5], ["theater", -3, 5, 38]].map(([zone, x, y, z]) => ({ zone, x, y, z, level: 0 }));   // a hum over each light zone
+let paused = false, pausedTape = false;          // the pause screen's up: nothing moves
+function ambTick(dt) {
+  if (!window.VaultAmbience) return;             // the store's sound: where you're listening from, which lights are humming
+  camera.getWorldDirection(ambFwd);
+  AMB_ZONES.forEach(z => z.level = zoneLvl[z.zone] ?? 0);
+  VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
+    night: 1 - tod.level, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
+}
 renderer.setAnimationLoop(() => {
+  if (paused) { clock.getDelta(); ambTick(0); renderWithBloom(); return; }   // (the store sounds fade out; the frame just sits there)
   const dt = Math.min(clock.getDelta(), 0.05);
   if (keys.size) lastActive = performance.now();                          // walking counts as moving
   if (trashFlapT > 0) { trashFlapT = Math.max(0, trashFlapT - dt); trashFlap.rotation.x = 1.1 * Math.sin((1 - trashFlapT / 0.5) * Math.PI); }    // push flap swings in (bottom edge into the bin) and back
@@ -7681,12 +7695,7 @@ renderer.setAnimationLoop(() => {
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
   regionTick();
   cullDarkLights(dt);
-  if (window.VaultAmbience) {                    // the store's sound: where you're listening from, which lights are humming
-    camera.getWorldDirection(ambFwd);
-    AMB_ZONES.forEach(z => z.level = zoneLvl[z.zone] ?? 0);
-    VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
-      night: 1 - tod.level, active: started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
-  }
+  ambTick(dt);
   renderWithBloom();
 });
 window.__t = {
