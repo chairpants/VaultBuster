@@ -1666,6 +1666,7 @@ let posScreen;                                // the register monitor's glass (p
 // the counter's VHS rewinders (models built with the counter, logic near the
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
 const rewinders = [];
+let phoneLook = () => {};                    // (set when the phone is built)
 const PHONE_AT = new THREE.Vector3(), HOLDS_AT = new THREE.Vector3();   // the desk phone / the holds tray, on the back cabinet (set when it's built)
 const PRN_AT = { x: -4.45, z: 3.93 };           // the receipt printer's paper slot
 const printer = { strip: null, tex: null, job: null };   // the receipt feeding out of it (see printReceipt)
@@ -1964,11 +1965,48 @@ const GATE_Z = 4.0;                           // security gate line across the e
       box(0.012, 0.12, 0.02, chromeC, d + 0.43, BHt - 0.2, bz + 0.245);
     }
     colliders.push({ x0: bx0, x1: bx1, z0: FRONT, z1: bz + 0.25, y1: BHt });
-    // multi-line desk phone
-    const ph = new THREE.Group(); ph.position.set(-6.4, BHt, bz); ph.rotation.y = Math.PI; scene.add(ph); PHONE_AT.set(-6.4, BHt + 0.08, bz);
-    const base = put(new THREE.BoxGeometry(0.22, 0.06, 0.2), beigeP, 0, 0.03, 0, ph); base.rotation.x = -0.15;
-    put(new THREE.BoxGeometry(0.22, 0.04, 0.06), beigeP, 0, 0.085, -0.06, ph);                 // handset
-    for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.018, 0.006, 0.014), i < 2 ? new THREE.MeshBasicMaterial({ color: 0xff4020 }) : blackC, -0.06 + (i % 3) * 0.03, 0.065, 0.04 + Math.floor(i / 3) * 0.025, ph);
+    // multi-line desk phone (a 2565-style key set): sloped body, handset across the cradle, a Touch-Tone pad,
+    // a row of lit line buttons along the front, and a coiled cord. Its front faces you behind the counter
+    const ph = new THREE.Group(); ph.position.set(-6.4, BHt, bz); scene.add(ph); PHONE_AT.set(-6.4, BHt + 0.08, bz);
+    const slope = Math.atan2(0.04, 0.22);
+    const prof = new THREE.Shape([new THREE.Vector2(-0.11, 0), new THREE.Vector2(0.11, 0), new THREE.Vector2(0.11, 0.075), new THREE.Vector2(-0.11, 0.035)]);
+    const bodyG = new THREE.ExtrudeGeometry(prof, { depth: 0.22, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.008, bevelSegments: 3, curveSegments: 1 });
+    bodyG.rotateY(Math.PI / 2); bodyG.translate(-0.11, 0.008, 0);   // profile x -> -z: the low edge at the front (+z)
+    put(bodyG, beigeP, 0, 0, 0, ph);
+    const top = new THREE.Group(); top.position.set(0, 0.071, 0); top.rotation.x = slope; ph.add(top);   // the sloped top face
+    put(new THREE.BoxGeometry(0.085, 0.003, 0.1), blackC, 0, 0.001, 0.045, top);                         // keypad bezel
+    const keyM = new THREE.MeshPhongMaterial({ color: 0xf2efe6, shininess: 40 });
+    for (let i = 0; i < 12; i++) put(new THREE.BoxGeometry(0.019, 0.007, 0.015), keyM, -0.025 + (i % 3) * 0.025, 0.004, 0.01 + Math.floor(i / 3) * 0.022, top);
+    const digits = makeTexture((ctx, W, H) => {
+      ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#222"; ctx.font = "bold 24px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      "123456789*0#".split("").forEach((c, i) => ctx.fillText(c, W * (0.5 + (i % 3 - 1) * 0.294), H * (0.225 + Math.floor(i / 3) * 0.1833)));
+    }, 128, 180);
+    const keyLbl = put(new THREE.PlaneGeometry(0.085, 0.12), new THREE.MeshBasicMaterial({ map: digits, transparent: true, depthWrite: false }), 0, 0.0078, 0.043, top);
+    keyLbl.rotation.x = -Math.PI / 2;
+    for (const x of [-0.085, 0.085]) put(new THREE.BoxGeometry(0.04, 0.02, 0.05), beigeP, x, 0.008, -0.055, top);   // cradle horns
+    put(new THREE.BoxGeometry(0.008, 0.006, 0.012), blackC, 0.085, 0.02, -0.055, top);                     // hookswitch plunger
+    const handset = new THREE.Group(); handset.position.set(0, 0.038, -0.055); top.add(handset);
+    const grip = put(new THREE.CylinderGeometry(0.012, 0.012, 0.15, 12), beigeP, 0, 0.012, 0, handset); grip.rotation.z = Math.PI / 2; grip.scale.set(1, 1, 1.5);
+    for (const x of [-0.088, 0.088]) {                // earpiece / mouthpiece cups, face down in the cradle
+      put(new THREE.CylinderGeometry(0.024, 0.02, 0.028, 16), beigeP, x, 0, 0, handset);
+      put(new THREE.CylinderGeometry(0.014, 0.014, 0.002, 12), blackC, x, -0.0145, 0, handset);
+    }
+    const lampOff = new THREE.MeshLambertMaterial({ color: 0xcfd6d8 }), lampLit = new THREE.MeshBasicMaterial({ color: 0xffb040 });
+    const lamps = [];                                 // line buttons: clear plastic, lit from behind
+    for (let i = 0; i < 6; i++) lamps.push(put(new THREE.BoxGeometry(0.024, 0.014, 0.008), lampOff, -0.075 + i * 0.03, 0.022, 0.122, ph));
+    put(new THREE.BoxGeometry(0.2, 0.004, 0.006), blackC, 0, 0.034, 0.12, ph);                             // designation strip over them
+    // coiled cord: handset's left end, down onto the cabinet top, back up into the body's side
+    const A = new THREE.Vector3(-0.1, 0.075, -0.05), B = new THREE.Vector3(-0.125, 0.02, 0.02), C = new THREE.Vector3(-0.2, -0.02, 0.0);
+    const spine = new THREE.QuadraticBezierCurve3(A, C, B);
+    const coil = new THREE.Curve(); coil.getPoint = (t, v = new THREE.Vector3()) => {
+      const p = spine.getPoint(t), tg = spine.getTangent(t), n = new THREE.Vector3(0, 0, 1).cross(tg).normalize(), b = tg.clone().cross(n), a = t * Math.PI * 2 * 26;
+      p.y = Math.max(p.y, 0.004); return v.copy(p).addScaledVector(n, 0.005 * Math.cos(a)).addScaledVector(b, 0.005 * Math.sin(a));
+    };
+    put(new THREE.TubeGeometry(coil, 520, 0.0018, 5), beigeP, 0, 0, 0, ph);
+    phoneLook = now => {                              // handset off the hook while you're on a call; line 1 flashes while it rings
+      handset.visible = !phone.call;
+      lamps[0].material = phone.call || (phone.ring && now % 1000 < 500) ? lampLit : lampOff;
+    };
     ph.traverse(m => { if (m.isMesh) { m.userData.phone = true; aimables.push(m); } });
     // stack of brown paper bags
     const kraft = new THREE.MeshLambertMaterial({ color: 0xa8804f });
@@ -2749,6 +2787,22 @@ function flushShelves() {
   shelfParts.clear(); coverParts.clear(); bodyParts.length = 0;
 }
 const catStripMat = {};  // yellow header strip per category
+const endTags = [];      // endcap genre lists: { mat, cats, w, lineH } (signsRefresh swaps a locked section for COMING SOON)
+let mvTopper = null;     // the MONSTERVISION topper (not up until the section's bought)
+function signsRefresh() {                     // simulation: a section that isn't in yet says COMING SOON instead of its genre
+  const soon = cat => libLocked({ category: cat });
+  for (const [cat, m] of Object.entries(catStripMat)) {
+    if (cat === "__soon") continue;
+    m.userData.real ??= m.map;
+    m.map = soon(cat) ? (catStripMat.__soon ??= stripTexture("Coming Soon")).map : m.userData.real; m.needsUpdate = true;
+  }
+  for (const t of endTags) {
+    t.real ??= t.mat.map; let said = false;
+    const lines = t.cats.map(c => !soon(c) ? c : said ? "" : (said = true, "COMING SOON"));
+    t.mat.map = said ? tagPlane(lines, t.w, t.lineH).material.map : t.real; t.mat.needsUpdate = true;
+  }
+  if (mvTopper) mvTopper.visible = !soon("MonsterVision");
+}
 function stripTexture(cat) {
   const t = makeTexture((ctx, W, H) => {
     ctx.fillStyle = "#ffd400"; ctx.fillRect(0, 0, W, H);
@@ -3008,6 +3062,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec); });
     const cats = [...new Set(chain.flatMap(f => f.tapes.filter(Boolean).map(t => t.category)))];
     const tag = tagPlane(cats, frontAt(1.1 + cats.length * 0.08, spec) - 0.04, 0.14);   // fits the wedge where its top edge is
+    endTags.push({ mat: tag.material, cats, w: frontAt(1.1 + cats.length * 0.08, spec) - 0.04, lineH: 0.14 });   // (the clone at the far end shares this material)
     const nx = Math.cos(ry), nz = -Math.sin(ry), off = frontAt(1.1, spec) / 2;        // out from the back plane, to mid-wedge
     [[-0.033, Math.atan2(-dx, -dz)], [at + 0.033, Math.atan2(dx, dz)]].forEach(([d, rot], i) => {   // 8 mm off the 5 cm end panels
       const t = i ? tag.clone() : tag;
@@ -3173,10 +3228,11 @@ const wallSpans = [];                        // what the wall runs cover, for li
     [{ x: -CENTER.corridor, z: bandZ(1), ry: -Math.PI / 2, dx: -1, dz: 0, bays: CENTER.westBays }], MV_SPEC);
   {                                                        // topper: MONSTERVISION in green on black, facing into the store
     const cx = -CENTER.corridor - CENTER.westBays * BAY.len / 2, z = bandZ(1);
-    box(2.5, 0.5, 0.06, mat.dark, cx, SHORT.h + 0.25, z + 0.03);
+    mvTopper = new THREE.Group(); scene.add(mvTopper);
+    mvTopper.add(box(2.5, 0.5, 0.06, mat.dark, cx, SHORT.h + 0.25, z + 0.03));
     const sg = textPlane("MONSTERVISION", 2.4, 0.42, "#7dff3a", "#0b0b0b");
     sg.material = new THREE.MeshLambertMaterial({ map: sg.material.map });
-    sg.position.set(cx, SHORT.h + 0.25, z + 0.066); scene.add(sg);
+    sg.position.set(cx, SHORT.h + 0.25, z + 0.066); mvTopper.add(sg);
   }
 
   // home spot: faces into the aisle at 45°, tucked by the MonsterVision endcap
@@ -4312,6 +4368,7 @@ addEventListener("keydown", e => {
     if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
     return;
   }
+  if (e.code === "Escape") { if (!escClose()) document.exitPointerLock(); return; }   // (only reaches us in fullscreen, with the keyboard lock)
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat) {
@@ -4630,7 +4687,7 @@ function browseSpots() {
   if (custSpots) return custSpots;
   const grid = navGrid(custs.map(k => k.box)), groups = new Map();   // not counting the customers: they're standing in the doorway the flood fill starts from
   for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
-    if (!c.pos) continue;
+    if (!c.pos || c.libLocked) continue;       // (a section that isn't in yet is just empty shelf)
     const nx = Math.cos(c.ry), nz = -Math.sin(c.ry), sx = c.pos.x + nx * 0.8, sz = c.pos.z + nz * 0.8;   // shelves face their local +x
     if (sx < -2.25 && sz < 4.5) continue;        // behind the counter is staff only
     const key = `${Math.round(sx / 1.5)},${Math.round(sz / 1.5)},${Math.round(c.ry / (Math.PI / 2))}`;
@@ -6154,7 +6211,8 @@ function pickHover() {
     tip.style.display = "block";
   } else {
     highlight.visible = false;
-    let aim = raycaster.intersectObjects(aimables, false)[0];
+    const aimHits = raycaster.intersectObjects(aimables, false);
+    let aim = aimHits.find(h => h.object.userData.mess && h.distance < 2.4) || aimHits[0];   // trash under a seat: the trash, not the seat
     const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
     if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
     if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
@@ -6480,6 +6538,7 @@ function libLock() {                             // simulation: sections you hav
     if (c.rental) { posTerm.cancel(c); const i = rentedCopies.indexOf(c); if (i >= 0) rentedCopies.splice(i, 1); }   // (a new store's opening rentals don't include them)
     if (!c.offShelf) setOnShelf(c, false);
   }
+  signsRefresh();
 }
 function libUnlock(tier) {                       // -> tapes put out
   let n = 0;
@@ -6487,7 +6546,7 @@ function libUnlock(tier) {                       // -> tapes put out
     if (!LIBRARY[tier - 1].cats.includes(c.category) || !c.libLocked) continue;
     c.libLocked = false; if (!c.lost && !c.rental) { setOnShelf(c, true); n++; }
   }
-  upg.library = tier; custSpots = null;
+  upg.library = tier; custSpots = null; signsRefresh();
   return n;
 }
 
@@ -6503,11 +6562,18 @@ const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null };   // 
 const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by }
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
 let ringAc = null;
-function ringBurst() {                            // a desk phone: two tones together, twice
-  try {
-    const ac = ringAc ||= new AudioContext(), t = ac.currentTime, g = ac.createGain(); g.gain.value = 0; g.connect(ac.destination);
-    for (const f of [440, 480]) { const o = ac.createOscillator(); o.frequency.value = f; o.connect(g); o.start(t); o.stop(t + 1.6); }
-    for (const [a, b] of [[0, 0.7], [0.85, 1.55]]) { g.gain.setValueAtTime(0.03, t + a); g.gain.setValueAtTime(0, t + b); }
+function ringBurst() {                            // a desk-set ringer: a clapper buzzing between two small gongs ~20 times a second for 2 s
+  try {                                           // (lowpassed and not too loud: a real bell, but across the room and not in your ear)
+    const ac = ringAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ac.createGain(), lp = ac.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 3200; out.gain.value = 0.09; out.connect(lp).connect(ac.destination);
+    [[1180, 0], [1390, 0.025]].forEach(([f, off]) => {   // the two gongs, struck alternately
+      for (const [r, a] of [[1, 1], [2.32, 0.35], [4.1, 0.12]]) {
+        const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f * r; o.connect(g).connect(out);
+        g.gain.setValueAtTime(0, t);
+        for (let s = t + off; s < t + 2; s += 0.05) { const env = Math.min(1, (s - t) / 0.08, (t + 2 - s) / 0.15); g.gain.setValueAtTime(a * env, s); g.gain.setTargetAtTime(a * env * 0.25, s, 0.012); }
+        g.gain.setTargetAtTime(0, t + 2, 0.08); o.start(t); o.stop(t + 2.6);
+      }
+    });
   } catch {}
 }
 function phoneCaller() {                          // an active member, not in the store, asking after something in their taste
@@ -6527,7 +6593,7 @@ function phoneTick(dt) {                          // (runs with the clock)
   }
   const r = phone.ring; if (!r) { phoneCallTick(dt); return; }
   r.t += dt;
-  if (r.t >= r.rang) { r.rang += 3; ringBurst(); }
+  if (r.t >= r.rang) { r.rang += 6; ringBurst(); }   // US cadence: 2 s on, 4 s off
   if (r.t > 6 && emp.c && emp.state === "post" && co?.by !== "dana" && emp.t <= 0 && danaBestJob() === "phone") return danaCall();   // top of her list right now: Dana gets it
   if (r.t > 20) {                                 // rang out
     phone.ring = null;
@@ -7040,9 +7106,20 @@ function titleMenu() {
   };
   $("enterHint").style.display = "none"; $("mainMenu").hidden = false;
 }
+let posClosedAt = -1e9;
+function escClose() {                          // Escape closes whatever's open over the store; true if something was
+  if (held && inspecting) { inspecting = false; peek = null; return true; }
+  if (tvMenu) { tvMenu = false; return true; }
+  if (board.open) { boardClose(); return true; }
+  return false;
+}
+canvas.addEventListener("click", () => { if (started && document.pointerLockElement !== canvas && !posTerm?.isOpen() && !shift.report) canvas.requestPointerLock(); });
+document.addEventListener("fullscreenchange", () => document.fullscreenElement ? navigator.keyboard?.lock?.(["Escape"]).catch(() => {}) : navigator.keyboard?.unlock?.());   // fullscreen: Escape comes to us as a key (hold it to leave fullscreen)
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
+  if (!locked && performance.now() - posClosedAt < 1000) { keys.clear(); $("crosshair").hidden = true; return; }   // Chrome can grant the re-lock off the terminal's Escape, then drop it: that Escape closed the POS, it isn't a pause
   if (!locked && (posTerm?.isOpen() || shift.report)) { keys.clear(); $("crosshair").hidden = true; return; }   // the mouse was freed for the terminal / the shift slip, not a pause
+  if (!locked && started && escClose()) { keys.clear(); canvas.requestPointerLock()?.catch?.(() => {}); return; }   // Escape backed out of a sub-screen, not a pause (if the browser won't re-lock yet, a click on the store does)
   $("titleScreen").style.display = locked ? "none" : "flex";
   $("crosshair").hidden = !locked;
   if (locked) {
@@ -7118,8 +7195,9 @@ const posTerm = window.createPOS({
     posTex.needsUpdate = true;
   },
   onClose() {                                      // straight back into the store (Esc/F10 keydown counts as the gesture)
+    posClosedAt = performance.now();
     const p = canvas.requestPointerLock();
-    p?.catch?.(() => { $("titleScreen").style.display = "flex"; });
+    p?.catch?.(() => {});                          // (Chrome won't count Escape as a gesture: no pause, a click on the store picks the mouse back up)
   },
 });
 posTerm.idle();
@@ -7462,7 +7540,7 @@ renderer.setAnimationLoop(() => {
   flapPivot.rotation.z += ((flapOpen ? Math.PI / 2 * 0.97 : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
   flapGate.rotation.y += ((flapOpen ? Math.PI / 2 : 0) - flapGate.rotation.y) * Math.min(1, dt * 5);          // gate swings in behind the counter
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
-  coolerThermo.tick(dt); drinkTempTick(dt);
+  coolerThermo.tick(dt); drinkTempTick(dt); phoneLook(performance.now());
   if (window.VaultAmbience && coolerDoor) {        // its door, and the compressor working (pulling the temperature down, or its idle cycle)
     const at = coolerDoor.getWorldPosition(coolerSndAt);
     if (coolerOpen !== coolerWas) { coolerWas = coolerOpen; VaultAmbience.door("cooler", coolerOpen ? "open" : "close", at.x, 1.1, at.z); }
