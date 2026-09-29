@@ -208,17 +208,20 @@ window.createPOS = function createPOS(api) {
     const p = priceOf(t), eps = t.seasons.reduce((a, s) => a + s.episodes.length, 0);
     const cs = copiesOf(t);
     go({
-      title: `TITLE INQUIRY - ${up(t.title)}`.slice(0, COLS - 2), prompt: "COPY # FOR RENTER, ESC",
+      title: `TITLE INQUIRY - ${up(t.title)}`.slice(0, COLS - 2), prompt: api.requests?.(t).length ? "COPY # FOR RENTER, A FOR ALERT, ESC" : "COPY # FOR RENTER, ESC",
       lines: () => [
         ` TITLE....: ${up(t.title)}`.slice(0, COLS),
         ` SECTION..: ${up(t.category)}${isTV(t) ? `        FORMAT: TV SERIES, ${t.seasons.length} VOL / ${eps} EP` : "        FORMAT: FEATURE"}`,
         ` YEAR.....: ${yearOf(t) || "N/A"}       SKU: VB-${(t.id.split("").reduce((a, c) => a * 31 + c.charCodeAt(0) >>> 0, 7) % 900000 + 100000)}`,
         ` CLASS....: ${p.cls}  ${p.nights}-NIGHT ${money(p.rate)}   LATE ${money(p.late)}/DAY`,
-        ` STOCK....: ${cs.length} COPIES, ${copyIn(t)} IN / ${cs.length - copyIn(t)} OUT`, "",
+        ` STOCK....: ${cs.length} COPIES, ${copyIn(t)} IN / ${cs.length - copyIn(t)} OUT`,
+        ...(api.requests?.(t) || []).map((r, i) => `${i ? "           " : " REQUEST..:"} HOLD FOR ${r.name}, IN ~${r.at}${r.alert ? "   *** ALERT: HOLD NEXT RETURN ***" : ""}`.slice(0, COLS)), "",
         "  COPY  STATUS", ...cs.slice(0, 12).map((c, i) => `  ${String(i + 1).padStart(2, "0")}    ${copyStatus(c)}`),
         ...(cs.length > 12 ? [`  ... ${cs.length - 12} MORE`] : []),
       ],
       submit(v) {
+        const rq = api.requests?.(t) || [];
+        if (v === "A" && rq.length) { const on = !rq[0].alert; api.setAlert(t, on); msg = on ? "ALERT SET: NEXT RETURN OF THIS TITLE GOES ON THE HOLDS SHELF." : "ALERT CLEARED."; return draw(); }
         const c = cs[parseInt(v, 10) - 1];
         if (c?.rental) return custDetail(c.rental.cust);
         msg = c ? "COPY IS NOT CHECKED OUT." : "INVALID SELECTION."; draw();

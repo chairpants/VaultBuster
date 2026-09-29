@@ -3436,7 +3436,7 @@ const BW_SHOWS = new Set(["TwilightZone1959", "AlfredHitchcockPresents"]);
 // click picks a row — toggles flip, a slider jumps to where you clicked on its
 // bar, the wheel nudges whichever slider you're pointing at. Saved per browser.
 const TV_DEFAULTS = { overlay: true, scanlines: true, pixelated: false, bw: false,
-  brightness: 100, contrast: 100, saturate: 100, hue: 0, sharpen: 0 };
+  brightness: 100, contrast: 100, saturate: 100, hue: 0, sharpen: 0, volume: 100 };
 let tvSet = { ...TV_DEFAULTS };
 try { Object.assign(tvSet, JSON.parse(localStorage.getItem("vaultbuster-tv") || "{}")); } catch {}
 const TV_ROWS = [
@@ -3447,15 +3447,17 @@ const TV_ROWS = [
   { k: "saturate", label: "COLOR", min: 0, max: 200, step: 5 },
   { k: "hue", label: "TINT", min: 0, max: 360, step: 10 },
   { k: "sharpen", label: "SHARPEN", min: 0, max: 100, step: 5 },
+  { k: "volume", label: "VOLUME", min: 0, max: 100, step: 5 },   // the tape's sound only (M is the store's)
 ];
 // menu layout on the 480x320 screen canvas
-const TVM = { rowY: 58, rowH: 23, labelX: 44, barX: 214, barW: 190, chkX: 214, chkW: 26, btnY: 272, btnH: 30,
+const TVM = { rowY: 58, rowH: 21, labelX: 44, barX: 214, barW: 190, chkX: 214, chkW: 26, btnY: 272, btnH: 30,
   buttons: [{ k: "reset", label: "RESET", x: 128, w: 100 }, { k: "close", label: "CLOSE", x: 252, w: 100 }] };
 let tvMenu = false, tvHover = null;          // hover: a TV_ROWS index, "reset" or "close"
 const osd = { text: "", until: 0 };          // VCR on-screen display (the OVERLAY setting)
 function tvOsd(text, secs = 3) { osd.text = text; osd.until = secs ? performance.now() + secs * 1000 : Infinity; }
 function applyTv() {
   try { localStorage.setItem("vaultbuster-tv", JSON.stringify(tvSet)); } catch {}
+  video.volume = tvSet.volume / 100;
   // unsharp-mask kernel, as VaultVision: lerp identity -> classic sharpen by SHARPEN
   const a = tvSet.sharpen / 100 * 1.5;
   document.getElementById("tvSharpenMatrix")?.setAttribute("kernelMatrix", `0 ${-a} 0 ${-a} ${1 + 4 * a} ${-a} 0 ${-a} 0`);
@@ -4423,7 +4425,7 @@ addEventListener("mousemove", e => {
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * 0.0022));
 });
 function blocked(x, z) {
-  for (const c of colliders)
+  for (const c of colliders) if (c !== emp.box)   // (you walk through Dana: she can't pin you in a corner)
     if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) return true;
   return false;
 }
@@ -4846,6 +4848,13 @@ function custGo(cust, state, spot, avoidPlayer = false) {   // head for a spot; 
 }
 // the checkout line: the front of it stands at the counter, the rest queue
 // back into the store behind them, facing the register
+const TAG_FIX_SPOT = { x: CUST_COUNTER.x + 0.9, z: CUST_COUNTER.z, ry: Math.PI };   // beside the line: back with a tag that set the gates off
+function tagFix(cust, by) {                        // run their tapes over the desensitizer and send them on their way
+  for (const t of cust.tapes) if (!t.desens) desensitize(t);
+  silenceGateAlarm(); cust.tagged = false; cust.c.setMood("meh"); cust.hi = 1.5;
+  logAct(`${by === "dana" ? "Dana" : "You"} fixed ${memberName(cust.member)}'s tag: they're on their way`);
+  custGo(cust, "leave", CUST_DOOR);
+}
 const custLineSpot = i => i ? { x: CUST_COUNTER.x, z: CUST_COUNTER.z + 0.85 * i, ry: Math.PI } : CUST_COUNTER;
 function custToLine(cust) { const i = custLine.indexOf(cust); custGo(cust, i ? "queue" : "counter", custLineSpot(i)); }
 function custLeaveLine(cust) {                    // out of the line: everyone behind shuffles up a spot
@@ -4942,6 +4951,7 @@ function custInteract(cust) {                     // E on a customer: ring them 
   const c = cust.c;
   if (cust.sneaking) return custCatch(cust);
   if (cust.state === "asking") return custAskInteract(cust);
+  if (cust.state === "tagWait") return tagFix(cust, "you");
   if (["wait", "impatient", "angry"].includes(cust.state) && !co) { coStart("player", cust); coAct("customer"); }   // start ringing them up
   else if (co?.cust === cust && co.by === "player") coAct("customer");
   else if (cust.state !== "out") {
@@ -5000,6 +5010,7 @@ function custAskInteract(cust) {                  // E: hand over what's in your
   cust.hi = 1.2; cust.c.setMood("happy");
 }
 function custHandTape(cust, tape, by) {           // -> true if they took it
+  if (cust.want.kind === "hold") return custHandHold(cust, tape, by);
   const c = cust.c, w = cust.want, cats = cust.who.persona.taste.cats, likes = cats.includes(tape.category), name = memberName(cust.member);
   const exact = w.kind === "title" && titleOfCopy(tape) === w.title;
   const ok = exact || Math.random() < (w.kind === "title" ? (tape.category === w.title.category ? 0.6 : likes ? 0.4 : 0.12) : likes ? 0.85 : 0.2);
@@ -5019,7 +5030,40 @@ function custHandTape(cust, tape, by) {           // -> true if they took it
   custAskDone(cust, "pay");
   return true;
 }
+function holdEnd(h) {                            // a hold's done with (picked up, or it fell through): off the books; an unclaimed copy goes back out
+  const i = holds.indexOf(h); if (i >= 0) holds.splice(i, 1);
+  if (h.copy) { setOnShelf(h.copy, true); h.copy = null; }
+  holdsRender();
+}
+function custHandHold(cust, tape, by) {           // their hold: only that title will do
+  const c = cust.c, w = cust.want, h = w.hold, name = memberName(cust.member), who = by === "dana" ? "dana" : "you", Who = by === "dana" ? "Dana" : "You";
+  if (titleOfCopy(tape) !== w.title) { c.setMood("meh"); cust.hi = 1.4; logAct(`${name}: “That's not what I had on hold. It's ${w.title.title}”`); return false; }
+  const setAside = tape === h.pulled || tape === h.copy;
+  if (by === "you") { tape.fromReturns = tape.strayFix = false; releaseFromHand(); }
+  if (tape === h.copy) h.copy = null;
+  holdEnd(h);
+  cust.tapes.push(tape); cust.holding = cust.tapes.length; c.holdTape(Math.min(3, cust.holding)); c.setPose("hold");
+  if (setAside) {
+    c.setMood("love"); cust.hi = 1.8; shiftScore(40, h.by === "dana" ? "dana" : who); posTerm.loyal(cust.member, 8);
+    logAct(`${Who} handed ${name} their hold: ${tape.title}`, "good", null, 40);
+  } else {                                        // it wasn't set aside: you scrambled and found one on the floor
+    c.setMood("meh"); cust.hi = 1.6; shiftScore(5, who); posTerm.loyal(cust.member, -2);
+    logAct(`${name}'s hold wasn't set aside. ${Who} found a copy of ${tape.title} on the shelf: awkward, but they got it`, "", null, 5);
+  }
+  custAskDone(cust, "pay");
+  return true;
+}
+function custHoldOut(cust, by = "you") {          // "you said you'd hold it!"
+  const w = cust.want, name = memberName(cust.member), who = by === "dana" ? "dana" : "you";
+  const had = w.hold.copy || w.hold.pulled || onShelfCopy(w.title);
+  shiftScore(had ? -50 : -30, who); posTerm.loyal(cust.member, had ? -12 : -8); cust.c.setMood("angry"); cust.hi = 3;
+  logAct(had ? `Told ${name} their hold for ${w.title.title} wasn't there. There was a copy right there. They were not happy`
+    : `${name} came in for ${w.title.title} on hold, and there wasn't one. “You SAID you'd hold it!”`, "bad", null, had ? -50 : -30);
+  holdEnd(w.hold);
+  custAskDone(cust, Math.random() < 0.6 ? "leave" : null);
+}
 function custAllOut(cust, by = "you") {          // "sorry, all our copies are out"
+  if (cust.want.kind === "hold") return custHoldOut(cust, by);
   const copy = onShelfCopy(cust.want.title), name = memberName(cust.member), who = by === "dana" ? "dana" : "you";
   if (copy) {                                     // ...it was right there
     shiftScore(-30, who); posTerm.loyal(cust.member, -5); cust.c.setMood("meh"); cust.hi = 1.5;
@@ -5031,6 +5075,7 @@ function custAllOut(cust, by = "you") {          // "sorry, all our copies are o
   custAskDone(cust, Math.random() < 0.5 ? "leave" : null);
 }
 function custAskGiveUp(cust) {
+  if (cust.want.kind === "hold") return custHoldOut(cust, "you");   // (standing at the counter that long for a hold: same scene)
   shiftScore(-20); posTerm.loyal(cust.member, -8); cust.c.setMood("meh");
   logAct(`${memberName(cust.member)} gave up waiting for help at the counter`, "bad", null, -20);
   custAskDone(cust);
@@ -5141,6 +5186,11 @@ function custStep(cust, dt) {
     }
     if (cust.tagged && !cust.alarmed && Math.abs(p.x) < 2 && cust.lastZ >= GATE_Z && p.z < GATE_Z) {   // out through the gates with a tagged tape
       cust.alarmed = true; startGateAlarm(); c.setMood("alarm");
+      if (cust.paid && !cust.sneaking) {          // a paying customer: you missed a tag. Back to the counter, not happy about it
+        shiftScore(-25); posTerm.loyal(cust.member, -4); cust.hi = 2.5;
+        logAct(`${memberName(cust.member)} set off the gates: a tag wasn't desensitized. They're coming back to have it fixed`, "bad", null, -25);
+        custGo(cust, "tagBack", TAG_FIX_SPOT);
+      }
     }
     if (!cust.path.length && cust.spot?.ry !== undefined) cust.ry = cust.spot.ry;
   } else {                                        // arrived: do this stop's thing
@@ -5157,18 +5207,7 @@ function custStep(cust, dt) {
         c.setMood("neutral");
         if (cust.moviegoer) { if (!custPickTheaterSeat(cust)) { cust.moviegoer = false; custNextStop(cust); } break; }   // ticket in hand: straight in
         if (cust.prospect) { custLine.push(cust); custToLine(cust); }   // straight to the counter, form in hand
-        else if (cust.pickup) {                   // here for their hold
-          const h = cust.pickup, i = holds.indexOf(h); if (i >= 0) holds.splice(i, 1);
-          if (h.copy) {                           // right there on the shelf: it goes on the counter with them
-            cust.tapes.push(h.copy); cust.holding = 1; c.holdTape(0); holdsRender(); shiftScore(40, h.by); posTerm.loyal(cust.member, 8);
-            logAct(`${memberName(cust.member)} came in for their hold: ${h.copy.title}`, "good", null, 40);
-            custLine.push(cust); custToLine(cust);
-          } else {                                // "you said you'd hold it!"
-            shiftScore(-30); posTerm.loyal(cust.member, -8); c.setMood("angry"); cust.hi = 2.5;
-            logAct(`${memberName(cust.member)} came in for ${h.title.title} on hold, and there wasn't one`, "bad", null, -30);
-            custNextStop(cust);
-          }
-        }
+        else if (cust.pickup) { cust.want = { kind: "hold", title: cust.pickup.title, hold: cust.pickup }; custAskGo(cust); }   // here for their hold: they ask at the counter
         else if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
         else if (custWant(cust)) custAskGo(cust);
         else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
@@ -5176,7 +5215,8 @@ function custStep(cust, dt) {
       } break;
       case "toAsk":                               // at the counter: "excuse me..."
         cust.state = "asking"; cust.t = 75 * P.patience; cust.askAt = clockT; c.setMood("ask"); c.setPose("idle");
-        logAct(cust.want.kind === "title" ? `${memberName(cust.member)} is at the counter looking for ${cust.want.title.title}` : `${memberName(cust.member)} is at the counter wanting ${TASTE_ASK[cust.who.persona.taste.name] || "something good"}`);
+        logAct(cust.want.kind === "hold" ? `${memberName(cust.member)} is at the counter to pick up ${cust.want.title.title}: it's on hold for them`
+          : cust.want.kind === "title" ? `${memberName(cust.member)} is at the counter looking for ${cust.want.title.title}` : `${memberName(cust.member)} is at the counter wanting ${TASTE_ASK[cust.who.persona.taste.name] || "something good"}`);
         break;
       case "asking":
         if (cust.hi <= 0 && c.mood !== "ask") c.setMood("ask");
@@ -5307,6 +5347,12 @@ function custStep(cust, dt) {
       case "wait": if (cust.t <= 0) { dingBell(); empSummon(); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;
       case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
       case "angry": if (cust.t <= 0) { shift.stats.walkouts++; shiftScore(-100); posTerm.loyal(cust.member, -15); logAct(`${memberName(cust.member)} got tired of waiting and walked out`, "bad", null, -100); cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
+      case "tagBack": c.setPose("hold"); c.setMood("impatient"); cust.state = "tagWait"; cust.t = 30 * P.patience; break;   // at the end of the counter, tape held out
+      case "tagWait": if (cust.t <= 0) {          // nobody fixed it: out they go anyway, alarm or no
+        shiftScore(-50); posTerm.loyal(cust.member, -8); c.setMood("angry"); cust.tagged = false;
+        logAct(`${memberName(cust.member)} gave up waiting to have their tag fixed and left`, "bad", null, -50);
+        custGo(cust, "leave", CUST_DOOR);
+      } break;
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
       case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
       case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2); custGone(cust); } return;
@@ -5366,6 +5412,8 @@ function empNext() {                              // processing returns: what's 
   c.reachTo(null);
   c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
   if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", EMP_REWIND);
+  const alerted = emp.carry.find(holdAlertFor);
+  if (alerted) { emp.target = alerted; return empGo("toHolds", { x: HOLDS_AT.x, z: HOLDS_AT.z + 0.6, ry: Math.PI }); }   // flagged on the POS: someone's waiting on this one
   if (emp.carry.length) {                         // nearest slot next: one loop through the floor, not a trip per tape
     const p = c.group.position, d = t => Math.hypot(t.pos.x - p.x, t.pos.z - p.z);
     emp.target = emp.carry.reduce((a, b) => d(b) < d(a) ? b : a);   // ponytail: greedy nearest-neighbor, fine for a handful of tapes
@@ -5387,7 +5435,12 @@ function empToggle() {                            // E on Dana: returns <-> regi
 }
 function empFetch(cust) {                         // off to the shelves for them: the title they asked for, or a pick from their kind of thing
   const w = cust.want, cats = cust.who.persona.taste.cats;
-  let copy = w.kind === "title" ? onShelfCopy(w.title) : null;
+  if (w.kind === "hold" && w.hold.copy) {         // right behind her on the holds shelf
+    const t = w.hold.copy; w.hold.pulled = t; emp.c.reachTo(HOLDS_AT.clone().setY(HOLDS_AT.y + 0.1)); emp.t = 1.2;
+    custHandHold(cust, t, "dana"); return;
+  }
+  let copy = w.kind !== "rec" ? onShelfCopy(w.title) : null;
+  if (w.kind === "hold" && !copy) { custHoldOut(cust, "dana"); emp.t = 1; return; }
   if (w.kind === "title" && !copy) { custAllOut(cust, "dana"); emp.t = 1; return; }   // she checks the screen: all out
   if (!copy) {
     const pool = catalog.filter(t => t.pos && (Math.random() < 0.6 ? cats.includes(t.category) : true)).map(onShelfCopy).filter(Boolean);
@@ -5695,6 +5748,8 @@ function empTick(dt) {
           else { emp.coReached = true; c.reachTo(empCoTarget(s.at), 1, { lean: false }); emp.coT = (s.at === "customer" ? 0.9 : 0.7) * (upg.dana ? 0.7 : 1); }
         }
         if (co?.by === "dana" && !co.cust.c) { co = null; coHud(); drawerOpen = 0; }
+        const tw = !co && emp.t <= 0 && custs.find(k => k.state === "tagWait" && k.t < 30 * k.who.persona.patience - 3);   // (a few seconds: yours if you want it)
+        if (tw) { tagFix(tw, "dana"); c.reachTo(new THREE.Vector3(TAG_FIX_SPOT.x, 1.0, TAG_FIX_SPOT.z - 0.4)); emp.t = 0.8; }
         if (gateAlarm.on) { if ((emp.alarmT += dt) > 4) { emp.alarmT = 0; silenceGateAlarm(); logAct("Dana shut off the gate alarm"); } } else emp.alarmT = 0;   // a few seconds' grace: yours if you want it
         if (emp.t <= 0 && co?.by !== "dana") c.reachTo(null);
         if (emp.t <= 0 && !co && c.mood === "happy" && !custWaiting()) { c.setPose("idle"); c.setMood("neutral"); }
@@ -5835,6 +5890,15 @@ function empTick(dt) {
         c.reachTo(null); c.setPose("hold");        // waiting on the machines
         break;
       }
+      case "toHolds": c.reachTo(HOLDS_AT.clone().setY(HOLDS_AT.y + 0.1)); emp.state = "holdPut"; emp.t = 0.9; break;
+      case "holdPut": if (emp.t <= 0) {
+        const t = emp.target, h = holdAlertFor(t);   // (still wanted? they may have come and gone while she walked over)
+        if (h) {
+          emp.carry.splice(emp.carry.indexOf(t), 1); t.fromReturns = t.strayFix = false; h.copy = t; holdsRender(); shiftScore(15, "dana");
+          logAct(`Dana spotted the alert and put ${t.title} on the holds shelf for ${memberName(h.member)}`, "good", null, 15);
+        }
+        empNext();
+      } break;
       case "toShelf": c.reachTo(emp.target.pos); emp.state = "shelve"; emp.t = 0.9; break;   // into its own slot
       case "shelve": if (emp.t <= 0) {            // back in its slot, tag re-armed
         const t = emp.target; emp.carry.splice(emp.carry.indexOf(t), 1); t.desens = false; t.fromReturns = false; setOnShelf(t, true);
@@ -5984,7 +6048,7 @@ function coOffer() {                             // "grab a snack for the movie?
   coHud();
 }
 function coQ() {                                 // Q at the counter: waive their late fees, or offer a snack
-  if (aimCustomer?.state === "asking" && aimCustomer.want.kind === "title") return custAllOut(aimCustomer);   // (or: sorry, it's all out)
+  if (aimCustomer?.state === "asking" && aimCustomer.want.kind !== "rec") return custAllOut(aimCustomer);   // (or: sorry, it's all out)
   if (co?.by !== "player" || aimCustomer !== co.cust) return;
   if (coStep()?.id === "fees") { coFees(false); co.i++; coSkip(); coHud(); }
   else coOffer();
@@ -6144,8 +6208,10 @@ function posBeep(f) {
 }
 function custTip(k) {                           // what E (and Q) do to this customer right now
   if (catchCall === k) return "Caught · 1–5 to decide";
+  if (k.state === "tagWait") return "Their tape set off the gates<br>E — desensitize it";
   if (k.state === "asking") {
     const w = k.want, give = held ? `<br>E — hand them ${held.title}` : "";
+    if (w.kind === "hold") return `Here to pick up <b>${w.title.title}</b> (on hold)${give || "<br>Get it from the holds shelf"}<br>Q — tell them it's not here`;
     return w.kind === "title" ? `Looking for <b>${w.title.title}</b> (${w.title.category})${give}<br>Q — tell them it's all out`
       : `Wants ${TASTE_ASK[k.who.persona.taste.name] || "something good"}${give || "<br>Bring them a tape"}`;
   }
@@ -6277,7 +6343,8 @@ function pickHover() {
     else if (aimBoard) tip.innerHTML = `E — Dana's job board<div class="cat">${emp.c ? `Now: ${JOBS[danaJobNow()]?.name.toLowerCase() || "free"}` : "no Dana yet"}</div>`;
     else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
-      tip.innerHTML = h ? `E — put ${held.title} on hold for ${memberName(h.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${h.title.title} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
+      const ask = !held && custAsks.find(k => k.state === "asking" && k.want.kind === "hold" && k.want.hold.copy);
+      tip.innerHTML = h ? `E — put ${held.title} on hold for ${memberName(h.member)}` : ask ? `E — take down ${ask.want.title.title} for ${memberName(ask.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${h.title.title} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
     else if (aimMess) tip.innerHTML = `E — clean up the ${MESS[aimMess.kind].label}`;
     else if (aimPrinter) tip.innerHTML = co?.by === "player" && coStep()?.id === "tear" ? (printer.job?.done ? "E — tear off the receipt" : "Printing…") : "Receipt printer";
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
@@ -6514,6 +6581,7 @@ function amenities() {
     hall.locked = !open;
     if (!open) colliders.push(hall.shut); else { const i = colliders.indexOf(hall.shut); if (i >= 0) colliders.splice(i, 1); }
     custSpots = custSnackSpots = null;           // the lobby's reachable (or not) now
+    for (const z of ["lobby", "theater"]) if (zoneOn[z] !== open) setZone(z, open);   // dark through the porthole till it opens
   }
   if (!open && !theaterSign && hall) {           // chained shut, a sign on both faces
     theaterSign = new THREE.Group(); scene.add(theaterSign);
@@ -6559,7 +6627,8 @@ function libUnlock(tier) {                       // -> tapes put out
 // someone's waiting at the counter and they notice. Dana takes calls too, but
 // only when nobody in the store needs her
 const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null };   // next: the game hour of the next call
-const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by }
+const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by, alert }
+const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === titleOfCopy(copy));   // a POS alert on a promised hold: the next return of it goes on the holds shelf
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
 let ringAc = null;
 function ringBurst() {                            // a desk-set ringer: a clapper buzzing between two small gongs ~20 times a second for 2 s
@@ -6634,6 +6703,12 @@ function callHud() {
   el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${c.title.title}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
     `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
   el.style.display = "block";
+}
+function holdPull() {                            // E on the holds shelf, hands free: take down the one someone's at the counter for
+  const k = custAsks.find(k => k.state === "asking" && k.want.kind === "hold" && k.want.hold.copy);
+  const h = k?.want.hold; if (!h) { toast("Those are for customers who come in for them"); return; }
+  if (!invMakeRoom()) { toast("Hands full"); return; }
+  const t = h.copy; h.copy = null; h.pulled = t; holdsRender(); showTape(t);
 }
 function holdPlace(tape) {                        // E on the holds shelf with a tape in hand
   const h = holds.find(h => !h.copy && titleOfCopy(tape) === h.title);
@@ -6878,6 +6953,7 @@ function releaseFromHand() {                 // clears the hand WITHOUT touching
   held = null; inspecting = false; handGroup.visible = false; $("holdingTag").style.display = "none";
 }
 function pickup(tape) {                      // from a shelf slot OR out of the returns bin — either way, into your hand
+  const h = tape.fromReturns && holdAlertFor(tape); if (h) toast(`ALERT: ${memberName(h.member)} is waiting on this one: holds shelf`);
   setOnShelf(tape, false);                   // gone from the shelf while it's in your hand
   showTape(tape); inspecting = true;
 }
@@ -6910,7 +6986,7 @@ function putBack() {                         // back into its own shelf slot (ai
 }
 
 // ---------------- the store TV (plays archive.org streams) ----------------
-const video = $("vid");
+const video = $("vid"); video.volume = tvSet.volume / 100;
 const metaCache = {};
 const encodePath = p => (p && typeof p === 'string') ? p.split("/").map(encodeURIComponent).join("/") : p;     // same as VaultVision's viewer
 function pickFile(meta, hint) {
@@ -7019,6 +7095,7 @@ function onE() {
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
   if (aimHolds && held && !inspecting) { holdPlace(held); return; }
+  if (aimHolds && !held) { holdPull(); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
   if (aimEmp) { empToggle(); return; }
@@ -7188,6 +7265,8 @@ const posTerm = window.createPOS({
     .sort((a, b) => (window.VAULT_META?.[b.id]?.[1] || 0) - (window.VAULT_META?.[a.id]?.[1] || 0)).slice(0, 15),
   setFeature: t => showSet(t),
   returnBin: () => returnBin, held: () => held, playing: () => playing,
+  requests: t => holds.filter(h => !h.copy && h.title === t).map(h => ({ name: memberName(h.member), at: fmtClock(h.at), alert: !!h.alert })),
+  setAlert: (t, on) => { for (const h of holds) if (!h.copy && h.title === t) h.alert = on; },
   alarm: () => gateAlarm.on, silenceAlarm: silenceGateAlarm, resetSave: () => resetSave(),
   gatesArmed: () => gateAlarm.armed, armGates,
   onRedraw(c) {
@@ -7294,7 +7373,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
-    phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by })),
+    phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     jobs: jobs.map(j => ({ id: j.id, pri: j.pri })), rep: rep.v, upg, members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
@@ -7358,7 +7437,7 @@ function loadState(S) {
     upgVisuals();
     for (const h of S.holds || []) {             // promised holds (and what's on the shelf for them)
       const m = posTerm.members.find(m => m.num === h.member), t = copyByKey(h.title), c = h.copy && copyByKey(h.copy);
-      if (m && t) { if (c) setOnShelf(c, false); holds.push({ member: m, title: t, at: h.at, day: h.day, copy: c || null, by: h.by }); }
+      if (m && t) { if (c) setOnShelf(c, false); holds.push({ member: m, title: t, at: h.at, day: h.day, copy: c || null, by: h.by, alert: h.alert }); }
     }
     holdsRender();
     for (const [k, at] of S.strays || []) { const c = copyByKey(k), a = copyByKey(at); if (c && a?.pos) { setOnShelf(c, false); misshelve(c, null, a); } }
@@ -7617,5 +7696,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  holdPull, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
