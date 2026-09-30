@@ -1668,6 +1668,7 @@ let posScreen;                                // the register monitor's glass (p
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
 const rewinders = [];
 let phoneLook = () => {};                    // (set when the phone is built)
+let popcornMachine = null, theaterSign = null, jobBoardMesh = null;   // (simulation: bought later — see amenities)
 const PHONE_AT = new THREE.Vector3(), HOLDS_AT = new THREE.Vector3();   // the desk phone / the holds tray, on the back cabinet (set when it's built)
 const PRN_AT = { x: -4.45, z: 3.93 };           // the receipt printer's paper slot
 const printer = { strip: null, tex: null, job: null };   // the receipt feeding out of it (see printReceipt)
@@ -2028,6 +2029,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
       ["#ffd6d6", "#d6f0ff", "#e3ffd6", "#fff0c8", "#f0d6ff", "#d6fff4"].forEach((c, i) => { g.fillStyle = c; g.fillRect(w * (0.08 + (i % 3) * 0.29), h * (0.4 + Math.floor(i / 3) * 0.28), w * 0.25, h * 0.22); });
     }, 256, 170) }), 0, 0.2, 0.012, jb);
     for (const m of [frame, cork]) { m.userData.jobBoard = true; aimables.push(m); }
+    jobBoardMesh = { g: jb, parts: [frame, cork] };   // (simulation: it goes up once Dana's hired — see amenities)
   }
 
   const kind = textPlane("BE KIND, REWIND", 1.6, 0.55); kind.position.set(0, 3.1, 0.16);
@@ -2196,7 +2198,6 @@ function brandTex(slot, w, h, draw) {
   return makeTexture(draw, Math.round(w * k), Math.round(h * k));
 }
 let coolerDoor = null, coolerOpen = false, coolerThermo = null;
-let popcornMachine = null, theaterSign = null;   // (simulation: bought later — see amenities)
 let popcornKit = null;                       // cup geometry/material + popcorn texture, reused for the box in your hand
 let buildSnackRack = null;                   // (width, header) -> a stocked snack rack group; set in the snack center
 {
@@ -6361,7 +6362,8 @@ function pickHover() {
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("mousedown", e => {
   if (document.pointerLockElement !== canvas) return;
-  if (e.button === 2) {                                    // right click puts down whatever's in hand
+  if (e.button === 2) {                                    // right click puts down whatever's in hand (and backs out of things, like Escape)
+    if (board.open) { boardClose(); return; }             // Dana's job board
     if (tvMenu) { tvMenu = false; return; }                // an open picture menu closes from anywhere...
     if (tvScreenHit()) { tvMenu = true; return; }          // ...but only opens with the crosshair on the screen
     if (held && held === peek) {                           // only still-being-looked-at tapes go back
@@ -6577,6 +6579,13 @@ function custWarmDrink(cust, u) {
 
 // ---------------- the build-up (simulation): what the store has so far ----------------
 function amenities() {
+  if (jobBoardMesh) {                              // Dana's job board: only once there's a Dana
+    const on = owned("hireDana");
+    if (jobBoardMesh.g.visible !== on) {
+      jobBoardMesh.g.visible = on;
+      for (const m of jobBoardMesh.parts) { const i = aimables.indexOf(m); if (on && i < 0) aimables.push(m); if (!on && i >= 0) aimables.splice(i, 1); }
+    }
+  }
   const hall = doors.find(d => d.push && !d.alongX);   // the hall -> lobby door: the theater's way in
   const open = owned("theater");
   if (hall && hall.locked !== !open) {
@@ -7285,6 +7294,10 @@ const posTerm = window.createPOS({
   },
 });
 posTerm.idle();
+// right-click backs out of the register just like Escape (a screen back, or log off from the main menu);
+// being a click, closing it takes the mouse straight back instead of waiting for the next input
+$("posTerm").addEventListener("contextmenu", e => e.preventDefault());
+$("posTerm").addEventListener("mousedown", e => { if (e.button !== 2 || !posTerm.isOpen()) return; e.preventDefault(); posEsc = false; posTerm.key({ key: "Escape", preventDefault() {} }); });
 function openPOS() {
   keys.clear(); $("hoverTip").style.display = "none";
   posTerm.open();
@@ -7705,5 +7718,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  holdPull, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  holdPull, jobBoardMesh: () => jobBoardMesh, aimables, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
