@@ -1670,7 +1670,7 @@ const rewinders = [];
 let phoneLook = () => {};                    // (set when the phone is built)
 let popcornMachine = null, theaterSign = null, jobBoardMesh = null;   // (simulation: bought later — see amenities)
 const PHONE_AT = new THREE.Vector3(), HOLDS_AT = new THREE.Vector3();   // the desk phone / the holds tray, on the back cabinet (set when it's built)
-const PRN_AT = { x: -4.45, z: 3.93 };           // the receipt printer's paper slot
+const PRN_AT = { x: -4.62, z: 3.93 };           // the receipt printer's paper slot
 const printer = { strip: null, tex: null, job: null };   // the receipt feeding out of it (see printReceipt)
 const DESENS_AT = { x: -4.95, z: 3.92 };       // the desensitizer pad, beside the register
 let gateLed;                                  // the security gates' status LED material
@@ -1819,23 +1819,47 @@ const GATE_Z = 4.0;                           // security gate line across the e
   }
   // tape rewinders: the classic little sports-car shaped ones, a pair on the
   // lane counter either side of the returns tote (placed below, once RZ is
-  // known). Each faces the employee side; a loaded tape rides in its open roof
+  // known). Each is a little convertible facing the employee side; a loaded tape rides in its open cockpit
   function buildRewinder(x, z, ry) {
     const rw = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null };
     const g = new THREE.Group(); g.position.set(x, TOP, z); g.rotation.y = ry; scene.add(g);
     const red = new THREE.MeshPhongMaterial({ color: 0xc41e1e, specular: 0xffffff, shininess: 80 });
     const blackP = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
     const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
-    add(new THREE.BoxGeometry(0.34, 0.06, 0.15), red, 0, 0.04, 0);                          // body
-    const nose = add(new THREE.BoxGeometry(0.1, 0.04, 0.15), red, 0.19, 0.03, 0); nose.rotation.z = -0.35;   // sloped hood
-    add(new THREE.BoxGeometry(0.22, 0.035, 0.14), blackP, -0.02, 0.085, 0);                 // tinted "cabin" = the lid, open at the roof
-    for (const x of [-0.11, 0.12]) for (const z of [-0.075, 0.075]) {
-      const w = add(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16), blackP, x, 0.03, z); w.rotation.x = Math.PI / 2;
+    const W = 0.17, A = 0.036;                  // body width; wheel-arch radius
+    // side profile (+x = nose), extruded across the width with rounded edges; the dip is the open cockpit
+    const p = new THREE.Shape();
+    p.moveTo(-0.22, 0.014); p.lineTo(-0.14 - A, 0.014); p.lineTo(-0.14 - A, 0.028);
+    p.absarc(-0.14, 0.028, A, Math.PI, 0, true); p.lineTo(-0.14 + A, 0.014);
+    p.lineTo(0.15 - A, 0.014); p.lineTo(0.15 - A, 0.028);
+    p.absarc(0.15, 0.028, A, Math.PI, 0, true); p.lineTo(0.15 + A, 0.014);
+    p.lineTo(0.235, 0.018); p.lineTo(0.245, 0.036);
+    p.quadraticCurveTo(0.235, 0.058, 0.17, 0.066); p.lineTo(0.085, 0.072);       // long hood up to the cowl
+    p.lineTo(0.085, 0.048); p.lineTo(-0.125, 0.048); p.lineTo(-0.125, 0.076);    // cockpit
+    p.lineTo(-0.19, 0.078); p.quadraticCurveTo(-0.222, 0.076, -0.225, 0.05); p.lineTo(-0.22, 0.014);   // rear deck, tail
+    const bodyGeo = new THREE.ExtrudeGeometry(p, { depth: W - 0.012, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 3, curveSegments: 12 });
+    bodyGeo.translate(0, 0, -(W - 0.012) / 2);
+    add(bodyGeo, red, 0, 0, 0);
+    for (const z of [-1, 1]) add(new THREE.BoxGeometry(0.21, 0.026, 0.012), red, -0.02, 0.061, z * (W / 2 - 0.006));   // door tops, closing the cockpit sides
+    add(new THREE.BoxGeometry(0.21, 0.004, W - 0.024), blackP, -0.02, 0.057, 0);             // cockpit floor (over the bevel)
+    const lean = 0.55, glass = add(new THREE.BoxGeometry(0.003, 0.05, W - 0.02),
+      new THREE.MeshPhongMaterial({ color: 0x9fc6de, transparent: true, opacity: 0.35, specular: 0xffffff, shininess: 100 }),
+      0.085 - 0.025 * Math.sin(lean), 0.074 + 0.025 * Math.cos(lean), 0);
+    glass.rotation.z = lean;                                                                  // raked windshield
+    const top = add(new THREE.BoxGeometry(0.006, 0.006, W - 0.014), chromeC, 0.085 - 0.05 * Math.sin(lean), 0.074 + 0.05 * Math.cos(lean), 0);
+    top.rotation.z = lean;                                                                    // its chrome header
+    for (const x of [0.25, -0.228]) add(new THREE.BoxGeometry(0.01, 0.012, W - 0.02), chromeC, x, 0.022, 0);   // bumpers
+    for (const x of [-0.14, 0.15]) for (const z of [-1, 1]) {
+      const w = add(new THREE.CylinderGeometry(0.028, 0.028, 0.022, 20), blackP, x, 0.028, z * (W / 2 - 0.008)); w.rotation.x = Math.PI / 2;
+      const hub = add(new THREE.CylinderGeometry(0.014, 0.014, 0.004, 16), chromeC, x, 0.028, z * (W / 2 + 0.004)); hub.rotation.x = Math.PI / 2;
     }
-    for (const z of [-0.045, 0.045]) add(new THREE.BoxGeometry(0.01, 0.015, 0.03), new THREE.MeshBasicMaterial({ color: 0xfff6c8 }), 0.235, 0.045, z);   // headlights
-    rw.led = glow(add(new THREE.BoxGeometry(0.012, 0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x222222 }), -0.02, 0.06, 0.077));   // status LED on the side
-    rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.1 + TAPE.w / 2, 0);   // lies flat in the roof
-    rw.tapeMesh.rotation.y = Math.PI / 2; rw.tapeMesh.visible = false;
+    for (const z of [-0.05, 0.05]) {
+      add(new THREE.BoxGeometry(0.008, 0.012, 0.028), new THREE.MeshBasicMaterial({ color: 0xfff6c8 }), 0.243, 0.042, z);   // headlights
+      glow(add(new THREE.BoxGeometry(0.006, 0.01, 0.03), new THREE.MeshBasicMaterial({ color: 0xff2a2a }), -0.226, 0.058, z));   // taillights
+    }
+    rw.led = glow(add(new THREE.BoxGeometry(0.012, 0.012, 0.004), new THREE.MeshBasicMaterial({ color: 0x222222 }), 0.03, 0.04, W / 2 + 0.002));   // status LED on the side
+    rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.059 + TAPE.w / 2, 0);   // lies lengthwise in the cockpit
+    rw.tapeMesh.visible = false;
     g.traverse(o => { if (o.isMesh) { o.userData.rewinder = rw; aimables.push(o); } });
     rewinders.push(rw);
   }
@@ -1902,13 +1926,27 @@ const GATE_Z = 4.0;                           // security gate line across the e
   const put = (geo, m, x, y, z, parent = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
   const beigeP = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), blackC = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
   // receipt printer beside the register
-  const PRN = PRN_AT.x;                       // the receipt printer: past the desensitizer, where the rewinder used to sit
-  const prnBody = put(new THREE.BoxGeometry(0.16, 0.12, 0.2), beigeP, PRN, TOP + 0.06, 3.98);
-  prnBody.userData.printer = true; aimables.push(prnBody);
-  put(new THREE.BoxGeometry(0.1, 0.006, 0.05), blackC, PRN, TOP + 0.123, 3.93);
-  // a sale's receipt feeds up out of the slot toward the clerk, top of the slip first
-  const strip = printer.strip = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 1).translate(0, 0.5, 0), new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
-  strip.position.set(PRN, TOP + 0.124, PRN_AT.z); strip.rotation.set(-0.2, Math.PI, 0); strip.visible = false;
+  // a squat charcoal thermal printer: paper roll under a rounded clamshell at the back, the slot and
+  // tear bar at the seam, a front deck (clerk side, -z) with the feed button and power LED
+  const PRN = PRN_AT.x;                       // the receipt printer: past the desensitizer, toward the register
+  const prnG = new THREE.Group(); prnG.position.set(PRN, TOP, PRN_AT.z + 0.028); scene.add(prnG);
+  const prnC = new THREE.MeshPhongMaterial({ color: 0x2b2d31, specular: 0x333333, shininess: 30 }), prnLid = new THREE.MeshPhongMaterial({ color: 0x3a3d42, specular: 0x555555, shininess: 50 });
+  put(new THREE.BoxGeometry(0.15, 0.06, 0.2), prnC, 0, 0.03, 0, prnG);                                        // base
+  const lid = put(new THREE.CylinderGeometry(0.058, 0.058, 0.148, 24), prnLid, 0, 0.062, 0.035, prnG); lid.rotation.z = Math.PI / 2;   // roll cover
+  put(new THREE.BoxGeometry(0.15, 0.032, 0.075), prnC, 0, 0.074, -0.0625, prnG);                              // front deck
+  put(new THREE.BoxGeometry(0.1, 0.004, 0.01), blackC, 0, 0.091, -0.028, prnG);                               // paper slot
+  put(new THREE.BoxGeometry(0.11, 0.006, 0.004), chromeC, 0, 0.094, -0.035, prnG);                            // tear bar
+  put(new THREE.BoxGeometry(0.07, 0.012, 0.002), new THREE.MeshLambertMaterial({ color: 0xf3efe2 }), 0, 0.098, -0.031, prnG);   // a tail of paper, always showing
+  put(new THREE.BoxGeometry(0.03, 0.008, 0.016), new THREE.MeshLambertMaterial({ color: 0x9a9ea4 }), 0.035, 0.093, -0.075, prnG);   // FEED button
+  glow(put(new THREE.BoxGeometry(0.008, 0.004, 0.008), new THREE.MeshBasicMaterial({ color: 0x40ff70 }), -0.05, 0.091, -0.08, prnG));   // power LED
+  prnG.traverse(o => { if (o.isMesh) { o.userData.printer = true; aimables.push(o); } });
+  // a sale's receipt feeds up out of the slot toward the clerk, top of the slip first, curling
+  // over as it comes (the curl is in z, so scaling z with the length keeps it in proportion)
+  const stripG = new THREE.PlaneGeometry(0.07, 1, 1, 16).translate(0, 0.5, 0), sp = stripG.attributes.position;
+  for (let i = 0; i < sp.count; i++) sp.setZ(i, 0.16 * sp.getY(i) ** 2);
+  stripG.computeVertexNormals();
+  const strip = printer.strip = new THREE.Mesh(stripG, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, alphaTest: 0.5 }));
+  strip.position.set(PRN, TOP + 0.098, PRN_AT.z); strip.rotation.set(-0.2, Math.PI, 0); strip.visible = false;
   strip.userData.printer = true; scene.add(strip); aimables.push(strip);
   // security-tag deactivator pad (the "desensitizer"): tapes run across it before they leave
   const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, DESENS_AT.x, TOP + 0.0125, DESENS_AT.z);   // right beside the register
@@ -1987,11 +2025,12 @@ const GATE_Z = 4.0;                           // security gate line across the e
     keyLbl.rotation.x = -Math.PI / 2;
     for (const x of [-0.085, 0.085]) put(new THREE.BoxGeometry(0.04, 0.02, 0.05), beigeP, x, 0.008, -0.055, top);   // cradle horns
     put(new THREE.BoxGeometry(0.008, 0.006, 0.012), blackC, 0.085, 0.02, -0.055, top);                     // hookswitch plunger
-    const handset = new THREE.Group(); handset.position.set(0, 0.038, -0.055); top.add(handset);
-    const grip = put(new THREE.CylinderGeometry(0.012, 0.012, 0.15, 12), beigeP, 0, 0.012, 0, handset); grip.rotation.z = Math.PI / 2; grip.scale.set(1, 1, 1.5);
-    for (const x of [-0.088, 0.088]) {                // earpiece / mouthpiece cups, face down in the cradle
-      put(new THREE.CylinderGeometry(0.024, 0.02, 0.028, 16), beigeP, x, 0, 0, handset);
-      put(new THREE.CylinderGeometry(0.014, 0.014, 0.002, 12), blackC, x, -0.0145, 0, handset);
+    const handset = new THREE.Group(); handset.position.set(0, 0.044, -0.055); top.add(handset);
+    const grip = put(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 12), beigeP, 0, 0.012, 0, handset); grip.rotation.z = Math.PI / 2; grip.scale.set(1, 1, 1.5);
+    for (const x of [-0.09, 0.09]) {                  // earpiece / mouthpiece cups, flared, face down in the cradle
+      put(new THREE.CylinderGeometry(0.022, 0.034, 0.036, 24), beigeP, x, -0.004, 0, handset);
+      put(new THREE.TorusGeometry(0.03, 0.003, 8, 24).rotateX(Math.PI / 2), beigeP, x, -0.022, 0, handset);   // rolled rim
+      put(new THREE.CylinderGeometry(0.027, 0.027, 0.002, 24), blackC, x, -0.0225, 0, handset);                // grille
     }
     const lampOff = new THREE.MeshLambertMaterial({ color: 0xcfd6d8 }), lampLit = new THREE.MeshBasicMaterial({ color: 0xffb040 });
     const lamps = [];                                 // line buttons: clear plastic, lit from behind
@@ -4359,6 +4398,23 @@ function stoolTick(dt) {
   }
   stool.top.rotation.y = stool.angle;             // (Dana scoots it round by hand, too)
 }
+// dizzy: a hard spin on the stool builds it up (a nudge doesn't); once the spinning
+// eases off the room keeps drifting the other way, the view sways and blurs, and
+// walking forward pulls you off to one side or the other. Wears off over ~20 s
+const dizzy = { v: 0, t: 0, blur: "", said: false, ph: 0 };
+function dizzyTick(dt) {
+  if (onStool && stool.vel > 5) dizzy.v = Math.min(1, dizzy.v + dt * stool.vel / STOOL.MAX / 8);   // ~8 s flat out to max
+  else dizzy.v = Math.max(0, dizzy.v - dt / 20);
+  const k = Math.max(0, (dizzy.v - 0.3) / 0.7);   // the first few seconds of spinning are free
+  dizzy.t += dt;
+  if (k && !(onStool && stool.vel > 2)) player.yaw -= k * 0.7 * dt * (1 + 0.4 * Math.sin(dizzy.t * 0.9));   // the room keeps going round the other way
+  if (k > 0.5 && !dizzy.said) { dizzy.said = true; toast("Whoa... the room's still spinning", true); }
+  if (!k) { dizzy.said = false; dizzy.ph = Math.random() * Math.PI * 2; }   // next time it may pull the other way first
+  if (k && !onStool && !seated && (keys.has("KeyW") || keys.has("ArrowUp"))) player.yaw += k * 1.3 * dt * Math.sin(dizzy.t * 0.7 + dizzy.ph);   // walking: pulled left, then right...
+  const blur = k > 0.05 ? `blur(${(k * 2.5).toFixed(1)}px)` : "";
+  if (blur !== dizzy.blur) canvas.style.filter = dizzy.blur = blur;
+  return k;
+}
 const keys = new Set();
 const HOLD_MS = 450;                       // hold E on the standee to lift it
 let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
@@ -5688,6 +5744,11 @@ function empTick(dt) {
   if (!emp.c) { if (window.VaultCustomers && posTerm && owned("hireDana")) empSpawn(); else return; }   // (simulation: once she's hired)
   const c = emp.c, p = c.group.position;
   if (jobs.length) danaPreempt();
+  // she gets dizzy too: same build-up as yours (twice as fast, so one big bored spin can do it), and it staggers her walk
+  emp.dizzy = stool.by === "dana" && emp.state === "stoolSit" && stool.vel > 5 ? Math.min(1, (emp.dizzy || 0) + dt * stool.vel / STOOL.MAX / 4) : Math.max(0, (emp.dizzy || 0) - dt / 20);
+  const dk = Math.max(0, (emp.dizzy - 0.3) / 0.7);
+  if (dk > 0.3 && !emp.dizzySaid) { emp.dizzySaid = true; logAct("Dana spun herself dizzy"); }
+  if (!dk) emp.dizzySaid = false;
   if (gateAlarm.on && gateAlarm.t > 5 && emp.task === "returns" && !emp.paused) {   // you've let it ring: she drops the returns and goes to shut it off
     empSummon(); logAct("Dana's leaving the returns to shut off the gate alarm");
   }
@@ -5697,8 +5758,9 @@ function empTick(dt) {
     if (d < 0.05) emp.path.shift();
     else if (yieldTo(emp, p, dx, dz, dt, av => empGo(emp.state, emp.spot, av))) {}
     else {
-      speed = upg.dana ? 1.8 : 1.45;
-      const step = Math.min(d, speed * dt); p.x += dx / d * step; p.z += dz / d * step;
+      speed = (upg.dana ? 1.8 : 1.45) * (1 - 0.45 * dk);
+      const step = Math.min(d, speed * dt), sw = dk * 0.2 * Math.cos(clockT * 1.7) * dt;   // sw: weaving side to side (it evens out)
+      p.x += dx / d * step + dz / d * sw; p.z += dz / d * step - dx / d * sw;
       emp.ry = Math.atan2(dx, dz);
       if ((emp.stepD = (emp.stepD || 0) + step) > 0.72) { emp.stepD = 0; ambStep(p.x, p.z, 1); }
     }
@@ -5922,7 +5984,8 @@ function empTick(dt) {
   if (!flapOpen && fd < 1.2 && goal && (p.z - fz) * (goal[1] - fz) < 0) { toggleFlap(); emp.openedFlap = true; }
   else if (emp.openedFlap && flapOpen && fd > 1.4 && !(goal && (p.z - fz) * (goal[1] - fz) < 0)) { toggleFlap(); if (!flapOpen) emp.openedFlap = false; }   // through and clear (her post is ~1.6 m off)
   emp.face += Math.atan2(Math.sin(emp.ry - emp.face), Math.cos(emp.ry - emp.face)) * Math.min(1, dt * 8);
-  c.group.rotation.y = emp.face;
+  c.group.rotation.y = emp.face + dk * 0.35 * Math.sin(clockT * 2.3);
+  c.group.rotation.z = dk * 0.12 * Math.sin(clockT * 1.7);   // swaying on her feet
   const er = emp.squeeze > 0 ? 0 : 0.22;
   Object.assign(emp.box, { x0: p.x - er, x1: p.x + er, z0: p.z - er, z1: p.z + er });
   c.tick(dt, speed);
@@ -6060,7 +6123,10 @@ function coQ() {                                 // Q at the counter: waive thei
 function printReceipt() {
   const W = 128, H = 460, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
   const g = cv.getContext("2d"), d = shiftDate(), p2 = n => String(n).padStart(2, "0");
-  g.fillStyle = "#f7f5ee"; g.fillRect(0, 0, W, H); g.fillStyle = "#2a2a30"; g.textBaseline = "top";
+  g.fillStyle = "#f4f1e6"; g.beginPath(); g.moveTo(0, 4);                  // thermal paper, torn zigzag at both ends
+  for (let x = 0; x <= W; x += 8) g.lineTo(x, x % 16 ? 0 : 4);
+  for (let x = W; x >= 0; x -= 8) g.lineTo(x, H - (x % 16 ? 0 : 4));
+  g.fill(); g.fillStyle = "#2a2a30"; g.textBaseline = "top";
   let y = 12;
   const ln = (t, x = 6, px = 10, bold = false, align = "left") => { g.font = `${bold ? "bold " : ""}${px}px "Courier New", monospace`; g.textAlign = align; g.fillText(t, align === "center" ? W / 2 : x, y); y += px + 3; };
   const lr = (a, b) => { g.font = `10px "Courier New", monospace`; g.textAlign = "left"; g.fillText(a.slice(0, 13), 6, y); g.textAlign = "right"; g.fillText(b, W - 6, y); y += 13; };
@@ -6082,7 +6148,7 @@ function printReceipt() {
   printer.tex?.dispose();
   const tex = printer.tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
   printer.strip.material.map = tex; printer.strip.material.needsUpdate = true;
-  printer.strip.visible = true; printer.strip.scale.y = 0.001;
+  printer.strip.visible = true; printer.strip.scale.y = printer.strip.scale.z = 0.001;
   printer.job = { t: 0, dur: 0.9, len: 0.25, done: false };
   printBuzz(0.9);
 }
@@ -6090,7 +6156,7 @@ function printerTick(dt) {                       // the slip feeds out; a sale t
   if (printer.strip.visible && !co) { printer.strip.visible = false; printer.job = null; }
   const j = printer.job; if (!j || j.done) return;
   j.t += dt; const f = Math.min(1, j.t / j.dur);
-  printer.strip.scale.y = Math.max(0.001, j.len * f);
+  printer.strip.scale.y = printer.strip.scale.z = Math.max(0.001, j.len * f);
   printer.tex.repeat.set(1, f); printer.tex.offset.set(0, 1 - f);   // only the top of the slip is out so far
   if (f >= 1) { j.done = true; coHud(); }
 }
@@ -6181,7 +6247,7 @@ function coHandShow() {
   if (want === "cash" || want === "change") card(coHandMats.cash, 0.156, 0.066);
   if (want === "form") card(coHandMats.form, 0.15, 0.21);
   if (want === "newcard") card(coHandMats.card, 0.086, 0.054);
-  if (want === "receipt" && printer.tex) { const o = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.25), new THREE.MeshBasicMaterial({ map: printer.tex, side: THREE.DoubleSide })); o.rotation.set(-0.35, 0.3, 0); o.position.y = 0.04; coHand.add(o); }
+  if (want === "receipt" && printer.tex) { const o = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.25), new THREE.MeshBasicMaterial({ map: printer.tex, side: THREE.DoubleSide, alphaTest: 0.5 })); o.rotation.set(-0.35, 0.3, 0); o.position.y = 0.04; coHand.add(o); }
   if (want === "tapes") co.cust.tapes.forEach((t, i) => {             // fanned out a little, covers toward you
     const g = new THREE.Group(); g.position.set(-0.05 + i * 0.045, i * 0.01, -0.03 - i * 0.012); g.rotation.set(-0.15, Math.PI / 2 + 0.35 - i * 0.12, 0.08 * i); coHand.add(g);   // cover toward you, fanned
     g.add(new THREE.Mesh(new THREE.BoxGeometry(TAPE.w, TAPE.h, TAPE.d), t.sideMat || mat.tapeBody));
@@ -6971,6 +7037,7 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
 function showTape(tape) {                    // the tape in your hand (fresh pickup, or back out of the inventory)
   held = tape; inspecting = false;
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tapeName(tape);
+  $("inspectTitle").textContent = tapeName(tape); $("inspectSec").textContent = tape.newRelease ? `New Releases · ${tape.category}` : tape.category;   // where it goes back
   // embedded shelf art shows instantly; the full-res TMDB version swaps in once
   // it loads (a plain <img> can load cross-origin even from file://). Offline
   // it just stays on the embedded one.
@@ -7678,7 +7745,9 @@ renderer.setAnimationLoop(() => {
     camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 10);
     camera.updateProjectionMatrix();
   }
-  camera.rotation.y = player.yaw; camera.rotation.x = player.pitch;
+  const dk = dizzyTick(dt);
+  camera.rotation.y = player.yaw; camera.rotation.x = player.pitch + dk * 0.04 * Math.sin(dizzy.t * 2.1);
+  camera.rotation.z = dk * 0.09 * Math.sin(dizzy.t * 1.3);   // the world tipping side to side
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
