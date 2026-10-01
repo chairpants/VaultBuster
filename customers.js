@@ -21,6 +21,7 @@
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
 //     holdProp(name),     "card" / "cash" / "receipt" / "form" in the other hand, or null
+//     setPantsDown(bool), for sitting on the toilet: bare legs, pants round the ankles
 //     holdItem(obj|null), something real in the other hand (a snack off the rack), sized to the world; null empties it
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
 //     talk(bool),         conversational head motion
@@ -262,17 +263,19 @@ window.VaultCustomers = (() => {
 
     const collarM = o.top === "uniform" ? solid(o.topB) : sleeveM, sole = solid(o.shoes === "#eeeeee" ? "#d9d4c8" : "#f2f0ea");
     // legs: hip -> thigh -> knee -> shin -> sneaker (upper + a contrasting sole)
+    const trousers = [], bunched = [];                // (setPantsDown: the legs go bare, the pants gather at the ankles)
     const legs = [-1, 1].map(s => {
       const hip = pivot(body, s * 0.1, 0.9, 0);
-      part(hip, SOFT, pants, 0.155, 0.5, 0.175, 0, -0.23, 0);
+      trousers.push(part(hip, SOFT, pants, 0.155, 0.5, 0.175, 0, -0.23, 0));
       const knee = pivot(hip, 0, -0.45, 0);
-      part(knee, SOFT, o.pants === "shorts" ? skin : pants, 0.135, 0.46, 0.15, 0, -0.2, 0);
-      if (o.pants === "shorts") part(knee, SOFT, pants, 0.15, 0.1, 0.165, 0, -0.02, 0);   // the hem, just past the knee
+      const shin = part(knee, SOFT, o.pants === "shorts" ? skin : pants, 0.135, 0.46, 0.15, 0, -0.2, 0); if (o.pants !== "shorts") trousers.push(shin);
+      if (o.pants === "shorts") trousers.push(part(knee, SOFT, pants, 0.15, 0.1, 0.165, 0, -0.02, 0));   // the hem, just past the knee
+      const b = part(knee, SOFT, pants, 0.19, 0.1, 0.2, 0, -0.33, 0.01); b.visible = false; bunched.push(b);   // around the ankle
       part(knee, ROUND, shoe, 0.14, 0.085, 0.27, 0, -0.395, 0.045);
       part(knee, ROUND, sole, 0.15, 0.035, 0.285, 0, -0.43, 0.045);
       return { hip, knee };
     });
-    part(body, ROUND, pants, 0.35, 0.16, 0.22, 0, 0.93, 0);                        // seat of the pants
+    trousers.push(part(body, ROUND, pants, 0.35, 0.16, 0.22, 0, 0.93, 0));         // seat of the pants
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
     const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
     const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
@@ -376,6 +379,10 @@ window.VaultCustomers = (() => {
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
       holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | "receipt" | null, in the free (left) hand
+      setPantsDown(on) {                                // (the toilet) legs and seat go to skin; the pants bunch at the ankles
+        for (const m of trousers) { m.userData.pantsM ??= m.material; m.material = on ? skin : m.userData.pantsM; }
+        for (const b of bunched) b.visible = on;
+      },
       holdItem(obj) {                                   // obj comes in at world scale: undo the body's own scaling
         item.clear(); if (!obj) return;
         group.updateWorldMatrix(true, true); const k = item.getWorldScale(new THREE.Vector3());
