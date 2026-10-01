@@ -50,7 +50,17 @@
       font: bold 15px Arial, sans-serif; border-radius: 10px; padding: 0 16px; min-height: 46px; min-width: 56px; }
     .tcb.down { background: #ffd400; color: #001f5c; }
     #tcPos .row { display: flex; gap: 8px; justify-content: center; padding: 8px; background: #000a; }
-    #tcType { position: fixed; left: -100px; top: 0; width: 10px; height: 10px; opacity: 0; }`;
+    #tcType { position: fixed; left: -100px; top: 0; width: 10px; height: 10px; opacity: 0; }
+    /* the log: tucked off to the left with just an edge showing; drag it out to read, back to tuck it away */
+    html.touch #actLog { left: 0; bottom: 14px; border-radius: 0 6px 6px 0; border-left: 0; border-right: 3px solid #ffffff55;
+      transform: translateX(calc(-100% + 10px)); transition: transform .2s ease-out; touch-action: pan-y; }
+    html.touch #actLog.out { transform: none; }
+    html.touch #actLog.drag { transition: none; }
+    html.touch #actLog.unseen { border-right-color: #ffd400; }
+    html.touch #actLog::after { content: ""; position: absolute; top: 0; bottom: 0; right: -18px; width: 18px; }   /* a fatter edge to grab */
+    html.touch #actLog.shut #actLogList { display: block; }
+    html.touch #actLog .h .k { display: none; }
+    html.touch.playing #actLog { z-index: 31; }`;
   document.head.appendChild(css);
   const root = document.createElement("div"); root.id = "tc";
   root.innerHTML = `<div id="tcStick"><i></i></div><div id="tcChoice"></div>`;
@@ -169,6 +179,32 @@
   };
   root.addEventListener("touchend", end, { passive: false }); root.addEventListener("touchcancel", end, { passive: false });
 
+  // ---- the log: pull it out by its edge, push it back ----
+  const log = document.getElementById("actLog");
+  if (log) {
+    let d = null;                                // { x0, y0, w, from, dir } while a finger's on it
+    const at = x => Math.max(-(d.w - 10), Math.min(0, d.from + x - d.x0));   // how far out: -(w - 10) tucked .. 0 all the way
+    log.addEventListener("touchstart", e => {
+      const t = e.touches[0]; d = { x0: t.clientX, y0: t.clientY, w: log.offsetWidth, from: log.classList.contains("out") ? 0 : -(log.offsetWidth - 10), dir: null };
+      if (!log.classList.contains("out")) e.preventDefault();   // tucked: nothing to scroll, it's all drag
+    }, { passive: false });
+    log.addEventListener("touchmove", e => {
+      if (!d) return; const t = e.touches[0], dx = t.clientX - d.x0, dy = t.clientY - d.y0;
+      d.dir ||= Math.hypot(dx, dy) > 8 ? (Math.abs(dx) > Math.abs(dy) ? "x" : "y") : null;
+      if (d.dir !== "x") return;                 // up and down: reading (the list scrolls)
+      e.preventDefault(); log.classList.add("drag"); log.style.transform = `translateX(${at(t.clientX)}px)`;
+    }, { passive: false });
+    const done = e => {
+      if (!d) return; const t = e.changedTouches[0], x = at(t.clientX), wasOut = d.from === 0, moved = d.dir === "x";
+      const out = moved ? x > -(d.w - 10) / 2 : true;   // let go past halfway: it stays out (a tap on the edge pulls it out)
+      log.classList.remove("drag"); log.style.transform = ""; log.classList.toggle("out", out); d = null;
+      if (out) { log.classList.remove("unseen"); const l = document.getElementById("actLogList"); if (!wasOut) l.scrollTop = l.scrollHeight; }
+    };
+    log.addEventListener("touchend", done); log.addEventListener("touchcancel", done);
+    const list = document.getElementById("actLogList");   // something new while it's tucked away: the edge lights up
+    if (list) new MutationObserver(() => { if (!log.classList.contains("out")) log.classList.add("unseen"); }).observe(list, { childList: true });
+  }
+
   // ---- at the register: the phone's keyboard, plus the keys it doesn't have ----
   const posRow = posBar.querySelector(".row"), type = posBar.querySelector("#tcType");
   const posKey = k => dispatchEvent(new KeyboardEvent("keydown", { key: k, code: k.length === 1 ? "" : k, bubbles: true, cancelable: true }));
@@ -185,6 +221,7 @@
   function sync() {
     const pos = posOpen();
     root.classList.toggle("on", !!lockEl && !pos);
+    document.documentElement.classList.toggle("playing", !!lockEl && !pos);   // (the log sits over the touch layer only while you're in the store)
     posBar.classList.toggle("on", pos);
     if (!pos && document.activeElement === type) type.blur();
     if (!lockEl && held.size) pressDirs(0, 0);   // (paused mid-stride: let go of the keys)
