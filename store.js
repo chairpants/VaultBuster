@@ -6453,6 +6453,13 @@ function custTip(k) {                           // what E (and Q) do to this cus
   if (mine && coCanOffer()) t += "<br>Q — offer a snack";
   return t;
 }
+// where you're aiming, in screen space: the crosshair (0, 0), except while touch.js points at a tapped spot:
+// VaultAim.at(x, y) aims there and refreshes the hover tip (what the tap can do), then it's back to the middle
+const aimNDC = { x: 0, y: 0 };
+window.VaultAim = {
+  at(x, y) { aimNDC.x = x; aimNDC.y = y; pickHover(); const tip = $("hoverTip"); return { tip: tip.style.display === "none" ? "" : tip.innerText, dflt: seated || onStool ? "E" : "CLICK" }; },
+  center() { aimNDC.x = aimNDC.y = 0; pickHover(); },
+};
 function pickHover() {
   hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
@@ -6472,7 +6479,7 @@ function pickHover() {
     const tip = $("hoverTip"); tip.innerHTML = cutoutSpot ? "E — set the standee down" : "No room for the standee here"; tip.style.display = "block";
     return;
   }
-  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  raycaster.setFromCamera(aimNDC, camera);
   if (boxCarry.length) {                     // arms full of boxes: a stock cupboard (to unpack) or another box
     highlight.visible = false;
     const a = raycaster.intersectObjects(aimables, false).find(h => h.distance < 2.4 && (h.object.userData.stock || h.object.userData.box));
