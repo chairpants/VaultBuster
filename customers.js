@@ -279,9 +279,21 @@ window.VaultCustomers = (() => {
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
     const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
     const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
-    if (o.female && o.bust) {                          // a bust: two soft blocks set low on the chest, angled out, tucked in at the top, in the shirt's plain color
-      const b = o.bust, k = 0.9 + 0.1 * b;
-      for (const s of [-1, 1]) part(upper, SOFT, sleeveM, 0.145 * k, 0.15 * k, 0.15 * b, s * 0.074, 0.4, 0.08).rotation.set(-0.55, s * 0.25, 0);
+    if (o.female && o.bust) {                          // a bust: two soft blocks set low on the chest, angled out, tucked in at the top
+      // In the torso's own material, with its texture projected from the torso's front: every point
+      // samples the bit of shirt right behind it, so a plaid keeps its scale and a print runs straight
+      // across (each block mapping the whole pattern onto itself shrank plaids and miscolored prints)
+      const b = o.bust, k = 0.9 + 0.1 * b, taper = 0.1, v = new THREE.Vector3();   // (TORSO_F's taper)
+      for (const s of [-1, 1]) {
+        const m = part(upper, SOFT, torsoM, 0.145 * k, 0.15 * k, 0.15 * b, s * 0.074, 0.4, 0.08); m.rotation.set(-0.55, s * 0.25, 0); m.updateMatrix();
+        const g = SOFT.clone(), pos = g.attributes.position, uv = g.attributes.uv;
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(m.matrix);          // into the torso's frame (both hang off the waist)
+          const xu = (v.x - torso.position.x) / torso.scale.x, yu = (v.y - torso.position.y) / torso.scale.y;   // torso unit coords
+          uv.setXY(i, xu / (1 - taper * (0.5 - yu)) + 0.5, yu + 0.5);    // the torso front's own mapping (u across, v up), undoing its taper
+        }
+        uv.needsUpdate = true; m.geometry = g;
+      }
       if (o.nameTag) {                                 // name tag pinned high on the chest, above it
         const key = "tag|" + o.nameTag;
         if (!mats.has(key)) {
