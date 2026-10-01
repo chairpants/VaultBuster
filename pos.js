@@ -122,7 +122,6 @@ window.createPOS = function createPOS(api) {
   function frame() {                               // -> ROWS rows of { t, inv }
     if (mode !== "app") {
       const rows = blankApp(), lines = [...scroll];
-      if (mode === "login" || mode === "pass") lines.push((mode === "login" ? "vbpos!login: " : "Password: ") + (mode === "pass" ? "" : input) + "\u2588");
       lines.slice(-ROWS).forEach((l, i) => rows[i].t = l);
       return rows;
     }
@@ -169,7 +168,11 @@ window.createPOS = function createPOS(api) {
          "Copyright (C) 1983-1992 The Santa Cruz Operation, Inc.", "All Rights Reserved", "", "vbpos", ""]
       : ["C:\\>telnet vbpos", "", "Trying 192.168.4.17...", "Connected to vbpos.", "Escape character is '^]'.", ""];
     lines.forEach((l, i) => bootTimers.push(setTimeout(() => { scroll.push(l); draw(); }, 90 * i + (i > 2 ? 350 : 0))));
-    bootTimers.push(setTimeout(() => { mode = "login"; draw(); }, 90 * lines.length + 450));
+    bootTimers.push(setTimeout(() => {           // no typing a login: the clerk's badge is swiped at the reader
+      scroll.push("vbpos!login: ** BADGE READ: EMP 0042 **");
+      user = "EMP0042"; mode = "app"; stack.length = 0; screen = mainMenu; msg = `BADGE ACCEPTED. WELCOME BACK. LAST LOGIN: ${fmtD(new Date(TODAY - DAY))} 21:47 ON TTY01`;
+      draw();
+    }, 90 * lines.length + 450));
     draw();
   }
   let booted = false;
@@ -431,16 +434,6 @@ window.createPOS = function createPOS(api) {
     if (pk && e.key === "Enter" && !input.trim() && pk.count()) { msg = ""; input = ""; return screen.submit(pk.value(pk.cur)); }
     if (e.key === "Enter") {
       const v = input.trim(); input = "";
-      if (mode === "login") {
-        scroll.push("vbpos!login: " + v);
-        if (!v) { draw(); return; }
-        user = up(v).slice(0, 8); mode = "pass"; return draw();
-      }
-      if (mode === "pass") {
-        scroll.push("Password:");
-        mode = "app"; stack.length = 0; screen = mainMenu; msg = `WELCOME, ${user}. LAST LOGIN: ${fmtD(new Date(TODAY - DAY))} 21:47 ON TTY01`;
-        return draw();
-      }
       if (mode === "app") { msg = ""; screen.submit(up(v)); }
       return;
     }
