@@ -74,7 +74,8 @@ let exteriorTick = () => {};               // (dt) => ... — per-frame exterior
 const exteriorClouds = [];                 // drifted a little each frame, see the main loop
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const LOWMEM = document.documentElement.classList.contains("touch");   // phones / tablets (touch.js): iOS caps a page's canvas memory, so go lighter
+renderer.setPixelRatio(Math.min(devicePixelRatio, LOWMEM ? 1.5 : 2));
 document.body.appendChild(renderer.domElement);
 // ---------------- TV light (shader side) ----------------
 // The big screen lights the room as a 3x3 grid of colored patches (one per
@@ -433,8 +434,10 @@ catalog.sort((a, b) => shelfKey(a).localeCompare(shelfKey(b), undefined, { numer
 
 // ---------------- canvas texture helpers ----------------
 function makeTexture(draw, w, h) {
-  const c = document.createElement("canvas"); c.width = w; c.height = h;
-  draw(c.getContext("2d"), w, h);
+  const S = LOWMEM && w >= 512 ? 0.5 : 1;        // phones: big signs drawn at half scale (iOS caps a page's canvas memory)
+  const c = document.createElement("canvas"); c.width = Math.round(w * S); c.height = Math.round(h * S);
+  const ctx = c.getContext("2d"); ctx.scale(S, S);
+  draw(ctx, w, h);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -2780,8 +2783,9 @@ ORDER.forEach((c, i) => catIdx[c] = i);
 const atlases = [];   // {canvas, ctx, material}
 function atlasFor(n) {
   while (atlases.length <= n) {
-    const canvas = document.createElement("canvas"); canvas.width = canvas.height = 2048;
-    const ctx = canvas.getContext("2d");
+    const S = LOWMEM ? 0.5 : 1;                   // phones: a 1024² canvas drawn at half scale (a quarter of the memory; same layout and UVs)
+    const canvas = document.createElement("canvas"); canvas.width = canvas.height = 2048 * S;
+    const ctx = canvas.getContext("2d"); ctx.scale(S, S);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
