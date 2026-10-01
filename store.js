@@ -27,7 +27,8 @@ const WALL_SHIFT = WALL_L + STORE.x;       // how far the movie-side wall (and e
 // (locked, for now) door at the hall's far end onto the space behind the lounge
 const BOH = { x0: 2, z1: 33, hallZ: 29.8, splitX: 8.3, h: 2.7 };   // west wall, rear wall, hall/rooms wall, breakroom|restroom wall, ceiling height
 const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the store's blue wall stripe
-const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9 };   // opening centers along their walls
+const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9 };
+const bath = { water: null, waterY: 0, stream: null, toiletAt: null, sinkAt: null, flushT: 0, tap: false, seat: null };   // the restroom's working parts (built with it; see bathTick)   // opening centers along their walls
 const BOH_OPENING_W = 1.8;                  // the store → hall opening: wide and doorless, just a cased opening
 // cooler stock, shelf by shelf (see the cooler): r/h in meters; glass = bottle
 // color + opacity, label = [background, text]. Grabbing one hands you that unit.
@@ -812,9 +813,15 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   floorPatch(vctTex, 2.4, BX0, XR, BZ0, HZ);                                // hall — starts right where the store's carpet ends, mid-opening
   floorPatch(vctTex, 2.4, BX0, SX, HZ, BZ1);                                // breakroom
   floorPatch(bathTex, 0.8, SX, XR, HZ, BZ1);                                // restroom
-  const bohCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, BZ0, BZ1); bohCeilTex.needsUpdate = true;
-  const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - BZ0), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
-  bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + BZ1) / 2); scene.add(bohCeil);
+  // ceilings: the hall gets its own, its grid shifted so a row of tiles runs down the middle between
+  // the walls (the hall lights sit in it) with a sliver of tile either side; the rooms keep the store's grid
+  const hallMid = (BZ0 + WALL_T / 2 + HZ - WALL_T / 2) / 2, rowStart = hallMid - CEIL_TILE.z / 2;
+  const hallCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, BZ0, HZ); hallCeilTex.offset.y = (BZ0 - (rowStart % CEIL_TILE.z)) / CEIL_REP; hallCeilTex.needsUpdate = true;
+  const hallCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, HZ - BZ0), new THREE.MeshLambertMaterial({ map: hallCeilTex }));
+  hallCeil.rotation.x = Math.PI / 2; hallCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + HZ) / 2); scene.add(hallCeil);
+  const bohCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, HZ, BZ1); bohCeilTex.needsUpdate = true;
+  const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - HZ), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
+  bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (HZ + BZ1) / 2); scene.add(bohCeil);
 
   // the sales floor opens straight into the hall; the rooms get painted doors, the theater a maroon push door
   casing(Z, BOH_DOORS.store, true, BOH_OPENING_W);
@@ -937,47 +944,144 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     put(new THREE.PlaneGeometry(0.4, 0.42), new THREE.MeshLambertMaterial({ map: eotm }), 2.75, 1.55, z1 - 0.006, Math.PI);
   }
 
-  // ---- restroom (interior x SX+0.1..XR-0.1, z HZ+0.1..BZ1-0.1) ----
-  // toilet on the back wall, wall-hung sink + mirror on the west wall. The
-  // door swings in over x 9.1-10.2 up to ~z 30.9.
+  // ---- restroom, V2.5 (interior x SX+0.1..XR-0.1, z HZ+0.1..BZ1-0.1) ----
+  // A two-piece toilet on the back wall; a pedestal sink under a framed mirror
+  // on the west wall, with a single-lever faucet; a paper towel dispenser and a
+  // little wastebasket beside it; tiled wainscot all round. The door swings in
+  // over x 9.1-10.2 up to ~z 30.9. E flushes the toilet and runs the tap (see bath)
   {
-    const x0 = SX + 0.1, x1 = XR - 0.1, z1 = BZ1 - 0.1;
+    const x0 = SX + 0.1, x1 = XR - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
     const put = (geo, m, x, y, z, ry = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; scene.add(o); return o; };
-    const bx = (w, h, d, m, x, y, z) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z);
-    const china = new THREE.MeshPhongMaterial({ color: 0xf6f6f2, specular: 0x666666, shininess: 60 });
-    const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
-    const grey = new THREE.MeshLambertMaterial({ color: 0x8c9196 });
+    const china = new THREE.MeshPhongMaterial({ color: 0xf7f7f3, specular: 0x9a9a9a, shininess: 85, side: THREE.DoubleSide });
+    const chrome = new THREE.MeshPhongMaterial({ color: 0xd4d8dd, specular: 0xffffff, shininess: 110 });
+    const cream = new THREE.MeshPhongMaterial({ color: 0xebe7de, specular: 0x444444, shininess: 30 });
+    const darkP = new THREE.MeshPhongMaterial({ color: 0x33373c, specular: 0x333333, shininess: 25 });
+    const rrect = (w, d, r) => {                   // a rounded rectangle, w along x, d along the shape's y
+      const s = new THREE.Shape(), x = w / 2, y = d / 2;
+      s.moveTo(-x + r, -y); s.lineTo(x - r, -y); s.quadraticCurveTo(x, -y, x, -y + r); s.lineTo(x, y - r); s.quadraticCurveTo(x, y, x - r, y);
+      s.lineTo(-x + r, y); s.quadraticCurveTo(-x, y, -x, y - r); s.lineTo(-x, -y + r); s.quadraticCurveTo(-x, -y, -x + r, -y); return s;
+    };
+    const slab = (shape, h, m, b = 0.008) => {    // that shape extruded up h from y 0, edges rounded over
+      const g = new THREE.ExtrudeGeometry(shape, { depth: Math.max(0.001, h - 2 * b), bevelEnabled: b > 0, bevelSize: b, bevelThickness: b, bevelSegments: 3, curveSegments: 12 });
+      g.rotateX(-Math.PI / 2); g.translate(0, b, 0); return new THREE.Mesh(g, m);
+    };
+    const place = (o, x, y, z, ry = 0) => { o.position.set(x, y, z); o.rotation.y = ry; scene.add(o); return o; };
+    const lathe = (pts, m, segs = 32) => new THREE.Mesh(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), segs), m);
+    const tube = (pts, r, m) => new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p))), 24, r, 10), m);
 
-    // toilet: tank on the wall, lathe bowl, seat ring + lid up against the tank
-    const tx = 10.25;
-    bx(0.46, 0.36, 0.18, china, tx, 0.62, z1 - 0.09);                                         // tank
-    bx(0.48, 0.03, 0.2, china, tx, 0.815, z1 - 0.09);                                         // tank lid
-    bx(0.06, 0.015, 0.02, chrome, tx - 0.15, 0.72, z1 - 0.185);                               // flush lever
-    const bowl = put(new THREE.LatheGeometry([[0.1, 0], [0.13, 0.05], [0.16, 0.2], [0.2, 0.38], [0.19, 0.4]].map(([r, y]) => new THREE.Vector2(r, y)), 24), china, tx, 0, z1 - 0.42);
-    bowl.scale.set(1, 1, 1.25);
-    const seat = put(new THREE.TorusGeometry(0.17, 0.025, 8, 28), china, tx, 0.41, z1 - 0.42); seat.rotation.x = Math.PI / 2; seat.scale.set(1, 1.25, 1);
-    const lid = bx(0.38, 0.44, 0.02, china, tx, 0.62, z1 - 0.2); lid.rotation.x = -0.12;     // up, leaning on the tank
-    colliders.push({ x0: tx - 0.25, x1: tx + 0.25, z0: z1 - 0.7, z1, y1: 0.85 });
-    // paper roll on the east wall
-    const roll = put(new THREE.CylinderGeometry(0.06, 0.06, 0.11, 18), new THREE.MeshLambertMaterial({ color: 0xfafafa }), x1 - 0.08, 0.72, z1 - 0.55);
-    roll.rotation.x = Math.PI / 2;
-    bx(0.02, 0.02, 0.16, chrome, x1 - 0.02, 0.72, z1 - 0.55);
+    // tiled wainscot to 1.05 m (under the light switch): 10 cm glazed squares, a blue cap row on top
+    const WH = 1.05;
+    const tileTex = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#b9bec4"; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+        const g = ctx.createLinearGradient(0, j * 64, 0, j * 64 + 62); g.addColorStop(0, "#f4f6f7"); g.addColorStop(1, "#e3e8ec");
+        ctx.fillStyle = g; ctx.fillRect(i * 64 + 2, j * 64 + 2, 60, 60);
+      }
+    }, 256, 256);
+    tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping;
+    const tileMat = (len) => { const t = tileTex.clone(); t.needsUpdate = true; t.repeat.set(len / 0.4, WH / 0.4); return new THREE.MeshLambertMaterial({ map: t }); };
+    const capMat = new THREE.MeshLambertMaterial({ color: 0x2a4d8a });
+    const wains = (a0, a1, alongX, at, face) => {  // one wall's run: along x (at = z) or along z (at = x); face = which way it looks
+      const len = a1 - a0, c = (a0 + a1) / 2, off = face * 0.003;
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(len, WH), tileMat(len));
+      if (alongX) { pl.position.set(c, WH / 2, at + off); pl.rotation.y = face > 0 ? 0 : Math.PI; } else { pl.position.set(at + off, WH / 2, c); pl.rotation.y = face > 0 ? Math.PI / 2 : -Math.PI / 2; }
+      scene.add(pl);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(alongX ? len : 0.014, 0.06, alongX ? 0.014 : len), capMat);
+      cap.position.set(alongX ? c : at + face * 0.007, WH + 0.03, alongX ? at + face * 0.007 : c); scene.add(cap);
+    };
+    wains(z0, z1, false, x0, 1); wains(z0, z1, false, x1, -1); wains(x0, x1, true, z1, -1);
+    wains(x0, BOH_DOORS.restroom - DOOR_W / 2 - 0.04, true, z0, 1); wains(BOH_DOORS.restroom + DOOR_W / 2 + 0.04, x1, true, z0, 1);   // either side of the door
 
-    // wall-hung sink on the west wall (faces +x), mirror, soap, towels, bin
-    const sz = 31.75;
-    bx(0.42, 0.14, 0.5, china, x0 + 0.21, 0.8, sz);                                           // basin
-    bx(0.3, 0.02, 0.36, new THREE.MeshLambertMaterial({ color: 0xc4c8cc }), x0 + 0.23, 0.872, sz);   // bowl hollow
-    put(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), chrome, x0 + 0.05, 0.94, sz);        // faucet
-    bx(0.12, 0.02, 0.02, chrome, x0 + 0.11, 1.01, sz);
-    colliders.push({ x0, x1: x0 + 0.45, z0: sz - 0.27, z1: sz + 0.27, y1: 0.9 });
-    const mirror = put(new THREE.PlaneGeometry(0.5, 0.7), new THREE.MeshPhongMaterial({ color: 0x9fb0bf, specular: 0xffffff, shininess: 120 }), x0 + 0.006, 1.45, sz, Math.PI / 2);
-    bx(0.02, 0.74, 0.54, chrome, x0 + 0.002, 1.45, sz);                                        // mirror frame (behind the glass)
-    bx(0.08, 0.16, 0.08, grey, x0 + 0.04, 1.12, sz + 0.34);                                    // soap dispenser
-    bx(0.12, 0.34, 0.3, grey, x0 + 0.06, 1.35, sz - 0.62);                                     // paper towels
-    put(new THREE.CylinderGeometry(0.15, 0.13, 0.5, 18), grey, x0 + 0.2, 0.25, sz - 0.62);     // bin under them
+    // ---- the toilet: two-piece, elongated bowl, seat and lid up ----
+    const tx = 10.25, zb = z1, bz = zb - 0.44;       // center line; back wall; bowl center
+    const toilet = [];
+    toilet.push(place(slab(rrect(0.5, 0.2, 0.045), 0.36, china, 0.012), tx, 0.43, zb - 0.108));                // tank
+    toilet.push(place(slab(rrect(0.535, 0.228, 0.05), 0.036, china, 0.012), tx, 0.79, zb - 0.108));            // tank lid
+    toilet.push(place(slab(rrect(0.34, 0.24, 0.06), 0.07, china), tx, 0.36, zb - 0.14));                      // the deck the tank sits on
+    const bowl = lathe([[0.105, 0], [0.122, 0.014], [0.1, 0.06], [0.098, 0.16], [0.135, 0.255], [0.182, 0.338], [0.2, 0.374], [0.2, 0.392], [0.186, 0.402],
+      [0.165, 0.397], [0.132, 0.345], [0.082, 0.262], [0.045, 0.205], [0.001, 0.192]], china, 40);
+    bowl.scale.set(1, 1, 1.3); toilet.push(place(bowl, tx, 0, bz));
+    const water = put(new THREE.CircleGeometry(0.104, 28), new THREE.MeshPhongMaterial({ color: 0xa9cfe0, specular: 0xffffff, shininess: 120, transparent: true, opacity: 0.72 }), tx, 0.288, bz);
+    water.rotation.x = -Math.PI / 2; water.scale.set(1, 1.3, 1);
+    const seatShape = new THREE.Shape(); seatShape.absellipse(0, 0, 0.188, 0.245, 0, Math.PI * 2);   // a real seat: a broad flat ring, not a tube
+    const seatHole = new THREE.Path(); seatHole.absellipse(0, 0.012, 0.112, 0.158, 0, Math.PI * 2, true); seatShape.holes.push(seatHole);   // (the opening sits a touch forward)
+    toilet.push(place(slab(seatShape, 0.03, china, 0.011), tx, 0.398, bz - 0.01));
+    const lid = put(new THREE.CylinderGeometry(0.188, 0.188, 0.022, 36), china, tx, 0.66, zb - 0.245); lid.scale.set(1, 1, 1.28); lid.rotation.x = Math.PI / 2 - 0.13; toilet.push(lid);   // up, leaning on the tank
+    for (const s of [-1, 1]) {
+      const h = put(new THREE.CylinderGeometry(0.012, 0.012, 0.03, 12), chrome, tx + s * 0.085, 0.425, zb - 0.235); h.rotation.z = Math.PI / 2;   // seat hinges
+      put(new THREE.SphereGeometry(0.02, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), china, tx + s * 0.105, 0.012, bz + 0.06);                     // bolt caps
+    }
+    const boss = put(new THREE.CylinderGeometry(0.017, 0.017, 0.012, 16), chrome, tx - 0.18, 0.73, zb - 0.214); boss.rotation.x = Math.PI / 2;
+    const flushLever = put(new THREE.BoxGeometry(0.075, 0.013, 0.013), chrome, tx - 0.215, 0.73, zb - 0.222);                               // flush lever
+    const leverHit = put(new THREE.BoxGeometry(0.13, 0.07, 0.06), new THREE.MeshBasicMaterial({ visible: false }), tx - 0.2, 0.73, zb - 0.225);   // (a forgiving target for it)
+    for (const m of [boss, flushLever, leverHit]) { m.userData.flush = true; aimables.push(m); }
+    const valve = put(new THREE.CylinderGeometry(0.014, 0.014, 0.05, 12), chrome, tx - 0.19, 0.17, zb - 0.025); valve.rotation.x = Math.PI / 2;   // shutoff on the wall
+    put(new THREE.CylinderGeometry(0.02, 0.02, 0.008, 16), chrome, tx - 0.19, 0.17, zb - 0.052).rotation.x = Math.PI / 2;
+    put(new THREE.BoxGeometry(0.034, 0.012, 0.01), chrome, tx - 0.19, 0.17, zb - 0.058);                                                    // its oval handle
+    place(tube([[tx - 0.19, 0.17, zb - 0.05], [tx - 0.2, 0.26, zb - 0.07], [tx - 0.17, 0.38, zb - 0.1], [tx - 0.16, 0.435, zb - 0.1]], 0.006,
+      new THREE.MeshPhongMaterial({ color: 0x9aa0a6, specular: 0xdddddd, shininess: 60 })), 0, 0, 0);                                     // braided supply line
+    bath.seat = { x: tx, y: 0, z: bz + 0.05, ry: Math.PI, hipY: 0.47, toilet: true };   // sitting on it: facing out into the room
+    for (const m of toilet) { m.userData.sit = true; m.userData.seatPos = bath.seat; aimables.push(m); }
+    colliders.push({ x0: tx - 0.27, x1: tx + 0.27, z0: zb - 0.72, z1: zb, y1: 0.85 });
+    // toilet paper on the east wall: backplate, arm, a roll with a sheet hanging
+    put(new THREE.BoxGeometry(0.012, 0.07, 0.19), chrome, x1 - 0.006, 0.74, zb - 0.6);
+    const arm = put(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 10), chrome, x1 - 0.012, 0.74, zb - 0.6); arm.rotation.x = Math.PI / 2;
+    const roll = put(new THREE.CylinderGeometry(0.057, 0.057, 0.11, 22), new THREE.MeshLambertMaterial({ color: 0xfbfbf9 }), x1 - 0.075, 0.74, zb - 0.6); roll.rotation.x = Math.PI / 2;
+    put(new THREE.PlaneGeometry(0.1, 0.12), new THREE.MeshLambertMaterial({ color: 0xfbfbf9, side: THREE.DoubleSide }), x1 - 0.132, 0.68, zb - 0.6, Math.PI / 2);
+
+    // ---- the pedestal sink (on the west wall, facing +x) and its faucet ----
+    const wx = x0, sz = 31.75, sx = wx + 0.24, top = 0.86;
+    const basinShape = rrect(0.48, 0.58, 0.08), hole = new THREE.Path(); hole.absellipse(0.03, 0, 0.165, 0.205, 0, Math.PI * 2, true); basinShape.holes.push(hole);
+    const basin = place(slab(basinShape, 0.14, china, 0.012), sx, top - 0.14, sz);
+    const bowlIn = put(new THREE.SphereGeometry(1, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), china, sx + 0.03, top - 0.002, sz); bowlIn.scale.set(0.165, 0.12, 0.205);
+    put(new THREE.CylinderGeometry(0.022, 0.022, 0.004, 18), chrome, sx + 0.03, top - 0.12, sz);                                           // drain
+    put(new THREE.CircleGeometry(0.009, 12), darkP, sx - 0.13, top - 0.045, sz, Math.PI / 2);                                             // overflow
+    place(lathe([[0.13, 0], [0.1, 0.03], [0.074, 0.12], [0.064, 0.4], [0.074, 0.62], [0.11, top - 0.14]], china, 32), sx - 0.02, 0, sz).scale.set(1, 1, 0.9);   // pedestal
+    const fx = wx + 0.075, faucet = [];
+    faucet.push(put(new THREE.CylinderGeometry(0.03, 0.032, 0.012, 20), chrome, fx, top + 0.006, sz));                                    // escutcheon
+    faucet.push(put(new THREE.CylinderGeometry(0.019, 0.022, 0.085, 20), chrome, fx, top + 0.055, sz));                                   // body
+    faucet.push(place(tube([[fx, top + 0.08, sz], [fx + 0.012, top + 0.13, sz], [fx + 0.07, top + 0.152, sz], [fx + 0.13, top + 0.125, sz], [fx + 0.148, top + 0.1, sz]], 0.011, chrome), 0, 0, 0));   // arched spout
+    const aer = put(new THREE.CylinderGeometry(0.013, 0.012, 0.014, 16), chrome, fx + 0.15, top + 0.093, sz); aer.rotation.z = -0.35; faucet.push(aer);
+    const lever = put(new THREE.BoxGeometry(0.085, 0.013, 0.022), chrome, fx - 0.03, top + 0.108, sz); lever.rotation.z = 0.3; faucet.push(lever);
+    put(new THREE.CircleGeometry(0.004, 10), new THREE.MeshBasicMaterial({ color: 0xd02020 }), fx, top + 0.06, sz + 0.0205);             // hot / cold dots
+    put(new THREE.CircleGeometry(0.004, 10), new THREE.MeshBasicMaterial({ color: 0x2050d0 }), fx, top + 0.06, sz - 0.0205, Math.PI);
+    const stream = put(new THREE.CylinderGeometry(0.005, 0.008, 0.21, 10, 1, true), new THREE.MeshPhongMaterial({ color: 0xcfe6f2, specular: 0xffffff, shininess: 120, transparent: true, opacity: 0.55 }), fx + 0.155, top - 0.03, sz);
+    stream.visible = false;
+    for (const m of [...faucet, basin, bowlIn]) { m.userData.sink = true; aimables.push(m); }
+    colliders.push({ x0: wx, x1: wx + 0.5, z0: sz - 0.3, z1: sz + 0.3, y1: 0.9 });
+    // mirror: a rounded chrome frame, the glass inset
+    const frameShape = rrect(0.58, 0.78, 0.07), inner = rrect(0.5, 0.7, 0.045); frameShape.holes.push(new THREE.Path(inner.getPoints(12)));
+    const frameGeo = new THREE.ExtrudeGeometry(frameShape, { depth: 0.018, bevelEnabled: true, bevelSize: 0.004, bevelThickness: 0.004, bevelSegments: 2, curveSegments: 12 });
+    frameGeo.rotateY(Math.PI / 2); put(frameGeo, chrome, wx, 1.52, sz);
+    put(new THREE.PlaneGeometry(0.5, 0.7), new THREE.MeshPhongMaterial({ color: 0xa6b6c4, specular: 0xffffff, shininess: 140 }), wx + 0.012, 1.52, sz, Math.PI / 2);
     const wash = textPlane("EMPLOYEES MUST WASH HANDS", 0.42, 0.1, "#fff", "#1a1d22", "Arial", 64);
-    wash.material = new THREE.MeshLambertMaterial({ map: wash.material.map });
-    wash.position.set(x0 + 0.006, 1.9, sz); wash.rotation.y = Math.PI / 2; scene.add(wash);
+    wash.material = new THREE.MeshLambertMaterial({ map: wash.material.map }); wash.position.set(wx + 0.006, 2.02, sz); wash.rotation.y = Math.PI / 2; scene.add(wash);
+    // soap dispenser beside the mirror: a rounded box, a push plate, the nozzle
+    place(slab(rrect(0.075, 0.1, 0.02), 0.15, cream, 0.008), wx + 0.04, 1.02, sz + 0.37);
+    put(new THREE.BoxGeometry(0.006, 0.05, 0.06), darkP, wx + 0.088, 1.1, sz + 0.37);   // push plate
+    put(new THREE.CylinderGeometry(0.005, 0.005, 0.02, 8), darkP, wx + 0.05, 1.012, sz + 0.37);
+
+    // ---- paper towel dispenser: cream plastic, a smoked window on the stack, a towel hanging out ----
+    const pz = sz - 0.68;
+    const disp = place(slab(rrect(0.14, 0.3, 0.035), 0.36, cream, 0.012), wx + 0.07, 1.2, pz);
+    put(new THREE.BoxGeometry(0.004, 0.13, 0.2), new THREE.MeshPhongMaterial({ color: 0x2a2e33, transparent: true, opacity: 0.55, specular: 0xffffff, shininess: 100 }), wx + 0.157, 1.43, pz);   // window (just proud of the rounded front)
+    put(new THREE.BoxGeometry(0.004, 0.06, 0.17), new THREE.MeshLambertMaterial({ color: 0xf2efe6 }), wx + 0.1535, 1.4, pz);                  // the stack's edge, seen through it (about half full)
+    put(new THREE.BoxGeometry(0.11, 0.006, 0.22), darkP, wx + 0.07, 1.199, pz);                                                             // dispensing slot
+    const towelM = new THREE.MeshLambertMaterial({ color: 0xf6f3ea, side: THREE.DoubleSide });
+    const t1 = put(new THREE.PlaneGeometry(0.09, 0.2), towelM, wx + 0.085, 1.15, pz, Math.PI / 2); t1.rotation.z = 0.08;
+    const t2 = put(new THREE.PlaneGeometry(0.05, 0.2), towelM, wx + 0.1, 1.175, pz, Math.PI / 2); t2.rotation.set(0.9, Math.PI / 2, 0);   // the fold
+    const brand = textPlane("VAULTBUSTER", 0.14, 0.025, "#2a4d8a", "#ebe7de", "Arial Black", 60); brand.material = new THREE.MeshLambertMaterial({ map: brand.material.map });
+    brand.position.set(wx + 0.154, 1.53, pz); brand.rotation.y = Math.PI / 2; scene.add(brand);
+    disp.userData.towels = true; aimables.push(disp);
+    // the small wastebasket under it: open top, a liner folded over the rim, a few towels in it
+    const bin = place(lathe([[0.1, 0], [0.13, 0.31], [0.124, 0.31], [0.095, 0.012], [0.001, 0.012]], new THREE.MeshPhongMaterial({ color: 0x3d4248, specular: 0x444444, shininess: 30, side: THREE.DoubleSide }), 28), wx + 0.19, 0, pz);
+    const liner = put(new THREE.TorusGeometry(0.127, 0.006, 6, 30), new THREE.MeshLambertMaterial({ color: 0xe8e8e8 }), wx + 0.19, 0.31, pz); liner.rotation.x = Math.PI / 2;
+    for (const [dx, dz, y, r] of [[0.02, 0.01, 0.24, 0.04], [-0.03, -0.02, 0.26, 0.035], [0.01, -0.04, 0.28, 0.03]]) {
+      const ball = put(new THREE.IcosahedronGeometry(r, 0), towelM, wx + 0.19 + dx, y, pz + dz); ball.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+    }
+    bin.userData.bathBin = true; aimables.push(bin);
+    colliders.push({ x0: wx + 0.04, x1: wx + 0.34, z0: pz - 0.15, z1: pz + 0.15, y1: 0.35 });
+    bath.water = water; bath.waterY = water.position.y; bath.stream = stream; bath.toiletAt = [tx, 0.4, bz]; bath.sinkAt = [fx + 0.15, top, sz];
   }
 // ---- movie theater lobby (x WALL_L..BX0, z BZ0..BZ1) & single-screen stadium theater (z BZ1..46.5) ----
   {
@@ -1318,9 +1422,9 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       ctx.fillStyle = g; ctx.fillRect(0, cy - H * 0.14, W, H * 0.28);
     }
   }, 128, 64);
-  const troffer = (x, z, y) => {
+  const troffer = (x, z, y, snapZ = true) => {
     x = Math.round((x - CEIL_TILE.x / 2) / CEIL_TILE.x) * CEIL_TILE.x + CEIL_TILE.x / 2;   // centered in a tile slot
-    z = Math.round((z - CEIL_TILE.z / 2) / CEIL_TILE.z) * CEIL_TILE.z + CEIL_TILE.z / 2;
+    if (snapZ) z = Math.round((z - CEIL_TILE.z / 2) / CEIL_TILE.z) * CEIL_TILE.z + CEIL_TILE.z / 2;   // (the hall's grid is its own: its lights go where they're told)
     const p = new THREE.PlaneGeometry(CEIL_TILE.x - 0.02, CEIL_TILE.z - 0.02); p.rotateX(Math.PI / 2); p.translate(x, y - 0.02, z);
     const key = `${lightZoneAt(x, z)}:${Math.floor(Math.random() * PANEL_GROUPS)}`;
     if (!panelBuckets.has(key)) panelBuckets.set(key, []);
@@ -1333,7 +1437,8 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     if (x - CEIL_TILE.x / 2 < XL + 0.3) continue;   // don't float panels past the pulled-in movie-side wall
     troffer(x, z, STORE.h);
   }
-  for (const [x, z] of [[4.5, 29.25], [8.1, 29.25], [4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // back of house: hall x2, breakroom, restroom
+  for (const x of [4.5, 8.1]) troffer(x, hallMid, BOH.h, false);              // down the middle of the hall (its ceiling grid is centered there too)
+  for (const [x, z] of [[4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // breakroom, restroom
   panelMats = [...panelBuckets].map(([key, bucket]) => {
     const m = new THREE.MeshBasicMaterial({ color: 0xf8fbff, map: diffuserTex });
     m.userData.zone = key.split(":")[0];
@@ -1668,7 +1773,8 @@ let posScreen;                                // the register monitor's glass (p
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
 const rewinders = [];
 let phoneLook = () => {};                    // (set when the phone is built)
-let popcornMachine = null, theaterSign = null, jobBoardMesh = null;   // (simulation: bought later — see amenities)
+let popcornMachine = null, theaterSign = null, jobBoardMesh = null;
+const COUNTER = { y: 1.08, tops: [], groups: {} };   // the checkout counter's usable worktop (rectangles, world x/z) and the things on it that can be moved (see counter moves)   // (simulation: bought later — see amenities)
 const PHONE_AT = new THREE.Vector3(), HOLDS_AT = new THREE.Vector3();   // the desk phone / the holds tray, on the back cabinet (set when it's built)
 const PRN_AT = { x: -4.62, z: 3.93 };           // the receipt printer's paper slot
 const printer = { strip: null, tex: null, job: null };   // the receipt feeding out of it (see printReceipt)
@@ -1773,7 +1879,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
   // register: a beige CRT point-of-sale terminal with keyboard + mouse, where
   // the old black box stood — facing the employee side (toward the doors' wall)
   {
-    const pos = new THREE.Group(); pos.position.set(-5.45, 1.08, 4); pos.rotation.y = Math.PI; scene.add(pos);   // local +z = employee side
+    const pos = new THREE.Group(); pos.position.set(-5.45, 1.08, 4); pos.rotation.y = Math.PI; scene.add(pos); COUNTER.groups.register = pos;   // local +z = employee side
     const beige = new THREE.MeshLambertMaterial({ color: 0xd8d0bc }), beigeDk = new THREE.MeshLambertMaterial({ color: 0xbdb49e });
     const add = (geo, m, x, y, z, parent = pos) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
     // monitor: swivel base, neck, bezel box, tapered CRT back, recessed screen
@@ -1861,7 +1967,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
     rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.059 + TAPE.w / 2, 0);   // lies lengthwise in the cockpit
     rw.tapeMesh.visible = false;
     g.traverse(o => { if (o.isMesh) { o.userData.rewinder = rw; aimables.push(o); } });
-    rewinders.push(rw);
+    rw.g = g; rewinders.push(rw);
   }
 
   // ---- returns: a stainless drop slot on the lane face, into a tote in the cubby behind ----
@@ -1871,7 +1977,11 @@ const GATE_Z = 4.0;                           // security gate line across the e
   box(0.008, 0.05, 0.38, mat.dark, RX + CD / 2 + 0.014, 0.86, RZ);                                // the slot
   returnSlotMesh = box(0.02, 0.07, 0.4, chromeC, RX + CD / 2 + 0.02, 0.9, RZ);                     // its hinged lip — the E target from the lane
   returnSlotMesh.userData.returns = true; aimables.push(returnSlotMesh);
-  for (const dz of [-0.46, 0.46]) buildRewinder(RX - 0.12, RZ + dz, -Math.PI / 2);   // on the worktop over the tote, clear of the ledge; local +z (its face) = world -x, the employee side
+  for (const dz of [-0.46, 0.46]) buildRewinder(RX - 0.12, RZ + dz, -Math.PI / 2);
+  // the worktop things can be set down on: the north run behind its transaction ledge, and the east run behind its ledge
+  COUNTER.y = TOP;
+  COUNTER.tops.push({ x0: FLAP_X1 + 0.03, x1: RX + CD / 2 - 0.03, z0: 4 - CD / 2 + 0.02, z1: 4 + CD / 2 - 0.16, run: "north", staff: 4 - CD / 2 - 0.5 },
+    { x0: RX - CD / 2 + 0.02, x1: RX + CD / 2 - 0.16, z0: 0.13, z1: 4 - CD / 2 + 0.02, run: "east", staff: RX - CD / 2 - 0.5 });   // on the worktop over the tote, clear of the ledge; local +z (its face) = world -x, the employee side
   const drop = textPlane("DROP TAPES HERE", 0.44, 0.07, "#1a1d22", "#e8ecf0", "Arial", 64);
   drop.material = new THREE.MeshLambertMaterial({ map: drop.material.map });
   drop.position.set(RX + CD / 2 + 0.013, 0.73, RZ); drop.rotation.y = Math.PI / 2; scene.add(drop);
@@ -1946,14 +2056,16 @@ const GATE_Z = 4.0;                           // security gate line across the e
   for (let i = 0; i < sp.count; i++) sp.setZ(i, 0.16 * sp.getY(i) ** 2);
   stripG.computeVertexNormals();
   const strip = printer.strip = new THREE.Mesh(stripG, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, alphaTest: 0.5 }));
-  strip.position.set(PRN, TOP + 0.098, PRN_AT.z); strip.rotation.set(-0.2, Math.PI, 0); strip.visible = false;
-  strip.userData.printer = true; scene.add(strip); aimables.push(strip);
+  strip.position.set(0, 0.098, -0.028); strip.rotation.set(-0.2, Math.PI, 0); strip.visible = false;   // (in the printer's own frame: it goes where the printer goes)
+  strip.userData.printer = true; prnG.add(strip); aimables.push(strip);
+  COUNTER.groups.printer = prnG;
   // security-tag deactivator pad (the "desensitizer"): tapes run across it before they leave
-  const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, DESENS_AT.x, TOP + 0.0125, DESENS_AT.z);   // right beside the register
-  desensLed = glow(put(new THREE.BoxGeometry(0.012, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xff3020 }), DESENS_AT.x + 0.12, TOP + 0.028, DESENS_AT.z - 0.08));
+  const desG = new THREE.Group(); desG.position.set(DESENS_AT.x, TOP, DESENS_AT.z); scene.add(desG); COUNTER.groups.desens = desG;   // right beside the register
+  const padMesh = put(new THREE.BoxGeometry(0.28, 0.025, 0.2), blackC, 0, 0.0125, 0, desG);
+  desensLed = glow(put(new THREE.BoxGeometry(0.012, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xff3020 }), 0.12, 0.028, -0.08, desG));
   padMesh.userData.desens = true; aimables.push(padMesh);
   const deac = textPlane("DESENSITIZE", 0.2, 0.04, "#ddd", "#151515", "Arial", 60);
-  deac.material = new THREE.MeshLambertMaterial({ map: deac.material.map }); deac.position.set(DESENS_AT.x - 0.02, TOP + 0.026, DESENS_AT.z); deac.rotation.x = -Math.PI / 2; deac.rotation.z = Math.PI; scene.add(deac);
+  deac.material = new THREE.MeshLambertMaterial({ map: deac.material.map }); deac.position.set(-0.02, 0.026, 0); deac.rotation.x = -Math.PI / 2; deac.rotation.z = Math.PI; desG.add(deac);
   // cash drawer under the register, on the employee face: slides out (toward
   // the clerk) when a sale's rung up, a till of bills and coins inside
   {
@@ -4308,8 +4420,8 @@ function meTick(dt) {
     g.position.set(stool.x, 0, stool.z); g.rotation.y = stool.angle + Math.PI;
     me.setPose("sit", STOOL_SIT);
   } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
-    g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = 0;
-    me.setPose("sit");
+    g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = seatAt.ry || 0;
+    me.setPose("sit", seatAt.hipY ? { hipY: seatAt.hipY } : undefined);
   } else {
     speed = Math.hypot(player.x - meLast.x, player.z - meLast.z) / Math.max(dt, 1e-4);
     g.position.set(player.x + Math.sin(player.yaw) * 0.21, floorHeightAt(player.x, player.z), player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
@@ -4317,7 +4429,25 @@ function meTick(dt) {
     me.setPose(keys.has("KeyC") ? "crouch" : "idle");
   }
   meLast.x = player.x; meLast.z = player.z;
+  const onToilet = seated && !!seatAt?.toilet;    // pants down, and the broadcast-standards mosaic over the middle
+  if (onToilet !== meToilet) { meToilet = onToilet; me.setPantsDown(onToilet); censor.visible = onToilet; }
+  if (onToilet) { censor.lookAt(camera.position); if ((censor.t -= dt) <= 0) { censor.t = 0.12; censorDraw(); } }   // (always square to your eye)
   me.tick(dt, speed);
+}
+// the censor: a pixel mosaic over your lap, redrawn a few times a second so it shimmers like a TV blur
+let meToilet = false;
+const censorTex = makeTexture(() => {}, 64, 64); censorTex.magFilter = THREE.NearestFilter; censorTex.minFilter = THREE.NearestFilter;
+const censor = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.36), new THREE.MeshLambertMaterial({ map: censorTex, transparent: true, alphaTest: 0.1 }));   // lit like the skin around it (an unlit sprite bloomed)
+censor.position.set(0, 0.6, 0.17); censor.visible = false; censor.t = 0; me.group.add(censor);
+function censorDraw() {
+  const g = censorTex.image.getContext("2d"), skin = me.outfit.skin, n = 8, c = 64 / n;
+  g.clearRect(0, 0, 64, 64);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const dx = (i + 0.5) / n - 0.5, dy = (j + 0.5) / n - 0.5; if (dx * dx + dy * dy > 0.25) continue;   // a round-ish patch
+    const tone = Math.random(); g.fillStyle = tone < 0.4 ? skin : tone < 0.62 ? "#9a6a4c" : tone < 0.8 ? "#f6dcc4" : tone < 0.92 ? "#b9a27a" : "#5a4230";   // skin, shade, highlight, khaki, deep shadow
+    g.globalAlpha = 0.85 + Math.random() * 0.15; g.fillRect(i * c, j * c, c, c);
+  }
+  g.globalAlpha = 1; censorTex.needsUpdate = true;
 }
 
 // ---- the spinning stool (starts behind the counter; hold E to carry it off
@@ -4432,8 +4562,10 @@ addEventListener("keydown", e => {
   if (e.code === "Escape") { if (!escClose()) document.exitPointerLock(); return; }   // (only reaches us in fullscreen, with the keyboard lock)
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
-  if (e.code === "KeyE" && !e.repeat) {
-    if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
+  if (e.code === "KeyE" && !e.repeat && cmove.item) { /* carrying one: click sets it down */ }
+  else if (e.code === "KeyE" && !e.repeat) {
+    if (aimMove && !seated && !onStool && !cutout.carried && !stool.carried && !boxCarry.length) { eHoldMove = aimMove; eHoldTimer = setTimeout(() => { eHoldTimer = null; const it = eHoldMove; eHoldMove = null; if (it) moveStart(it); }, HOLD_MS); }   // a tap does its usual thing (on release); a hold picks it up
+    else if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
     else if (aimStool && !stool.by) { eHoldStool = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldStool = false; stoolPickUp(); }, HOLD_MS); }
     else if (aimSwitch && switchPlate[aimSwitch].length > 1 && !seated && !aimCouch && !cutout.carried && !stool.carried && !aimCustomer) {
       eHoldSwitch = aimSwitch;
@@ -4461,10 +4593,18 @@ addEventListener("keyup", e => {
     clearTimeout(eHoldTimer); eHoldTimer = null;   // let go before it's lifted: nothing happens
     if (eHoldSwitch) { flipSwitch(eHoldSwitch); eHoldSwitch = null; }   // a tap on the plate: just the one switch
     if (eHoldStool) { eHoldStool = false; stoolSit(); }                  // a tap on the stool: sit
+    if (eHoldMove) { eHoldMove = null; onE(); }                         // a tap on a rewinder / the pad / the printer: its usual thing
   }
 });
 let seatFov = 70;
 canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoom a held-up cover
+  if (cmove.item) {                              // carrying a counter thing: turn it, 15° per notch's worth of scrolling
+    const px = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);   // (lines / pages -> pixels)
+    if (Math.abs(px) >= 50) { cmove.wheel = 0; cmove.ry -= Math.sign(px) * Math.PI / 12; return; }   // a mouse wheel notch: one step
+    cmove.wheel = (cmove.wheel || 0) + px;                                                   // a touchpad's little deltas: a step per 50 px of swipe
+    while (Math.abs(cmove.wheel) >= 50) { const d = Math.sign(cmove.wheel); cmove.ry -= d * Math.PI / 12; cmove.wheel -= d * 50; }
+    return;
+  }
   if (tvMenu && tvMenuWheel(e.deltaY < 0 ? 1 : -1)) return;               // nudging a menu slider
   if (seated) seatFov = Math.max(28, Math.min(70, seatFov + e.deltaY * 0.02));
   else if (held && inspecting) {
@@ -4529,7 +4669,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -5470,7 +5610,7 @@ function empNext() {                              // processing returns: what's 
   const c = emp.c;
   c.reachTo(null);
   c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
-  if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", EMP_REWIND);
+  if (emp.carry.some(t => !isRewound(t))) return empGo("toRewinder", rewinderSpot());
   const alerted = emp.carry.find(holdAlertFor);
   if (alerted) { emp.target = alerted; return empGo("toHolds", { x: HOLDS_AT.x, z: HOLDS_AT.z + 0.6, ry: Math.PI }); }   // flagged on the POS: someone's waiting on this one
   if (emp.carry.length) {                         // nearest slot next: one loop through the floor, not a trip per tape
@@ -5660,9 +5800,9 @@ function tvLevel() {                              // RMS of the TV's audio right
   let sum = 0; for (const v of tvAudio.buf) sum += v * v;
   return Math.sqrt(sum / tvAudio.buf.length);
 }
-const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated;   // what brings her over
+const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated && !seatAt?.toilet;   // what brings her over (the couch, not the restroom)
 const inLounge = () => Math.hypot(player.x - TV.x, player.z - (TV.z - 2.5)) < 5.5;
-const empKeepWatching = () => frontLock.locked && !custs.length && emp.task === "register" && (seated || inLounge()) && !gateAlarm.on;   // what keeps her there (the alarm gets her up)
+const empKeepWatching = () => frontLock.locked && !custs.length && emp.task === "register" && ((seated && !seatAt?.toilet) || inLounge()) && !gateAlarm.on;   // what keeps her there (the alarm gets her up)
 function empWatch(dt) {                           // on the couch: pick a face from the sound
   const c = emp.c, w = emp.watch, lvl = tvLevel();
   w.cool -= dt;
@@ -5798,7 +5938,7 @@ function empTick(dt) {
         } else emp.ringT = 0;
         const mine = co?.by === "dana" && co.cust.c;
         // she shuffles over to the pad for the desensitize step and back after — never leans across for it
-        const wantX = mine && coStep()?.at === "pad" ? DESENS_AT.x : mine && coStep()?.at === "printer" ? PRN_AT.x : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // home = wherever she parked (beside you, if you're on her spot)
+        const wantX = mine && coStep()?.at === "pad" && onNorthRun(DESENS_AT) ? Math.min(DESENS_AT.x, COUNTER.tops[1].staff - 0.1) : mine && coStep()?.at === "printer" && onNorthRun(PRN_AT) ? Math.min(PRN_AT.x, COUNTER.tops[1].staff - 0.1) : emp.spot?.x ?? EMP_POST.x, gap = wantX - p.x;   // (set down round on the east run: she reaches from her post)   // home = wherever she parked (beside you, if you're on her spot)
         if (Math.abs(gap) > 0.02) { const st = Math.sign(gap) * Math.min(Math.abs(gap), 1.0 * dt); p.x += st; speed = 1.0; }
         if (mine) {                                // chatting while she works: faces them, nods, smiles
           c.talk(true);
@@ -6294,9 +6434,14 @@ function custTip(k) {                           // what E (and Q) do to this cus
   return t;
 }
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
+  if (cmove.item) {                           // carrying a counter thing: where it'd go
+    highlight.visible = false; const tip = $("hoverTip"); tip.style.display = "block";
+    tip.innerHTML = (cmove.spot ? cmove.ok ? `Click — set the ${cmove.item.name} down here` : "It won't fit there" : "Aim at a free spot on the counter") + `<div class="cat">Wheel — turn it · Right-click — put it back</div>`;
+    return;
+  }
   if (stool.carried) {                       // arms full: setting the stool down is the only thing E does
     highlight.visible = false;
     const tip = $("hoverTip"); tip.innerHTML = stool.spot ? "E — set the stool down" : "No room for the stool here"; tip.style.display = "block";
@@ -6350,6 +6495,7 @@ function pickHover() {
     let aim = aimHits.find(h => h.object.userData.mess && h.distance < 2.4) || aimHits[0];   // trash under a seat: the trash, not the seat
     const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
     if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
+    aimMove = aim && aim.distance < 2.4 && aim.object.userData.movable || null;   // (a rewinder, the pad, the printer: hold E to move it)
     if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
@@ -6364,6 +6510,9 @@ function pickHover() {
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
     else if (aim?.object.userData.jobBoard && aim.distance < 2.4) aimBoard = true;
+    else if (aim?.object.userData.flush && aim.distance < 2.2) aimToilet = true;   // the lever flushes (the rest of it you sit on)
+    else if (aim?.object.userData.sink && aim.distance < 2.2) aimSink = true;
+    else if (aim?.object.userData.towels && aim.distance < 2.2) aimTowels = true;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
     else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trash && aim.distance < 2.4 && (heldSnack || heldPopcorn || held)) aimTrash = true;
@@ -6409,6 +6558,9 @@ function pickHover() {
     else if (aimCupboard) { const n = emptySpots().filter(u => isDrink(u.userData.snack) === (aimCupboard === "drinks")).length;
       tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : " · the racks are full"}`; }
     else if (aimBox) tip.innerHTML = `E — pick up the box: ${aimBox.name} \u00d7${aimBox.qty}`;
+    else if (aimToilet) tip.innerHTML = bath.flushT > 0 ? "Flushing…" : "E — flush";
+    else if (aimSink) tip.innerHTML = `E — turn the tap ${bath.tap ? "off" : "on"}`;
+    else if (aimTowels) tip.innerHTML = "E — take a paper towel";
     else if (aimBoard) tip.innerHTML = `E — Dana's job board<div class="cat">${emp.c ? `Now: ${JOBS[danaJobNow()]?.name.toLowerCase() || "free"}` : "no Dana yet"}</div>`;
     else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
@@ -6421,13 +6573,16 @@ function pickHover() {
     else if (aimDrawer) tip.innerHTML = co?.by === "player" && coWants("register") ? `E — ${coWants("register").tip()}` : "Cash drawer";
     else if (aimPOS && co?.by === "player" && coWants("register")) tip.innerHTML = `E — ${coWants("register").tip()}`;
     else if (aimPOS) tip.innerHTML = gateAlarm.on ? "E — log in to the register (silence the gate alarm)" : "E — log in to the register";
+    else if (aimMove) tip.innerHTML = eHoldTimer && eHoldMove ? "Lifting…" : `Hold E — move the ${aimMove.name}`;
     else { tip.style.display = "none"; return; }
+    if (aimMove && !tip.innerHTML.includes("Hold E")) tip.innerHTML += `<div class="cat">Hold E — move it</div>`;
     tip.style.display = "block";
   }
 }
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("mousedown", e => {
   if (document.pointerLockElement !== canvas) return;
+  if (cmove.item) { if (e.button === 0) movePlace(); else if (e.button === 2) moveCancel(`The ${cmove.item.name}'s back where it was`); return; }
   if (e.button === 2) {                                    // right click puts down whatever's in hand (and backs out of things, like Escape)
     if (board.open) { boardClose(); return; }             // Dana's job board
     if (tvMenu) { tvMenu = false; return; }                // an open picture menu closes from anywhere...
@@ -6666,7 +6821,7 @@ function amenities() {
       const t = textPlane("THEATER \u00b7 COMING SOON", 0.62, 0.16, "#ffd400", "#3a0d12", "Arial Black", 60);
       t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(hall.at + f * 0.07, 1.5, hall.c); t.rotation.y = f * Math.PI / 2; theaterSign.add(t);
     }
-  } else if (open && theaterSign) { scene.remove(theaterSign); theaterSign = null; }
+  } else if (open && theaterSign) { theaterSign.removeFromParent(); theaterSign = null; }   // (removeFromParent: roomSort may have filed it into a room group)
   if (popcornMachine) {
     const on = owned("popcorn");
     if (popcornMachine.g.visible !== on) {
@@ -6796,7 +6951,7 @@ function holdPlace(tape) {                        // E on the holds shelf with a
 }
 let holdMeshes = [];
 function holdsRender() {                          // the held tapes, stacked in the tray with a yellow slip on each
-  for (const m of holdMeshes) scene.remove(m); holdMeshes = [];
+  for (const m of holdMeshes) m.removeFromParent(); holdMeshes = [];
   holds.filter(h => h.copy).forEach((h, i) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), h.copy.sideMat || mat.tapeBody);
     m.position.set(HOLDS_AT.x + (i % 2) * 0.012, HOLDS_AT.y + TAPE.w / 2 + i * TAPE.w, HOLDS_AT.z); scene.add(m); holdMeshes.push(m);
@@ -6818,6 +6973,111 @@ function danaCall() {                            // Dana picks up: she checks, t
   emp.fetch = { copy, hold: h }; emp.c.setMood("happy"); empGo("fetchGo", shelfSpot(copy));
 }
 
+// ---------------- the restroom's working parts ----------------
+function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
+  if (bath.flushT > 0 && bath.water) {
+    bath.flushT = Math.max(0, bath.flushT - dt); const t = 6 - bath.flushT;
+    bath.water.position.y = bath.waterY - 0.07 * (t < 1.3 ? t / 1.3 : Math.max(0, 1 - (t - 1.3) / 3.8));
+    bath.water.rotation.z += dt * (t < 2.5 ? 5 : 0);   // swirl
+  }
+  if (bath.tap && bath.stream) bath.stream.scale.set(1 + Math.sin(clockT * 40) * 0.08, 1, 1 + Math.cos(clockT * 37) * 0.08);
+}
+
+// ---------------- moving things around the counter ----------------
+// The rewinders, the desensitizer and the receipt printer can be rearranged:
+// hold E on one to pick it up, and a see-through copy follows your aim over
+// the worktop (it only shows where it could actually sit: on the counter,
+// behind the ledge, clear of the register and everything else; red if it
+// won't fit). The wheel turns it, a click sets it down, right-click puts it
+// back where it was, and walking off puts it back too
+const cmove = { item: null, ghost: null, ry: 0, spot: null, ok: false, from: null };
+let counterItems = null, eHoldMove = null;
+const ghostOk = new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.42, depthWrite: false });
+const ghostBad = new THREE.MeshBasicMaterial({ color: 0xff5a5a, transparent: true, opacity: 0.38, depthWrite: false });
+function footprint(g) {                          // its outline on the worktop, in its own frame
+  g.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(g.matrixWorld).invert(), b = new THREE.Box3(), mb = new THREE.Box3(), m4 = new THREE.Matrix4();
+  g.traverse(o => { if (!o.isMesh || o === printer.strip) return; if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); b.union(mb.copy(o.geometry.boundingBox).applyMatrix4(m4.multiplyMatrices(inv, o.matrixWorld))); });
+  return { cx: (b.min.x + b.max.x) / 2, cz: (b.min.z + b.max.z) / 2, hx: (b.max.x - b.min.x) / 2 + 0.005, hz: (b.max.z - b.min.z) / 2 + 0.005 };
+}
+function counterItemsList() {
+  if (counterItems) return counterItems;
+  const reg = (id, name, g) => { const it = { id, name, g, fp: footprint(g) }; g.traverse(o => { if (o.isMesh) o.userData.movable = it; }); return it; };
+  counterItems = [...rewinders.map((rw, i) => reg(`rewinder${i}`, "rewinder", rw.g)), reg("desens", "desensitizer", COUNTER.groups.desens), reg("printer", "receipt printer", COUNTER.groups.printer)];
+  counterItems.fixed = [{ g: COUNTER.groups.register, fp: footprint(COUNTER.groups.register) }];   // (the register and its keyboard stay put)
+  return counterItems;
+}
+function obb(fp, x, z, ry) {                     // that outline placed in the world: center, axes, half-sizes
+  const c = Math.cos(ry), s = Math.sin(ry), ux = [c, -s], uz = [s, c];
+  return { x: x + fp.cx * c + fp.cz * s, z: z - fp.cx * s + fp.cz * c, ux, uz, hx: fp.hx, hz: fp.hz };
+}
+const obbOf = it => obb(it.fp, it.g.position.x, it.g.position.z, it.g.rotation.y);
+function obbHit(a, b) {                          // separating axis test, in plan
+  const dx = b.x - a.x, dz = b.z - a.z;
+  for (const [ax, az] of [a.ux, a.uz, b.ux, b.uz]) {
+    const ra = a.hx * Math.abs(a.ux[0] * ax + a.ux[1] * az) + a.hz * Math.abs(a.uz[0] * ax + a.uz[1] * az);
+    const rb = b.hx * Math.abs(b.ux[0] * ax + b.ux[1] * az) + b.hz * Math.abs(b.uz[0] * ax + b.uz[1] * az);
+    if (Math.abs(dx * ax + dz * az) > ra + rb) return false;
+  }
+  return true;
+}
+const onTop = (x, z) => COUNTER.tops.some(t => x >= t.x0 && x <= t.x1 && z >= t.z0 && z <= t.z1);
+function fits(it, x, z, ry) {                    // all of it on the worktop, and not into anything else
+  const o = obb(it.fp, x, z, ry);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) if (!onTop(o.x + o.ux[0] * o.hx * sx + o.uz[0] * o.hz * sz, o.z + o.ux[1] * o.hx * sx + o.uz[1] * o.hz * sz)) return false;
+  return ![...counterItemsList().filter(k => k !== it), ...counterItems.fixed].some(k => obbHit(o, obbOf(k)));
+}
+function ghostOf(g) {                             // a see-through copy (visible parts only; the receipt strip stays home)
+  const copy = o => {
+    if (o.isMesh && !o.visible) return null;
+    const c = o.isMesh ? new THREE.Mesh(o.geometry, ghostOk) : new THREE.Group();
+    c.position.copy(o.position); c.rotation.copy(o.rotation); c.scale.copy(o.scale);
+    for (const ch of o.children) if (ch !== printer.strip) { const k = copy(ch); if (k) c.add(k); }
+    return c;
+  };
+  return copy(g);
+}
+function moveStart(it) {
+  if (co && (it.id === "desens" || it.id === "printer")) { toast("Not in the middle of a checkout"); return; }
+  cmove.item = it; cmove.ry = it.g.rotation.y; cmove.from = { x: it.g.position.x, z: it.g.position.z, ry: it.g.rotation.y, px: player.x, pz: player.z };
+  cmove.ghost = ghostOf(it.g); cmove.ghost.visible = false; scene.add(cmove.ghost);
+  cmove.wheel = 0;
+  it.g.visible = false; cmove.spot = null; cmove.ok = false;
+}
+function moveTick() {                            // each frame while carrying one: where would it go?
+  if (!cmove.item) return;
+  if (Math.hypot(player.x - cmove.from.px, player.z - cmove.from.pz) > 3) return moveCancel(`You walked off: the ${cmove.item.name}'s back where it was`);
+  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  const r = raycaster.ray, t = r.direction.y < -0.02 ? (COUNTER.y - r.origin.y) / r.direction.y : -1;
+  const x = r.origin.x + r.direction.x * t, z = r.origin.z + r.direction.z * t;
+  if (t < 0 || t > 2.6 || !onTop(x, z)) { cmove.spot = null; cmove.ghost.visible = false; return; }   // not aiming at the worktop: no ghost
+  cmove.spot = { x, z }; const ok = fits(cmove.item, x, z, cmove.ry);
+  if (ok !== cmove.ok) { cmove.ok = ok; cmove.ghost.traverse(o => { if (o.isMesh) o.material = ok ? ghostOk : ghostBad; }); }
+  cmove.ghost.visible = true; cmove.ghost.position.set(x, COUNTER.y + 0.002, z); cmove.ghost.rotation.set(0, cmove.ry, 0);
+}
+function moveEnd() { cmove.item.g.visible = true; cmove.ghost.removeFromParent(); cmove.item = cmove.ghost = cmove.spot = null; }   // (from wherever it is: in the first seconds roomSort files new things into room groups)
+function movePlace() {                           // click: set it down (if it fits)
+  if (!cmove.spot) { toast("Aim at a free spot on the counter"); return; }
+  if (!cmove.ok) { toast("It won't fit there"); return; }
+  const it = cmove.item; it.g.position.set(cmove.spot.x, COUNTER.y, cmove.spot.z); it.g.rotation.y = cmove.ry;
+  moveEnd(); counterMoved(it);
+}
+function moveCancel(msg) { if (!cmove.item) return; moveEnd(); if (msg) toast(msg); }   // right-click / walked off: it never left
+function counterMoved(it) {                       // everything that depends on where it sits follows it
+  it.g.updateMatrixWorld(true);
+  if (it.id === "desens") { DESENS_AT.x = it.g.position.x; DESENS_AT.z = it.g.position.z; }
+  if (it.id === "printer") { const v = new THREE.Vector3(0, 0.091, -0.028).applyMatrix4(it.g.matrixWorld); PRN_AT.x = v.x; PRN_AT.z = v.z; }
+}
+function staffSpotFor(x, z) {                     // where you'd stand behind the counter to reach something at x/z
+  const top = COUNTER.tops.find(t => x >= t.x0 - 0.05 && x <= t.x1 + 0.05 && z >= t.z0 - 0.05 && z <= t.z1 + 0.05) || COUNTER.tops[1];
+  return top.run === "north" ? { x: Math.max(COUNTER.tops[0].x0 + 0.3, Math.min(x, COUNTER.tops[1].staff - 0.1)), z: top.staff, ry: 0 } : { x: top.staff, z, ry: Math.PI / 2 };
+}
+function rewinderSpot() {                         // Dana's spot for the rewinders: at the free one nearest her (or the first)
+  const p = emp.c.group.position, free = rewinders.filter(rw => !rw.tape), pick = (free.length ? free : rewinders).reduce((a, b) => b.g.position.distanceTo(p) < a.g.position.distanceTo(p) ? b : a);
+  return staffSpotFor(pick.g.position.x, pick.g.position.z);
+}
+const onNorthRun = at => COUNTER.tops[0] && at.z >= COUNTER.tops[0].z0 - 0.05 && at.x <= COUNTER.tops[0].x1;
+
 // ---------------- misshelved tapes ----------------
 // A customer putting a tape back sometimes shoves it in wherever they're
 // standing: it sits crooked, sticking out of the shelf, until someone puts it
@@ -6833,7 +7093,7 @@ function misshelve(copy, spot, at = null) {
   strays.push({ copy, mesh: m, at: near });
 }
 function strayTake(s) {                          // off the shelf and into a hand
-  scene.remove(s.mesh); strays.splice(strays.indexOf(s), 1);
+  s.mesh.removeFromParent(); strays.splice(strays.indexOf(s), 1);
 }
 // ---------------- messes ----------------
 // Litter from customers (a wrapper, spilled popcorn), cups left in the
@@ -6853,7 +7113,7 @@ function messAdd(kind, x, z, y = floorHeightAt(x, z)) {
   scene.add(mesh); messes.push(m);
 }
 function messClean(m, by = "you") {
-  scene.remove(m.mesh); m.mesh.traverse(o => { const i = aimables.indexOf(o); if (i >= 0) aimables.splice(i, 1); });
+  m.mesh.removeFromParent(); m.mesh.traverse(o => { const i = aimables.indexOf(o); if (i >= 0) aimables.splice(i, 1); });
   messes.splice(messes.indexOf(m), 1);
   shiftScore(15, by); logAct(`${by === "dana" ? "Dana cleaned" : "Cleaned"} up the ${MESS[m.kind].label}`, "good", null, 15);
 }
@@ -7159,7 +7419,7 @@ function onE() {
   if (aimCouch) {
     stoodAt = { x: player.x, z: player.z, yaw: player.yaw };
     seatAt = aimSeatObj || SEATS.reduce((a, s) => Math.abs(s.x - aimSeatX) < Math.abs(a.x - aimSeatX) ? s : a);
-    seated = true; player.yaw = Math.PI; player.pitch = 0;
+    seated = true; player.yaw = (seatAt.ry || 0) + Math.PI; player.pitch = 0;   // looking the way the seat faces
     return;
   }
   if (cutout.carried) { cutoutPutDown(); return; }
@@ -7172,6 +7432,9 @@ function onE() {
   if (aimMess) { messClean(aimMess); return; }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
+  if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
+  if (aimSink) { bath.tap = !bath.tap; bath.stream.visible = bath.tap; window.VaultAmbience?.water("tap", ...bath.sinkAt, bath.tap); return; }
+  if (aimTowels) { toast(bath.tap ? "Turn the tap off first" : "You dry your hands", !bath.tap); return; }
   if (aimHolds && held && !inspecting) { holdPlace(held); return; }
   if (aimHolds && !held) { holdPull(); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
@@ -7265,6 +7528,7 @@ let relockOnInput = false;                        // backed out with Escape: the
 function backToStore() { relockOnInput = true; keys.clear(); $("crosshair").hidden = true; toast("Click or press any key to get back in", true); }
 let posEsc = false;                              // the key that closed the POS was Escape
 function escClose() {                          // Escape closes whatever's open over the store; true if something was
+  if (cmove.item) { moveCancel(`The ${cmove.item.name}'s back where it was`); return true; }
   if (held && inspecting) { inspecting = false; peek = null; return true; }
   if (tvMenu) { tvMenu = false; return true; }
   if (board.open) { boardClose(); return true; }
@@ -7459,7 +7723,8 @@ function saveState() {
   const data = {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
-    jobs: jobs.map(j => ({ id: j.id, pri: j.pri })), rep: rep.v, upg, members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
+    jobs: jobs.map(j => ({ id: j.id, pri: j.pri })), rep: rep.v, upg,
+    counterItems: Object.fromEntries(counterItemsList().map(it => { const f = cmove.item === it ? cmove.from : null; return [it.id, f ? [f.x, f.z, f.ry] : [+it.g.position.x.toFixed(3), +it.g.position.z.toFixed(3), +it.g.rotation.y.toFixed(3)]]; })), members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
@@ -7520,6 +7785,7 @@ function loadState(S) {
     }
     if (S.show) { const t = copyByKey(S.show.title); if (t) Object.assign(show, S.show, { title: t }); }
     upgVisuals();
+    for (const it of counterItemsList()) { const c = S.counterItems?.[it.id]; if (c) { it.g.position.set(c[0], COUNTER.y, c[1]); it.g.rotation.y = c[2]; counterMoved(it); } }   // where you'd put the counter things
     for (const h of S.holds || []) {             // promised holds (and what's on the shelf for them)
       const m = posTerm.members.find(m => m.num === h.member), t = copyByKey(h.title), c = h.copy && copyByKey(h.copy);
       if (m && t) { if (c) setOnShelf(c, false); holds.push({ member: m, title: t, at: h.at, day: h.day, copy: c || null, by: h.by, alert: h.alert }); }
@@ -7541,6 +7807,7 @@ loadState(SAVE);
 if (!SAVE?.stock) for (const e of stockProducts()) backstock[e.name] ??= CASE_QTY;   // a new store: a case of everything in the cupboards
 if (!SAVE?.shift) beginShift();              // a new store (or one saved before the shift clock): day 1, first thing
 gateLastZ = player.z;                        // restored position isn't a walk through the gates
+counterItemsList();                          // (marks the rewinders, pad and printer as movable)
 libLock(); amenities();                     // simulation: what the store hasn't got yet
 if (SAVE?.log) { const fresh = logData.splice(0); for (const r of SAVE.log) logAct(r[1], r[2], r[3], r[4], r[0]); for (const r of fresh) logAct(r[1], r[2], r[3], r[4], r[0]); }   // the log picks up where it left off
 titleMenu();
@@ -7726,7 +7993,7 @@ renderer.setAnimationLoop(() => {
     d.rattle = Math.max(0, d.rattle - dt);
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
-  move(dt);
+  move(dt); moveTick(); bathTick(dt);
   if (inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
@@ -7734,7 +8001,7 @@ renderer.setAnimationLoop(() => {
   thSeatTick(dt);
   meTick(dt);
   if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
-  else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(0, 0.03, 0.06));   // eyes just above the collar, a touch forward
+  else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(Math.sin(seatAt.ry || 0) * 0.06, 0.03, Math.cos(seatAt.ry || 0) * 0.06));   // eyes just above the collar, a touch forward
   else {
     eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
     camera.position.set(player.x, eyeY + floorHeightAt(player.x, player.z), player.z);
@@ -7769,9 +8036,9 @@ renderer.setAnimationLoop(() => {
     : tvMenu
     ? "Click to choose · wheel adjusts a slider · right-click closes"
     : seated
-    ? "Press E to stand up · right-click the screen for picture settings"
+    ? (seatAt?.toilet ? "Press E to stand up (and pull your pants up)" : "Press E to stand up · right-click the screen for picture settings")
     : aimCouch
-      ? (aimSeatObj ? "Press E to take a seat" : "Press E to sit on the couch")
+      ? (aimSeatObj?.toilet ? "Press E to sit on the toilet" : aimSeatObj ? "Press E to take a seat" : "Press E to sit on the couch")
       : held
         ? `Press E to insert “${held.title}” into the TV`
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
@@ -7787,5 +8054,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  holdPull, jobBoardMesh: () => jobBoardMesh, aimables, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };
