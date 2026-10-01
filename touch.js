@@ -1,9 +1,14 @@
 // Touchscreen controls (phones / tablets). Phones have no pointer lock and no keyboard, so
 // this fakes the lock (the store runs exactly as it does with a mouse captured) and turns
-// touches into the same events the store already listens for: a left-thumb stick presses
-// WASD (Shift when pushed all the way), dragging on the right looks around, a tap there
-// clicks, and the buttons send their keys. At the register a KEYBOARD button brings up the
-// phone's own keyboard and feeds what's typed to the terminal.
+// touches into the same events the store already listens for. No buttons:
+//   - a thumb down in the bottom-left: a stick (WASD; Shift when pushed all the way)
+//   - drag anywhere else: look around
+//   - tap something: whatever its hover tip offers there (E, click, Q). Offers more than
+//     one? Labelled choices pop up by your finger. Nothing on offer: a click
+//   - long press: hold E (lift the standee, pick up the stool, move a rewinder...)
+//   - two-finger tap: right-click (put back, drop, back out)
+//   - tap an inventory slot, a shoplifter / phone option, or the clock (the menu)
+// At the register a bar with KEYBOARD (the phone's own) and the keys a phone doesn't have.
 // Only on touch devices; ?touch=1 forces it on (testing on a desktop).
 (() => {
   const forced = /[?&]touch=1\b/.test(location.search);
@@ -22,11 +27,13 @@
   const key = (type, code, k = keyOf(code)) => dispatchEvent(new KeyboardEvent(type, { code, key: k, bubbles: true, cancelable: true }));
   const tapKey = code => { key("keydown", code); key("keyup", code); };
   const mouse = (type, button) => canvas().dispatchEvent(new MouseEvent(type, { button, bubbles: true, cancelable: true }));
+  const click = button => { mouse("mousedown", button); mouse("mouseup", button); };
   const look = (dx, dy) => {                     // movementX/Y can't be set from the constructor everywhere: shadow them
     const e = new MouseEvent("mousemove", { bubbles: true });
     Object.defineProperty(e, "movementX", { value: dx }); Object.defineProperty(e, "movementY", { value: dy });
     dispatchEvent(e);
   };
+  const ndc = (x, y) => [x / innerWidth * 2 - 1, -(y / innerHeight * 2 - 1)];
 
   // ---- the overlay ----
   const css = document.createElement("style");
@@ -34,62 +41,38 @@
     #tc, #tcPos { position: fixed; inset: 0; z-index: 30; display: none; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
     #tc.on, #tcPos.on { display: block; }
     #tcPos { inset: auto 0 0 0; z-index: 60; }
-    #tcMove { position: absolute; left: 0; top: 0; bottom: 0; width: 42%; }
-    #tcLook { position: absolute; right: 0; top: 0; bottom: 0; width: 58%; }
     #tcStick { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; display: none;
       border: 2px solid #fff6; background: #0003; pointer-events: none; }
     #tcStick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: #fff8; }
-    .tcb { position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 50%;
-      background: #001f5ccc; color: #ffd400; border: 2px solid #ffd400aa; font: bold 15px Arial, sans-serif; letter-spacing: 1px; }
-    .tcb.big { width: 74px; height: 74px; font-size: 22px; } .tcb.mid { width: 56px; height: 56px; } .tcb.sm { width: 44px; height: 44px; font-size: 12px; border-radius: 10px; }
+    #tcChoice { position: absolute; display: none; flex-direction: column; gap: 8px; z-index: 2; }
+    #tcChoice.on { display: flex; }
+    .tcb { display: flex; align-items: center; justify-content: center; background: #001f5ce6; color: #ffd400; border: 2px solid #ffd400aa;
+      font: bold 15px Arial, sans-serif; border-radius: 10px; padding: 0 16px; min-height: 46px; min-width: 56px; }
     .tcb.down { background: #ffd400; color: #001f5c; }
-    #tcKeys { position: absolute; right: 12px; top: 64px; display: none; flex-wrap: wrap; gap: 6px; width: 196px; justify-content: flex-end; }
-    #tcKeys.on { display: flex; } #tcKeys .tcb, #tcPos .tcb { position: static; }
     #tcPos .row { display: flex; gap: 8px; justify-content: center; padding: 8px; background: #000a; }
-    #tcPos .tcb { width: auto; min-width: 56px; padding: 0 12px; height: 48px; border-radius: 10px; }
     #tcType { position: fixed; left: -100px; top: 0; width: 10px; height: 10px; opacity: 0; }`;
   document.head.appendChild(css);
   const root = document.createElement("div"); root.id = "tc";
-  root.innerHTML = `<div id="tcMove"></div><div id="tcLook"></div><div id="tcStick"><i></i></div><div id="tcKeys"></div>`;
+  root.innerHTML = `<div id="tcStick"><i></i></div><div id="tcChoice"></div>`;
   const posBar = document.createElement("div"); posBar.id = "tcPos";
   posBar.innerHTML = `<div class="row"></div><input id="tcType" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false">`;
   document.body.append(root, posBar);
-
-  // a button: down/up fire on touch start/end, so holding works (hold E on the standee, the stool...)
-  function button(parent, label, cls, pos, down, up) {
-    const b = document.createElement("div"); b.className = "tcb " + cls; b.textContent = label;
-    if (pos) Object.assign(b.style, pos);
-    b.addEventListener("touchstart", e => { e.preventDefault(); e.stopPropagation(); b.classList.add("down"); down?.(); }, { passive: false });
-    const end = e => { e.preventDefault(); e.stopPropagation(); if (!b.classList.contains("down")) return; b.classList.remove("down"); up?.(); };
-    b.addEventListener("touchend", end, { passive: false }); b.addEventListener("touchcancel", end, { passive: false });
+  function button(parent, label, up) {           // (only the register bar and the tap choices have buttons)
+    const b = document.createElement("div"); b.className = "tcb"; b.textContent = label;
+    b.addEventListener("touchstart", e => { e.preventDefault(); e.stopPropagation(); b.classList.add("down"); }, { passive: false });
+    b.addEventListener("touchend", e => { e.preventDefault(); e.stopPropagation(); if (b.classList.contains("down")) { b.classList.remove("down"); up(); } }, { passive: false });
+    b.addEventListener("touchcancel", () => b.classList.remove("down"));
     parent.appendChild(b); return b;
   }
-  const hold = code => [() => key("keydown", code), () => key("keyup", code)];
-  // right thumb: the actions
-  button(root, "E", "big", { right: "24px", bottom: "110px" }, ...hold("KeyE"));
-  button(root, "Q", "mid", { right: "112px", bottom: "150px" }, ...hold("KeyQ"));
-  button(root, "GRAB", "mid", { right: "112px", bottom: "78px" }, () => mouse("mousedown", 0), () => mouse("mouseup", 0));
-  button(root, "BACK", "mid", { right: "34px", bottom: "26px" }, () => mouse("mousedown", 2), () => mouse("mouseup", 2));
-  button(root, "ITEM", "mid", { right: "180px", bottom: "26px" }, () => canvas().dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true })));
-  let crouch = false;
-  const cr = button(root, "DUCK", "mid", { right: "108px", bottom: "6px" }, () => { crouch = !crouch; key(crouch ? "keydown" : "keyup", "KeyC"); cr.style.outline = crouch ? "3px solid #fff" : ""; });
-  // top right: the rest of the keyboard
-  button(root, "☰", "sm", { right: "12px", top: "12px" }, () => document.exitPointerLock());
-  button(root, "LOG", "sm", { right: "62px", top: "12px" }, () => tapKey("KeyJ"));
-  button(root, "⛶", "sm", { right: "112px", top: "12px" }, () => tapKey("KeyF"));
-  const keysPanel = root.querySelector("#tcKeys");
-  button(root, "KEYS", "sm", { right: "162px", top: "12px" }, () => keysPanel.classList.toggle("on"));
-  for (const d of "12345") button(keysPanel, d, "sm", null, () => tapKey("Digit" + d));          // shoplifter calls, the phone, Dana's job priorities
-  for (const [l, c] of [["▲", "ArrowUp"], ["▼", "ArrowDown"], ["◀", "ArrowLeft"], ["▶", "ArrowRight"], ["⏎", "Enter"], ["ESC", "Escape"], ["⏯", "Space"], ["+1H", "KeyL"]])
-    button(keysPanel, l, "sm", null, () => tapKey(c));
 
-  // ---- left thumb: the stick (it appears wherever you put your thumb down) ----
+  // ---- the stick: wherever a thumb lands in the bottom-left ----
   const stick = root.querySelector("#tcStick"), knob = stick.firstChild, R = 50;
-  let stickId = null, sx = 0, sy = 0, held = new Set();
+  let held = new Set();
+  const inStickZone = (x, y) => x < innerWidth * 0.4 && y > innerHeight * 0.35;
   const pressDirs = (dx, dy) => {
     const m = Math.hypot(dx, dy), want = new Set();
     if (m > 14) {
-      const a = Math.atan2(dy, dx), oct = Math.round(a / (Math.PI / 4));   // 8 ways
+      const oct = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));   // 8 ways
       if ([-3, -2, -1].includes(oct)) want.add("KeyW"); if ([1, 2, 3].includes(oct)) want.add("KeyS");
       if ([-1, 0, 1].includes(oct)) want.add("KeyD"); if ([3, 4, -4, -3].includes(oct)) want.add("KeyA");
       if (m > R * 0.95) want.add("ShiftLeft");                                // all the way over: hustle
@@ -98,54 +81,106 @@
     for (const c of want) if (!held.has(c)) key("keydown", c);
     held = want;
   };
-  const moveZone = root.querySelector("#tcMove");
-  moveZone.addEventListener("touchstart", e => {
-    e.preventDefault(); if (stickId !== null) return;
-    const t = e.changedTouches[0]; stickId = t.identifier; sx = t.clientX; sy = t.clientY;
-    Object.assign(stick.style, { display: "block", left: sx + "px", top: sy + "px" }); knob.style.transform = "";
-  }, { passive: false });
-  moveZone.addEventListener("touchmove", e => {
+
+  // ---- taps: do what the tapped thing offers ----
+  const choice = root.querySelector("#tcChoice");
+  let choiceT = null;
+  const hideChoice = () => { choice.classList.remove("on"); choice.innerHTML = ""; clearTimeout(choiceT); };
+  const ACT = /^(E|Q|CLICK)\s+—\s+(.+)$/i;      // "E — open the door", "CLICK — grab Licorice", "Q — waive the fees"
+  function perform(a, x, y) {
+    window.VaultAim?.at(...ndc(x, y));           // (re-aim: a choice gets tapped a moment later)
+    if (a === "E") tapKey("KeyE"); else if (a === "Q") tapKey("KeyQ"); else click(0);
+    window.VaultAim?.center();
+  }
+  function hudTap(x, y) {                        // the store's own on-screen bits under the finger (they don't take touches themselves)
+    const hit = [...document.querySelectorAll("#invBar .slot, #catchCall span, #callPanel > span, #shiftClock")]
+      .find(el => { const r = el.getBoundingClientRect(); return r.width && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom && getComputedStyle(el).visibility !== "hidden"; });
+    if (!hit) return false;
+    if (hit.id === "shiftClock") { document.exitPointerLock(); return true; }            // the clock: the menu
+    if (hit.classList.contains("slot")) { tapKey("Digit" + ([...hit.parentNode.children].indexOf(hit) + 1)); return true; }
+    const n = hit.querySelector("b")?.textContent.trim(); if (/^\d$/.test(n)) tapKey("Digit" + n);
+    return true;
+  }
+  function tap(x, y) {
+    hideChoice();
+    if (hudTap(x, y)) return;
+    const r = window.VaultAim?.at(...ndc(x, y)) || { tip: "", dflt: "CLICK" };
+    const acts = [];
+    for (const line of r.tip.split("\n")) { const m = line.trim().match(ACT); if (m && !acts.some(a => a.k === m[1].toUpperCase())) acts.push({ k: m[1].toUpperCase(), label: m[2].split(" · ")[0] }); }
+    window.VaultAim?.center();
+    if (acts.length <= 1) return perform(acts[0]?.k || r.dflt, x, y);
+    for (const a of acts) button(choice, a.label[0].toUpperCase() + a.label.slice(1), () => { hideChoice(); perform(a.k, x, y); });
+    choice.classList.add("on");
+    const w = choice.offsetWidth, h = choice.offsetHeight;
+    Object.assign(choice.style, { left: Math.max(8, Math.min(innerWidth - w - 8, x - w / 2)) + "px", top: Math.max(8, Math.min(innerHeight - h - 8, y - h - 24)) + "px" });
+    choiceT = setTimeout(hideChoice, 5000);
+  }
+
+  // ---- every touch on the store: stick, look, tap, long press, two-finger tap ----
+  const LOOK = 1.8;                              // touch px -> mouse px
+  const touches = new Map();                     // id -> { x, y, x0, y0, stick }
+  let gesture = null;                            // the look fingers' current gesture: { t0, n, moved, pts, long, longT }
+  root.addEventListener("touchstart", e => {
     e.preventDefault();
-    for (const t of e.changedTouches) if (t.identifier === stickId) {
-      let dx = t.clientX - sx, dy = t.clientY - sy; const m = Math.hypot(dx, dy);
-      if (m > R) { dx *= R / m; dy *= R / m; }
-      knob.style.transform = `translate(${dx}px, ${dy}px)`; pressDirs(t.clientX - sx, t.clientY - sy);
+    if (e.target.closest?.("#tcChoice")) return;
+    hideChoice();
+    for (const t of e.changedTouches) {
+      const stickFree = ![...touches.values()].some(s => s.stick);
+      const s = { x: t.clientX, y: t.clientY, x0: t.clientX, y0: t.clientY, stick: stickFree && inStickZone(t.clientX, t.clientY), t0: performance.now() };
+      touches.set(t.identifier, s);
+      if (s.stick) { Object.assign(stick.style, { display: "block", left: s.x + "px", top: s.y + "px" }); knob.style.transform = ""; continue; }
+      if (!gesture) {
+        gesture = { t0: performance.now(), n: 0, moved: 0, pts: [], long: false };
+        gesture.longT = setTimeout(() => {         // held still: a long press is holding E on whatever's there
+          if (!gesture || gesture.n !== 1 || gesture.moved > 10) return;
+          gesture.long = true; window.VaultAim?.at(...ndc(s.x0, s.y0)); key("keydown", "KeyE"); window.VaultAim?.center();
+        }, 450);
+      }
+      gesture.n++; gesture.pts.push([t.clientX, t.clientY]);
     }
   }, { passive: false });
-  const stickEnd = e => { for (const t of e.changedTouches) if (t.identifier === stickId) { stickId = null; stick.style.display = "none"; pressDirs(0, 0); } };
-  moveZone.addEventListener("touchend", stickEnd); moveZone.addEventListener("touchcancel", stickEnd);
-
-  // ---- right side: drag to look, tap to click ----
-  const LOOK = 1.5;                              // touch px -> mouse px (a drag across the screen is about a half turn)
-  const lookZone = root.querySelector("#tcLook"), lt = new Map();
-  lookZone.addEventListener("touchstart", e => {
+  root.addEventListener("touchmove", e => {
     e.preventDefault();
-    for (const t of e.changedTouches) lt.set(t.identifier, { x: t.clientX, y: t.clientY, t0: performance.now(), dist: 0 });
+    for (const t of e.changedTouches) {
+      const s = touches.get(t.identifier); if (!s) continue;
+      const dx = t.clientX - s.x, dy = t.clientY - s.y; s.x = t.clientX; s.y = t.clientY;
+      if (s.stick) {
+        let kx = s.x - s.x0, ky = s.y - s.y0; const m = Math.hypot(kx, ky); if (m > R) { kx *= R / m; ky *= R / m; }
+        knob.style.transform = `translate(${kx}px, ${ky}px)`; pressDirs(s.x - s.x0, s.y - s.y0);
+      } else { look(dx * LOOK, dy * LOOK); if (gesture) gesture.moved += Math.hypot(dx, dy); }
+    }
   }, { passive: false });
-  lookZone.addEventListener("touchmove", e => {
-    e.preventDefault();
-    for (const t of e.changedTouches) { const s = lt.get(t.identifier); if (!s) continue;
-      const dx = t.clientX - s.x, dy = t.clientY - s.y; s.x = t.clientX; s.y = t.clientY; s.dist += Math.hypot(dx, dy);
-      look(dx * LOOK, dy * LOOK); }
-  }, { passive: false });
-  const lookEnd = e => {
-    for (const t of e.changedTouches) { const s = lt.get(t.identifier); lt.delete(t.identifier);
-      if (s && e.type === "touchend" && s.dist < 12 && performance.now() - s.t0 < 300) { mouse("mousedown", 0); mouse("mouseup", 0); } }   // a tap: a click
+  const end = e => {
+    for (const t of e.changedTouches) {
+      const s = touches.get(t.identifier); if (!s) continue; touches.delete(t.identifier);
+      if (s.stick) {
+        stick.style.display = "none"; pressDirs(0, 0);
+        if (e.type === "touchend" && Math.hypot(s.x - s.x0, s.y - s.y0) < 12 && performance.now() - s.t0 < 300) tap(s.x0, s.y0);   // a tap, not a push
+      }
+    }
+    if (gesture && ![...touches.values()].some(s => !s.stick)) {   // the look fingers are all up: what was it?
+      const g = gesture; gesture = null; clearTimeout(g.longT);
+      if (g.long) return key("keyup", "KeyE");
+      if (e.type !== "touchend" || g.moved > 14 || performance.now() - g.t0 > 350) return;   // a look, not a tap
+      if (g.n >= 2) {                            // two fingers: a right-click where they were
+        const [[ax, ay], [bx, by]] = g.pts; window.VaultAim?.at(...ndc((ax + bx) / 2, (ay + by) / 2)); click(2); window.VaultAim?.center();
+      } else tap(...g.pts[0]);
+    }
   };
-  lookZone.addEventListener("touchend", lookEnd); lookZone.addEventListener("touchcancel", lookEnd);
+  root.addEventListener("touchend", end, { passive: false }); root.addEventListener("touchcancel", end, { passive: false });
 
   // ---- at the register: the phone's keyboard, plus the keys it doesn't have ----
   const posRow = posBar.querySelector(".row"), type = posBar.querySelector("#tcType");
   const posKey = k => dispatchEvent(new KeyboardEvent("keydown", { key: k, code: k.length === 1 ? "" : k, bubbles: true, cancelable: true }));
-  button(posRow, "KEYBOARD", "", null, () => { type.value = ""; type.focus(); });
-  for (const [l, k] of [["▲", "ArrowUp"], ["▼", "ArrowDown"], ["⌫", "Backspace"], ["ENTER", "Enter"], ["ESC", "Escape"]]) button(posRow, l, "", null, () => posKey(k));
+  button(posRow, "KEYBOARD", () => { type.value = ""; type.focus(); });
+  for (const [l, k] of [["▲", "ArrowUp"], ["▼", "ArrowDown"], ["⌫", "Backspace"], ["ENTER", "Enter"], ["ESC", "Escape"]]) button(posRow, l, () => posKey(k));
   type.addEventListener("keydown", e => {        // (Android sends "Unidentified" for letters: those come through "input" below)
     e.stopPropagation();
     if (["Enter", "Backspace"].includes(e.key)) { e.preventDefault(); posKey(e.key); }
   });
   type.addEventListener("input", () => { for (const ch of type.value) posKey(ch.toUpperCase()); type.value = ""; });
 
-  // ---- what's showing: the controls while you're playing, the register bar while it's open ----
+  // ---- what's showing: the touch layer while you're playing, the register bar while it's open ----
   const posOpen = () => { const p = document.getElementById("posTerm"); return !!p && !p.hidden; };
   function sync() {
     const pos = posOpen();
@@ -153,6 +188,7 @@
     posBar.classList.toggle("on", pos);
     if (!pos && document.activeElement === type) type.blur();
     if (!lockEl && held.size) pressDirs(0, 0);   // (paused mid-stride: let go of the keys)
+    if (!lockEl) hideChoice();
   }
   setInterval(sync, 250);                         // the register opens and closes on its own schedule
   // paused for the register (it gave the "mouse" back): any touch on the store takes you back in
