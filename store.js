@@ -4169,6 +4169,14 @@ const shiftDate = () => new Date(shift.date0 + (shift.day - 1) * 864e5);
 const repStars = (v = rep.v) => Math.max(1, Math.min(5, Math.round(1 + v / 25)));
 const starStr = n => "\u2605".repeat(n) + "\u2606".repeat(5 - n);
 const repMult = () => 0.7 + rep.v / 100 * 0.6;
+// the shift slip's "how far to the next star": a bar between this star's threshold and the next
+// (a star every 25 points, starting at 37.5 for 3), and roughly how many A nights (+5 each) it'll take
+function repProgress() {
+  const n = repStars(); if (n >= 5) return ["  TOP RATED: KEEP IT THERE"];
+  const lo = n <= 1 ? 0 : 25 * (n - 1.5), hi = 25 * (n - 0.5), f = Math.max(0, Math.min(1, (rep.v - lo) / (hi - lo))), k = Math.round(f * 20);
+  const nights = Math.max(1, Math.ceil((hi - rep.v) / 5));
+  return [`  NEXT STAR [${"#".repeat(k)}${"-".repeat(20 - k)}]`, `  ~${nights} MORE A NIGHT${nights > 1 ? "S" : ""} TO ${starStr(n + 1)}`];
+}
 // ---- upgrades, bought on the register out of the store budget ----
 const LIBRARY = [                               // simulation: the library comes in tiers, each after the one before
   { cats: ["Kids & Educational", "Holiday", "Reality TV", "Music", "Broadcast Blocks"] },
@@ -4334,7 +4342,7 @@ function skipHour() {                             // L: fast-forward an hour (th
 }
 let shiftHudTxt = "";
 function shiftHud() {
-  const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} ${starStr(repStars())} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()}${owned("hireDana") ? ` · DANA ${shift.stats.dana.toLocaleString()}` : ""}`;
+  const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} ${starStr(repStars())} · ${(b => (b < 0 ? "-$" : "$") + Math.abs(b).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }))(posTerm.budget())} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()}${owned("hireDana") ? ` · DANA ${shift.stats.dana.toLocaleString()}` : ""}`;
   if (txt === shiftHudTxt) return; shiftHudTxt = txt;
   const [t, sub] = txt.split("|"), el = $("shiftClock");
   el.innerHTML = `${t}<div class="h">${sub}</div>`; el.classList.toggle("late", late); el.style.display = "block";
@@ -5504,7 +5512,8 @@ function custStep(cust, dt) {
       case "browse": if (cust.t <= 0) custDecide(cust); break;
       case "snack":
         { const left = cust.spot.units.filter(u => u.visible && u !== heldSnack), cold = left.filter(u => !isDrink(u.userData.snack) || drinkTemp(u) <= DRINK_WARM);
-          const from = cold.length ? cold : left; cust.snackUnit = from[Math.floor(Math.random() * from.length)] || null; }   // anyone would reach past a warm can for a cold one
+          const from = cold.length ? cold : left, names = [...new Set(from.map(u => u.userData.snack.name))], want = names[Math.floor(Math.random() * names.length)];   // anyone would reach past a warm can for a cold one
+          const of = from.filter(u => u.userData.snack.name === want); cust.snackUnit = of[Math.floor(Math.random() * of.length)] || null; }   // pick a product, then one of it (not whichever's got the most packs on the rack)
         if (cust.snackUnit) c.reachTo(cust.snackUnit.getWorldPosition(new THREE.Vector3())); else c.setPose("reach");
         c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
         if (cust.spot.drinks && !coolerOpen) { coolerOpen = true; cust.openedCooler = true; }
@@ -5894,7 +5903,7 @@ function empTick(dt) {
   // she gets dizzy too: same build-up as yours (twice as fast, so one big bored spin can do it), and it staggers her walk
   emp.dizzy = stool.by === "dana" && emp.state === "stoolSit" && stool.vel > 5 ? Math.min(1, (emp.dizzy || 0) + dt * stool.vel / STOOL.MAX / 4) : Math.max(0, (emp.dizzy || 0) - dt / 20);
   const dk = Math.max(0, (emp.dizzy - 0.3) / 0.7);
-  if (dk > 0.3 && !emp.dizzySaid) { emp.dizzySaid = true; logAct("Dana spun herself dizzy"); }
+  if (dk > 0.3 && !emp.dizzySaid) { emp.dizzySaid = true; logAct("Dana's dizzy from all that spinning"); }
   if (!dk) emp.dizzySaid = false;
   if (gateAlarm.on && gateAlarm.t > 5 && emp.task === "returns" && !emp.paused) {   // you've let it ring: she drops the returns and goes to shut it off
     empSummon(); logAct("Dana's leaving the returns to shut off the gate alarm");
@@ -6509,7 +6518,7 @@ function pickHover() {
     else if (aim?.object.userData.returns && aim.distance < 2.4) aimReturns = true;
     else if ((aim?.object.userData.unit || aim?.object.userData.snack) && (aim.object.userData.unit || aim.object).visible && aim.distance < 2.4)
       aimSnack = aim.object.userData.unit || aim.object;   // the exact unit you pointed at (a drink's whole group, not just the label you hit)
-    else if ((aim?.object.userData.unit || aim?.object.userData.snack) && aim.distance < 2.4 && stockFor(aim.object.userData.unit || aim.object) >= 0 && emptySpots().includes(aim.object.userData.unit || aim.object))
+    else if ((aim?.object.userData.unit || aim?.object.userData.snack) && aim.distance < 2.4 && stockFor(aim.object.userData.unit || aim.object) >= 0 && (u => !u.visible && (stockCarry.has(u) || emptySpots().includes(u)))(aim.object.userData.unit || aim.object))
       aimStockSlot = aim.object.userData.unit || aim.object;   // an empty spot, and you're carrying one for it
     else if (aim?.object.userData.stock && aim.distance < 2.2) aimCupboard = aim.object.userData.stock;
     else if (aim?.object.userData.box && aim.distance < 2.4) aimBox = aim.object.userData.box;
@@ -6552,7 +6561,7 @@ function pickHover() {
       : aimRewinder.done ? `E — take out ${aimRewinder.tape.title} · rewound`
       : `Rewinding… ${Math.round(100 * aimRewinder.t / aimRewinder.dur)}% · E — take it out early`;
     else if (aimBell) tip.innerHTML = "E — ring for service";
-    else if (aimEmp) tip.innerHTML = emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
+    else if (aimEmp) tip.innerHTML = emp.state === "stoolSit" ? `E — give Dana a spin<div class="cat">On the stool${emp.dizzy > 0.5 ? " · looking a bit green" : ""}</div>` : emp.state === "watching" ? `Dana<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
       ? (returnBin.length ? `E — ask Dana to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `Dana<div class="cat">On the register · returns bin is empty</div>`)
       : `E — send Dana back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`;
     else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
@@ -6563,7 +6572,8 @@ function pickHover() {
     else if (aimCustomer) tip.innerHTML = custTip(aimCustomer) + `<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
     else if (aimStockSlot) tip.innerHTML = `E — put out a ${aimStockSlot.userData.snack.name}`;
     else if (aimCupboard) { const n = emptySpots().filter(u => isDrink(u.userData.snack) === (aimCupboard === "drinks")).length;
-      tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : " · the racks are full"}`; }
+      const mine = inv.filter(e => stockMine(e, aimCupboard)).length, inHand = heldSnack && stockMine({ kind: "snack", ref: heldSnack }, aimCupboard);
+      tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : mine ? `<br>E — put back the ${mine} you're carrying` : " · the racks are full"}${inHand ? "<br>RIGHT-CLICK — put this one back" : ""}`; }
     else if (aimBox) tip.innerHTML = `E — pick up the box: ${aimBox.name} \u00d7${aimBox.qty}`;
     else if (aimToilet) tip.innerHTML = bath.flushT > 0 ? "Flushing…" : "E — flush";
     else if (aimSink) tip.innerHTML = `E — turn the tap ${bath.tap ? "off" : "on"}`;
@@ -6658,7 +6668,8 @@ function showSnack(unit) {                   // put this unit in your hand (fres
 }
 function dropSnack(toss = false) {           // right-click puts an untouched one back on the shelf; opened ones only go in the trash (toss)
   if (!toss && snackLeft < snackTotal) return;
-  if (stockCarry.has(heldSnack)) { if (!toss) { toast("That's stock: E on an empty spot on the rack to put it out"); return; } stockCarry.delete(heldSnack); logAct(`Threw away a ${heldSnack.userData.snack.name} from stock`, "bad"); }
+  if (stockCarry.has(heldSnack) && !toss && aimCupboard && stockMine({ kind: "snack", ref: heldSnack }, aimCupboard)) { stockReturn.held = inv[invSel]; stockReturn(aimCupboard, true); return; }   // back on the cupboard shelf
+  if (stockCarry.has(heldSnack)) { if (!toss) { toast("That's stock: E on an empty spot on the rack to put it out, or right-click the cupboard to put it back"); return; } stockCarry.delete(heldSnack); logAct(`Threw away a ${heldSnack.userData.snack.name} from stock`, "bad"); }
   else if (!toss) heldSnack.visible = true;   // (tossed: its spot on the rack stays empty until someone restocks it)
   heldSnack = null; snackGroup.visible = false; snackGroup.clear(); $("holdingTag").style.display = "none";
 }
@@ -6714,7 +6725,7 @@ function emptySpots() {                          // rack spots with nothing on t
 }
 function stockTake(kind) {                       // E on a stock cupboard
   const need = emptySpots().filter(u => isDrink(u.userData.snack) === (kind === "drinks"));
-  if (!need.length) { toast(`The ${kind === "drinks" ? "drink" : "snack"} racks are full`, true); return; }
+  if (!need.length) { if (!stockReturn(kind)) toast(`The ${kind === "drinks" ? "drink" : "snack"} racks are full`, true); return; }   // nothing to grab for: whatever you're carrying goes back
   let got = 0; const out = new Set();
   for (const u of need) {
     const name = u.userData.snack.name;
@@ -6732,8 +6743,26 @@ function stockFor(u) {                           // a carried stock item that wo
   if (heldSnack && stockCarry.has(heldSnack) && heldSnack.userData.snack.name === name) return invSel;
   return inv.findIndex(e => e.kind === "snack" && stockCarry.has(e.ref) && e.ref.userData.snack.name === name);
 }
+// carried stock back on the cupboard shelf (untouched only: an opened one's yours now). onlyHeld: just the one in hand.
+// Its rack spot goes back to being an empty spot. -> how many went back
+const stockMine = (e, kind) => e.kind === "snack" && stockCarry.has(e.ref) && isDrink(e.ref.userData.snack) === (kind === "drinks");
+function stockReturn(kind, onlyHeld = false) {
+  invSync(); invStash();                         // hand empty first: everything's an inventory entry with its bites counted
+  const back = {};
+  for (let i = inv.length - 1; i >= 0; i--) {
+    const e = inv[i]; if (!stockMine(e, kind) || e.left < e.total || (onlyHeld && e !== stockReturn.held)) continue;
+    const name = e.ref.userData.snack.name;
+    stockCarry.delete(e.ref); backstock[name] = (backstock[name] || 0) + 1; back[name] = (back[name] || 0) + 1;
+    inv.splice(i, 1);
+  }
+  stockReturn.held = null; invRender();
+  const n = Object.values(back).reduce((a, b) => a + b, 0);
+  if (n) toast(`Put back ${n === 1 ? `a ${Object.keys(back)[0]}` : `${n} items`} in the ${kind === "drinks" ? "drink" : "snack"} cupboard`, true);
+  return n;
+}
 function stockPlace(u) {                         // E on an empty spot: out it goes
-  const i = stockFor(u); if (i < 0) return;
+  const own = inv.findIndex(e => e.ref === u && stockCarry.has(u));   // the one you took for this very spot, if you've got it
+  const i = own >= 0 ? own : stockFor(u); if (i < 0) return;
   const e = inv[i]; stockCarry.delete(e.ref);
   if (i === invSel) { heldSnack = null; snackGroup.visible = false; snackGroup.clear(); $("holdingTag").style.display = "none"; invSync(); }
   else { inv.splice(i, 1); if (i < invSel) invSel--; invRender(); }
@@ -7446,6 +7475,9 @@ function onE() {
   if (aimHolds && !held) { holdPull(); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
+  if (aimEmp && emp.state === "stoolSit") {      // she's on the stool: a shove, same as your own spins (keep it up and she gets dizzy)
+    stoolPush(); emp.bored = 0; emp.c.lookAt(null); emp.c.setMood(emp.dizzy > 0.5 ? "meh" : "love"); return;
+  }
   if (aimEmp) { empToggle(); return; }
   if (aimExit && afterClose() && !custs.length) { clockOut(); return; }
   if (aimPrinter && co?.by === "player" && coAct("printer")) return;
@@ -7721,7 +7753,7 @@ function clockOut() {
     ...(wages ? [row("DANA'S WAGES", "-" + money(wages))] : []), row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
     row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  EMPTY RACK SPOTS", chk.empty),
     row("  POINTS", chkPts.toLocaleString()), line, "",
-    row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`),
+    row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`), ...repProgress(),
     ...(SIM ? [row("NEW MEMBERS SIGNED UP", s.signups), row("WORD OF MOUTH: TOMORROW", `+${growth.pending}`)] : []),
     row("STORE SCORE", s.score.toLocaleString()), row("  YOURS", s.you.toLocaleString()), row("  DANA'S", s.dana.toLocaleString()),
     row("  LOST (WALKOUTS, THEFT)", (s.score - s.you - s.dana).toLocaleString()), "", `SHIFT GRADE:  ${grade}`.padStart(22), "", "THANK YOU - BE KIND, REWIND".padStart(30),
@@ -7745,6 +7777,7 @@ function beginShift() {                        // first thing in the morning: 9:
   if (SIM && shift.day === 1) {                // a new simulation: where it goes from here
     logAct("Your store's bare bones for now: no staff, the theater's locked, and part of the library's still to come");
     logAct("Everything it earns goes in the budget. Spend it on the register: U for upgrades, O to order snacks");
+    logAct("Reputation builds a night at a time: an A shift moves it most, and a new star takes a few good nights in a row");
   }
   shiftHudTxt = "";
 }
