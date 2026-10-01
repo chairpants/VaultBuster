@@ -39,7 +39,7 @@
 // window.VaultAmbience = { start(), tick(state), chime(x, y, z), step(x, z, tile, weight), door(kind, action, x, y, z),
 //   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted() }
 window.VaultAmbience = (() => {
-  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0;
+  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1;   // vol: the settings' store-sounds volume
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
   const noise = { white: null, pink: null, brown: null };
 
@@ -137,7 +137,7 @@ window.VaultAmbience = (() => {
       L.forwardX.setTargetAtTime(s.cam.fx, t, 0.02); L.forwardY.setTargetAtTime(s.cam.fy, t, 0.02); L.forwardZ.setTargetAtTime(s.cam.fz, t, 0.02); }
     else { L.setPosition(s.cam.x, s.cam.y, s.cam.z); L.setOrientation(s.cam.fx, s.cam.fy, s.cam.fz, 0, 1, 0); }
     const want = s.active && !muted ? 1 : 0;        // quiet on the title screen, and when muted
-    if (want !== fade) { fade = want; master.gain.setTargetAtTime(want * 0.9, t, 0.4); }
+    if (want !== fade) { fade = want; master.gain.setTargetAtTime(want * 0.9 * vol, t, 0.4); }
     while (hums.length < s.zones.length) { const z = s.zones[hums.length]; hums.push(hum(z.x, z.y, z.z)); }
     s.zones.forEach((z, i) => hums[i].gain.setTargetAtTime(z.level * 0.0045, t, 0.08));   // follows the switch (and the flicker as it strikes)
     bed.traffic.gain.setTargetAtTime(0.05 + 0.08 * (1 - s.night), t, 1);
@@ -287,6 +287,7 @@ window.VaultAmbience = (() => {
     }
     w.gain.setTargetAtTime(on && !muted ? 0.14 : 0, ac.currentTime, on ? 0.05 : 0.12);
   }
-  function setMuted(b) { muted = b; try { localStorage.setItem("vaultbuster-ambience", b ? "off" : "on"); } catch {} if (master) master.gain.setTargetAtTime(b ? 0 : fade * 0.9, ac.currentTime, 0.2); }
-  return { start, tick, chime, step, door, swing, compressor, flush, water, setMuted, muted: () => muted };
+  function setMuted(b) { muted = b; try { localStorage.setItem("vaultbuster-ambience", b ? "off" : "on"); } catch {} if (master) master.gain.setTargetAtTime(b ? 0 : fade * 0.9 * vol, ac.currentTime, 0.2); }
+  function setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(muted ? 0 : fade * 0.9 * vol, ac.currentTime, 0.1); }
+  return { start, tick, chime, step, door, swing, compressor, flush, water, setMuted, setVolume, muted: () => muted };
 })();

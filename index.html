@@ -44,6 +44,14 @@
   #mainMenu button small { display: block; font-weight: normal; font-size: 12px; letter-spacing: 0; margin-top: 4px; color: #d6e2ff; line-height: 1.4; }
   #mainMenu button.back { background: transparent; border-color: #ffffff55; font-size: 13px; padding: 8px; }
   #mainMenu .warn { color: #ffb3b3; font-size: 12px; text-align: center; }
+  #mainMenu .ttl { color: var(--bb-yellow); font-weight: bold; letter-spacing: 3px; text-align: center; margin-bottom: 2px; }
+  #mainMenu button:disabled { opacity: .45; cursor: default; transform: none; }
+  #mainMenu .set { display: grid; grid-template-columns: 1fr 1.3fr 52px; align-items: center; gap: 10px; color: #fff; font-size: 13px;
+    background: #0008; padding: 8px 12px; border-radius: 6px; }
+  #mainMenu .set input[type=range] { width: 100%; accent-color: var(--bb-yellow); }
+  #mainMenu .set input[type=checkbox] { justify-self: start; width: 18px; height: 18px; accent-color: var(--bb-yellow); }
+  #mainMenu .set span { color: var(--bb-yellow); text-align: right; font-variant-numeric: tabular-nums; }
+  #mainMenu .note { color: #cfe0ff; font-size: 11px; text-align: center; opacity: .8; }
   #titleScreen { cursor: default; }
   #titleScreen.paused #enterHint { color: #fff; }
   /* resume screen (already played once) goes translucent so the still-running
@@ -187,13 +195,30 @@
   <div id="mainMenu" hidden>
     <div class="mm" id="mmMain">
       <button id="mmContinue"></button>
+      <button id="mmLoad">LOAD A STORE</button>
       <button id="mmNew">NEW GAME</button>
+      <button id="mmSettingsBtn" class="back">SETTINGS</button>
+    </div>
+    <div class="mm" id="mmSlots" hidden>
+      <div class="ttl" id="mmSlotsTitle"></div>
+      <div id="mmSlotList" class="mm"></div>
+      <button id="mmSlotsBack" class="back">BACK</button>
     </div>
     <div class="mm" id="mmModes" hidden>
       <button data-mode="simulation"><b>SIMULATION</b><small>A bare-bones store: no staff, the theater locked up, part of the library. Build it up with what it earns.</small></button>
       <button data-mode="sandbox"><b>SANDBOX</b><small>Everything open, Dana on staff, $5,000 in the budget. Just play store.</small></button>
-      <div class="warn" id="mmWarn">Starting a new game replaces your saved store.</div>
+      <div class="warn" id="mmWarn"></div>
       <button id="mmBack" class="back">BACK</button>
+    </div>
+    <div class="mm" id="mmSettings" hidden>
+      <div class="ttl">SETTINGS</div>
+      <label class="set">Store sounds <input type="range" id="setSound" min="0" max="100" step="5"><span id="setSoundV"></span></label>
+      <label class="set">TV volume <input type="range" id="setTv" min="0" max="100" step="5"><span id="setTvV"></span></label>
+      <label class="set">Mouse sensitivity <input type="range" id="setSens" min="25" max="300" step="5"><span id="setSensV"></span></label>
+      <label class="set">Invert mouse Y <input type="checkbox" id="setInvert"><span id="setInvertV"></span></label>
+      <label class="set">Shift length <input type="range" id="setShift" min="10" max="60" step="1"><span id="setShiftV"></span></label>
+      <div class="note">Shift length is real minutes from opening to midnight.</div>
+      <button id="mmSettingsBack" class="back">BACK</button>
     </div>
   </div>
   <div id="controlsHelp">

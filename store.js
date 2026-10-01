@@ -258,7 +258,13 @@ function renderWithBloom() {
 const catalog = window.VAULT_CATALOG || [];
 // the saved store from last visit (see "save / restore" near the end) — read
 // up front because the shelves need it while they're being stocked
-const SAVE_KEY = "vaultbuster-save";
+// three save slots; slot 1 keeps the original key (so a store saved before slots is slot 1). The
+// active one is remembered; switching slots (or starting a new store in one) reloads the page into it
+const SLOTS = 3, slotKey = n => n === 1 ? "vaultbuster-save" : `vaultbuster-save-${n}`;
+const SLOT = (() => { try { const n = +localStorage.getItem("vaultbuster-slot"); return n >= 1 && n <= SLOTS ? n : 1; } catch { return 1; } })();
+const SAVE_KEY = slotKey(SLOT);
+// settings (per browser, not per store): see the title menu's SETTINGS
+const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
 // the game mode. Simulation: a bare-bones store you build up (no staff, no
@@ -4123,7 +4129,7 @@ function applyLighting() {
 // clock drops to real time and stays there — the day doesn't end until you've
 // locked up and walked out the front doors (clockOut). It only runs while
 // you're in the store (not on the title screen). L fast-forwards an hour ----
-const SHIFT = { start: 9.75, open: 10, lastIn: 23.75, close: 24, hour: 90 };   // hours since the shift day's midnight; hour: real seconds per store hour while open (a ~21 minute shift)
+const SHIFT = { start: 9.75, open: 10, lastIn: 23.75, close: 24, hour: SETTINGS.shiftMin * 60 / 14 };   // hours since the shift day's midnight; hour: real seconds per store hour while open (a ~21 minute shift)
 const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const shiftStats = () => ({ score: 0, you: 0, dana: 0, tickets: 0, refunds: 0, signups: 0, visitors: 0, served: 0, rentals: 0, rentalTake: 0, snackTake: 0, returns: 0, walkouts: 0, stolen: 0, caught: 0, upsells: 0, feesCollected: 0, feesWaived: 0 });
 // points for the shift. The store's score is everything; your own and Dana's are
@@ -4620,8 +4626,9 @@ let lastActive = 0;                          // last mouse-look or key — the c
 addEventListener("mousemove", e => {
   if (document.pointerLockElement !== canvas) return;
   lastActive = performance.now();
-  player.yaw -= e.movementX * 0.0022;
-  player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * 0.0022));
+  const k = 0.0022 * SETTINGS.sens / 100;   // (SETTINGS: sensitivity, invert)
+  player.yaw -= e.movementX * k;
+  player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * k * (SETTINGS.invertY ? -1 : 1)));
 });
 function blocked(x, z) {
   for (const c of colliders) if (c !== emp.box)   // (you walk through Dana: she can't pin you in a corner)
@@ -7508,20 +7515,66 @@ $("titleScreen").addEventListener("click", e => {
 });
 // the main menu: continue the saved store (or resume), or a new game in either
 // mode. A new game is set up as a fresh save and the page reloads into it
+function slotInfo(n) {                           // what's in a save slot, for the menu
+  try {
+    const d = JSON.parse(localStorage.getItem(slotKey(n))); if (!d || d.v !== SAVE_V) return null;
+    const nice = d.mode === "simulation" ? "Simulation" : "Sandbox";
+    if (d.fresh) return { label: `${nice} · new store`, mode: d.mode };
+    return { label: `${nice} · day ${d.shift?.day ?? 1} · $${Math.round(d.budget ?? 0).toLocaleString()} · ${starStr(repStars(d.rep ?? 50))}`, mode: d.mode };
+  } catch { return null; }
+}
+function saveSettings() { try { localStorage.setItem("vaultbuster-settings", JSON.stringify(SETTINGS)); } catch {} }
+function applySettings() {
+  window.VaultAmbience?.setVolume?.(SETTINGS.sound / 100);
+  SHIFT.hour = SETTINGS.shiftMin * 60 / 14;
+}
+// the main menu: continue the store in the active slot (or resume), load another slot, start a new
+// store in a slot (then pick the mode), settings. Switching stores reloads the page into that slot
 function titleMenu() {
   const nice = MODE === "simulation" ? "SIMULATION" : "SANDBOX";
-  const label = () => started ? "RESUME" : SAVE?.fresh ? `START \u00b7 ${nice}` : `CONTINUE \u00b7 ${nice} \u00b7 DAY ${shift.day}`;
-  const cont = $("mmContinue"), main = $("mmMain"), modes = $("mmModes");
-  titleMenu.refresh = () => { cont.textContent = label(); cont.hidden = !SAVE && !started; main.hidden = false; modes.hidden = true; };
-  titleMenu.refresh();
-  cont.onclick = () => canvas.requestPointerLock();
-  $("mmNew").onclick = () => { main.hidden = true; modes.hidden = false; $("mmWarn").hidden = !(SAVE && !SAVE.fresh) && !started; };
-  $("mmBack").onclick = () => titleMenu.refresh();
-  for (const b of modes.querySelectorAll("button[data-mode]")) b.onclick = () => {
-    saveOff = true;                               // (don't let the old store save over the new one on the way out)
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_V, mode: b.dataset.mode, fresh: true })); } catch {}
+  const label = () => started ? "RESUME" : SAVE?.fresh ? `START · ${nice} (SLOT ${SLOT})` : `CONTINUE · ${nice} · DAY ${shift.day} (SLOT ${SLOT})`;
+  const cont = $("mmContinue"), panels = { main: $("mmMain"), slots: $("mmSlots"), modes: $("mmModes"), settings: $("mmSettings") };
+  const show = k => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
+  let newSlot = SLOT;
+  const switchTo = (n, fresh) => {               // into slot n (a fresh store if mode given)
+    if (started && !fresh) saveState();           // (the store you're leaving keeps where it was)
+    if (fresh) { if (n === SLOT) saveOff = true; else if (started) saveState(); try { localStorage.setItem(slotKey(n), JSON.stringify({ v: SAVE_V, mode: fresh, fresh: true })); } catch {} }
+    try { localStorage.setItem("vaultbuster-slot", String(n)); } catch {}
     location.reload();
   };
+  const slotList = mode => {                      // "load": pick a store; "new": pick where the new one goes
+    const list = $("mmSlotList"); list.innerHTML = ""; $("mmSlotsTitle").textContent = mode === "load" ? "LOAD A STORE" : "NEW STORE · WHICH SLOT?";
+    for (let n = 1; n <= SLOTS; n++) {
+      const info = slotInfo(n), b = document.createElement("button");
+      b.innerHTML = `<b>SLOT ${n}${n === SLOT ? " · PLAYING" : ""}</b><small>${info ? info.label + (mode === "new" ? " · (replaced)" : "") : "empty"}</small>`;
+      if (mode === "load") { b.disabled = !info; b.onclick = () => n === SLOT ? cont.onclick() : switchTo(n); }
+      else b.onclick = () => { newSlot = n; $("mmWarn").textContent = info ? `This replaces the store in slot ${n}.` : `Slot ${n} is empty.`; show("modes"); };
+      list.appendChild(b);
+    }
+    show("slots");
+  };
+  titleMenu.refresh = () => { cont.textContent = label(); cont.hidden = !SAVE && !started; $("mmLoad").hidden = ![1, 2, 3].some(n => slotInfo(n)); show("main"); };
+  titleMenu.refresh();
+  cont.onclick = () => canvas.requestPointerLock();
+  $("mmLoad").onclick = () => slotList("load");
+  $("mmNew").onclick = () => slotList("new");
+  $("mmBack").onclick = () => slotList("new");
+  $("mmSlotsBack").onclick = () => show("main");
+  for (const b of panels.modes.querySelectorAll("button[data-mode]")) b.onclick = () => switchTo(newSlot, b.dataset.mode);
+  // settings: sliders and toggles, applied as they change
+  const bind = (id, key, fmt, after) => {
+    const el = $(id), out = $(id + "V"), sync = () => { if (el.type === "checkbox") el.checked = !!SETTINGS[key]; else el.value = SETTINGS[key]; if (out) out.textContent = fmt(SETTINGS[key]); };
+    el.oninput = () => { SETTINGS[key] = el.type === "checkbox" ? el.checked : +el.value; sync(); after?.(); saveSettings(); applySettings(); };
+    sync();
+  };
+  bind("setSound", "sound", v => `${v}%`);
+  bind("setSens", "sens", v => `${v}%`);
+  bind("setInvert", "invertY", v => v ? "on" : "off");
+  bind("setShift", "shiftMin", v => `${v} min`);
+  const tv = $("setTv"), tvV = $("setTvV"); tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`;
+  tv.oninput = () => { tvSet.volume = +tv.value; tvV.textContent = `${tvSet.volume}%`; applyTv(); };   // (the same setting as the TV's own picture menu)
+  $("mmSettingsBtn").onclick = () => { tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`; show("settings"); };
+  $("mmSettingsBack").onclick = () => show("main");
   $("enterHint").style.display = "none"; $("mainMenu").hidden = false;
 }
 let relockOnInput = false;                        // backed out with Escape: the next click or key (not Escape) takes the mouse back
@@ -7809,6 +7862,7 @@ if (!SAVE?.shift) beginShift();              // a new store (or one saved before
 gateLastZ = player.z;                        // restored position isn't a walk through the gates
 counterItemsList();                          // (marks the rewinders, pad and printer as movable)
 libLock(); amenities();                     // simulation: what the store hasn't got yet
+applySettings();
 if (SAVE?.log) { const fresh = logData.splice(0); for (const r of SAVE.log) logAct(r[1], r[2], r[3], r[4], r[0]); for (const r of fresh) logAct(r[1], r[2], r[3], r[4], r[0]); }   // the log picks up where it left off
 titleMenu();
 setInterval(saveState, 2000);
@@ -8054,5 +8108,5 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, jobs, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, emp, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
 };

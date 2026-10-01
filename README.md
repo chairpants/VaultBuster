@@ -34,7 +34,7 @@ It's a Friday night and the store is yours. Work the counter, run the register, 
 - **Almost everything is interactive.** Pick things up, carry them around, restock, eat the snacks. Most of it is yours to find.
 - **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
 - **Real light switches:** the store is wired in zones, and the back rooms have their own. Daylight comes in through the front windows.
-- **Two ways to play:** *Simulation* starts you in a bare-bones store (no staff, the theater chained shut, no popcorn machine, part of the library off the shelves) and you build it up out of what it earns: hire Dana, open the theater, and buy Library Upgrades 1–3. It starts with a small member base: new people come in to sign up at the counter (take their form, enter them on the register, hand them a card), drawn by word of mouth from good shifts, newspaper ads and what you've built. *Sandbox* has everything open, Dana on staff and $5,000 in the budget. The main menu continues your saved store or starts a new one.
+- **Two ways to play:** *Simulation* starts you in a bare-bones store (no staff, the theater chained shut, no popcorn machine, part of the library off the shelves) and you build it up out of what it earns: hire Dana, open the theater, and buy Library Upgrades 1–3. It starts with a small member base: new people come in to sign up at the counter (take their form, enter them on the register, hand them a card), drawn by word of mouth from good shifts, newspaper ads and what you've built. *Sandbox* has everything open, Dana on staff and $5,000 in the budget. The main menu has three save slots (continue one, load another, or start a new store in any of them) and settings for store-sound and TV volume, mouse sensitivity, invert Y and shift length.
 - **Work the counter well:** checkouts score points for speed and getting every step right. Late fees owed get charged or waived at the register, a snack can be upsold, and the receipt printer prints a slip you tear off and hand over. Watch for shoplifters: a customer with darting eyes heading for the door has something under their jacket. A friendly hello (or an obvious eye on them) can change their mind. Stop one before the gates and decide what happens: a ban, a cancelled membership, the police, or a warning, all of which go on their account. One who gets away is only named if you'd seen who they were.
 - **Dana's job board:** a cork board behind the counter sets her priorities, RimWorld style: register, phones, floor help, returns, restock and cleanup each get a 1 (first) to 4, or off. She works the highest-priority job that has work, and customer-facing jobs pull her off background work when they outrank it. Restocking the racks from the stock cupboards is one of her jobs now too.
 - **The phone:** every couple of hours a member calls to ask if you have something in. Say you'll hold it and a copy had better be on the holds shelf when they come in for it. Customers in the store come first: a call missed while you're busy costs nothing, but picking up with someone waiting at the counter does. Dana takes calls when the store's quiet.
@@ -109,6 +109,16 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `art.js` | The older embedded cover art. `fetch-covers.mjs` falls back to it for the few shows TMDB can't match |
 | `server.js`, `server.mjs` | Optional static servers, no dependencies |
 | `drive.mjs` | Headless Playwright smoke test that walks in, picks a tape, and plays it |
+
+### Testing
+
+`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save slots, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store. It needs Node and a Chromium:
+
+```sh
+npm install                      # playwright-core (dev only; the game itself has no build)
+npx playwright install chromium  # or set PLAYWRIGHT_CHROMIUM_PATH to any Chrome/Chromium
+npm test                         # a few minutes: it renders in software
+```
 
 ### Rebuilding the data
 
