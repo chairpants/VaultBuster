@@ -28,11 +28,16 @@
 //   a damped glass-door thump and bottles clinking against each other when it
 //   shuts, and the compressor: an induction motor's 60 Hz hum and harmonics
 //   with its fan's broadband whoosh, running while it pulls the temperature down.
+// - The restroom. A flush: the flapper's thunk, the rush of water through the
+//   trapway (pink noise, its band sweeping down as the bowl empties, over a low
+//   rumble), the gurgle of air bubbles (each one a pitch rising as it
+//   collapses, as bubbles do), then the tank refilling (a thin hiss). A
+//   running tap: a steady mid-band pour with a brighter splash on the basin.
 // Everything placed in the room is HRTF-panned from where the camera is, and
 // the chime, steps and doors get a little of a generated room reverb.
 //
 // window.VaultAmbience = { start(), tick(state), chime(x, y, z), step(x, z, tile, weight), door(kind, action, x, y, z),
-//   swing(key, x, y, z, speed), compressor(x, y, z, on), setMuted(bool), muted() }
+//   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted() }
 window.VaultAmbience = (() => {
   let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0;
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
@@ -247,6 +252,41 @@ window.VaultAmbience = (() => {
     }
     if (on !== comp.on) { comp.on = on; comp.g.gain.setTargetAtTime(on ? 0.012 : 0, ac.currentTime, on ? 0.35 : 0.8); }   // spins up, winds down
   }
+  // ---- the restroom ----
+  function flush(x, y, z) {
+    if (!ac || muted || fade === 0) return;
+    const t0 = ac.currentTime + 0.02, out = spot(x, y, z, 0.3, 1.2);
+    panel(out, t0, 0.35, 2.2);                      // the lever and flapper
+    const rush = loop(noise.pink), bp = ac.createBiquadFilter(), rg = ac.createGain();
+    bp.type = "bandpass"; bp.Q.value = 0.7; bp.frequency.setValueAtTime(1900, t0); bp.frequency.exponentialRampToValueAtTime(420, t0 + 3.2);
+    rg.gain.setValueAtTime(0, t0); rg.gain.linearRampToValueAtTime(0.9, t0 + 0.18); rg.gain.setTargetAtTime(0, t0 + 1.6, 0.9);
+    rush.connect(bp).connect(rg).connect(out); rush.stop(t0 + 6);
+    const rum = loop(noise.brown), lp = ac.createBiquadFilter(), ug = ac.createGain(); lp.type = "lowpass"; lp.frequency.value = 240;
+    ug.gain.setValueAtTime(0, t0); ug.gain.linearRampToValueAtTime(0.6, t0 + 0.3); ug.gain.setTargetAtTime(0, t0 + 1.8, 0.8);
+    rum.connect(lp).connect(ug).connect(out); rum.stop(t0 + 6);
+    for (let i = 0; i < 14; i++) {                  // air bubbles through the trap as it siphons
+      const tb = t0 + 1.2 + Math.random() * 2.4, f = 260 + Math.random() * 420, o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.setValueAtTime(f, tb); o.frequency.exponentialRampToValueAtTime(f * 2.6, tb + 0.05);
+      g.gain.setValueAtTime(0, tb); g.gain.linearRampToValueAtTime(0.18, tb + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, tb + 0.07);
+      o.connect(g).connect(out); o.start(tb); o.stop(tb + 0.09);
+    }
+    const hiss = loop(noise.white), hp = ac.createBiquadFilter(), hg = ac.createGain(); hp.type = "highpass"; hp.frequency.value = 2200;
+    hg.gain.setValueAtTime(0, t0 + 3); hg.gain.linearRampToValueAtTime(0.06, t0 + 3.6); hg.gain.setValueAtTime(0.06, t0 + 10); hg.gain.linearRampToValueAtTime(0, t0 + 12);   // the tank refilling
+    hiss.connect(hp).connect(hg).connect(out); hiss.stop(t0 + 12.2);
+  }
+  const taps = new Map();
+  function water(key, x, y, z, on) {                // a running tap
+    if (!ac) return;
+    let w = taps.get(key);
+    if (!w) {
+      const out = spot(x, y, z, 0, 1.2), pour = loop(noise.pink), pb = ac.createBiquadFilter(), splash = loop(noise.white), sb = ac.createBiquadFilter(), sg = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
+      pb.type = "bandpass"; pb.frequency.value = 1100; pb.Q.value = 0.5; pour.connect(pb).connect(out);
+      sb.type = "bandpass"; sb.frequency.value = 3800; sb.Q.value = 0.9; sg.gain.value = 0.35; lfo.frequency.value = 7.3; lg.gain.value = 0.15; lfo.connect(lg).connect(sg.gain); lfo.start();
+      splash.connect(sb).connect(sg).connect(out);
+      taps.set(key, w = out);
+    }
+    w.gain.setTargetAtTime(on && !muted ? 0.14 : 0, ac.currentTime, on ? 0.05 : 0.12);
+  }
   function setMuted(b) { muted = b; try { localStorage.setItem("vaultbuster-ambience", b ? "off" : "on"); } catch {} if (master) master.gain.setTargetAtTime(b ? 0 : fade * 0.9, ac.currentTime, 0.2); }
-  return { start, tick, chime, step, door, swing, compressor, setMuted, muted: () => muted };
+  return { start, tick, chime, step, door, swing, compressor, flush, water, setMuted, muted: () => muted };
 })();

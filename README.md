@@ -77,7 +77,7 @@ Neither server has any dependencies.
 | **Click** again | Tuck it in your hand |
 | **Right-click** | Put back a tape you're still looking at (straight off the shelf or out of Returns) · put down an untouched snack |
 | **Click** a snack, drink or popcorn in hand | Take a bite or a sip |
-| **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down. On the stool behind the counter, each tap spins you (tap fast to spin harder) and WASD gets you up; hold E on it to carry it somewhere else |
+| **E** | Interact: doors, lamps, the register, the counter gear, and plenty more. Some things want E held down. On the stool behind the counter, each tap spins you (tap fast to spin harder) and WASD gets you up; hold E on it to carry it somewhere else. Hold E on a rewinder, the desensitizer or the receipt printer to move it around the counter: a see-through copy shows where it'll go (only over free worktop), the wheel turns it, click sets it down, right-click puts it back |
 | **Q** | At the counter: offer the customer a snack (they'll go grab it and come back), or waive their late fees |
 | **L** | Skip ahead an hour (until close). The store lights are real switches on the walls: E flips one, and holding E on the panel by the register turns the whole panel on or off |
 | **Mouse wheel** | Zoom while seated · otherwise switch the item in hand when carrying several |
