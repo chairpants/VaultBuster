@@ -4880,7 +4880,7 @@ function move(dt) {
   const x0 = player.x, z0 = player.z;
   if (!blocked(player.x + dx, player.z)) player.x += dx;
   if (!blocked(player.x, player.z + dz)) player.z += dz;
-  const walked = Math.hypot(player.x - x0, player.z - z0); if ((walkXp += walked) > 25) { walkXp = 0; gainXp("you", "con", 1); }
+  const walked = Math.hypot(player.x - x0, player.z - z0); if ((walkXp += walked) > 12) { walkXp = 0; gainXp("you", "con", 1); }
   if ((playerStepD += walked) > (sp > 4 ? 0.95 : 0.72)) { playerStepD = 0; ambStep(player.x, player.z, crouched ? 0.35 : 0.6); }   // your own, quieter (you're wearing sneakers)
 }
 let playerStepD = 0, walkXp = 0;
@@ -5395,6 +5395,7 @@ function custInteract(cust) {                     // E on a customer: ring them 
   else if (cust.state !== "out") {
     cust.hi = 1.4; c.setMood("happy");
     if (cust.thief && !cust.greeted && Math.random() < 0.7) cust.thief = false;   // a friendly hello: suddenly they'd rather just rent it
+    if (!cust.greeted) gainXp("you", "wis", 2);   // (sizing people up)
     cust.greeted = true;
   }
 }
@@ -5405,7 +5406,7 @@ function wisTick(dt) {                          // WIS: who notices a shoplifter
     if (!k.sneaking || k.alarmed || !k.c) continue;
     const p = k.c.group.position;
     if (!k.wisSaid && lv("you", "wis") >= 3 && Math.hypot(player.x - p.x, player.z - p.z) < 6 + lv("you", "wis")) {   // you: the tells jump out at you
-      k.wisSaid = true; k.known = true; logAct(`Something's off about ${memberName(k.member)}: watch the door`, "bad");
+      k.wisSaid = true; k.known = true; gainXp("you", "wis", 5); logAct(`Something's off about ${memberName(k.member)}: watch the door`, "bad");
     }
     for (const e of staff) {                      // staff: a chance each second, better with WIS, to stop them on the way past
       if (!e.c || Math.hypot(e.c.group.position.x - p.x, e.c.group.position.z - p.z) > 3.5) continue;
@@ -5427,8 +5428,9 @@ function custWatched(cust, dt) {
   if (!cust.sneaking || cust.alarmed || cust.fessRolled) return;
   if (aimCustomer !== cust) { cust.watchT = 0; return; }
   if ((cust.watchT = (cust.watchT || 0) + dt) < 0.8) return;
-  cust.fessRolled = true;
+  cust.fessRolled = true; gainXp("you", "wis", 4);
   if (!has("you", "wis", 10) && Math.random() >= 0.5) return;   // ...or they keep going (Stern Look: they never do)
+  gainXp("you", "wis", 8);
   const c = cust.c;
   cust.sneaking = false; cust.tagged = false; cust.thief = false;
   c.holdTape(cust.tapes.length); c.setPose("hold"); c.setMood("meh"); cust.hi = 2;
@@ -5845,13 +5847,15 @@ const EMP_ARMFUL = 10;                                              // returns s
 // ---------------- skills: six classic stats, levelled by doing the work ----------------
 // You and every employee have the same six. Doing a task earns XP in its stat (more for the longer
 // or harder ones), XP fills a level, and each level makes that kind of work go better (see lv())
+// rate: XP multiplier, so the rarer kinds of work level about as fast as the constant ones (every sale is DEX;
+// a shoplifter is a once-a-night thing at best)
 const SKILLS = {
-  dex: { name: "DEX", long: "Dexterity", what: "the register, desensitizing, the rewinders" },
-  int: { name: "INT", long: "Intelligence", what: "shelving, misshelves, finding requests, holds" },
-  cha: { name: "CHA", long: "Charisma", what: "upsells, recommendations, sign-ups, the phone" },
-  str: { name: "STR", long: "Strength", what: "restocking the racks, unpacking deliveries" },
-  con: { name: "CON", long: "Constitution", what: "cleaning up, being on your feet all day" },
-  wis: { name: "WIS", long: "Wisdom", what: "spotting shoplifters, the gate alarm" },
+  dex: { name: "DEX", long: "Dexterity", what: "the register, desensitizing, the rewinders", rate: 0.6 },
+  int: { name: "INT", long: "Intelligence", what: "shelving, misshelves, finding requests, holds", rate: 1.2 },
+  cha: { name: "CHA", long: "Charisma", what: "upsells, recommendations, sign-ups, the phone", rate: 1 },
+  str: { name: "STR", long: "Strength", what: "restocking the racks, unpacking deliveries", rate: 1.4 },
+  con: { name: "CON", long: "Constitution", what: "cleaning up, being on your feet all day", rate: 1.5 },
+  wis: { name: "WIS", long: "Wisdom", what: "reading customers, spotting shoplifters, the gate alarm", rate: 2.5 },
 };
 const SKILL_IDS = Object.keys(SKILLS), SKILL_MAX = 20;
 const xpToNext = L => Math.round(60 * 1.5 ** (L - 1));   // XP from level L to L+1: 60, 90, 135, 203... x1.5 each (~4.5k total to 10, ~260k to 20)
@@ -5932,7 +5936,7 @@ function milestoneTick() {
 }
 function gainXp(who, k, amt) {
   const w = whoIs(who), sk = w?.skills?.[k]; if (!sk || sk.lvl >= SKILL_MAX || !amt) return;
-  sk.xp += amt * (w !== you && upg.dana ? 1.5 : 1);   // (staff training: they learn faster)
+  sk.xp += amt * SKILLS[k].rate * (w !== you && upg.dana ? 1.5 : 1);   // (staff training: they learn faster)
   while (sk.lvl < SKILL_MAX && sk.xp >= xpToNext(sk.lvl)) {
     sk.xp -= xpToNext(sk.lvl); sk.lvl++;
     logAct(`${w === you ? "Your" : `${w.first}'s`} ${SKILLS[k].long} is up to ${sk.lvl}`, "good");
@@ -8447,7 +8451,7 @@ const posTerm = window.createPOS({
   returnBin: () => returnBin, held: () => held, playing: () => playing,
   requests: t => holds.filter(h => !h.copy && h.title === t).map(h => ({ name: memberName(h.member), at: fmtClock(h.at), alert: !!h.alert })),
   setAlert: (t, on) => { for (const h of holds) if (!h.copy && h.title === t) h.alert = on; },
-  alarm: () => gateAlarm.on, silenceAlarm: silenceGateAlarm, resetSave: () => resetSave(),
+  alarm: () => gateAlarm.on, silenceAlarm: () => { if (gateAlarm.on) gainXp("you", "wis", 3); silenceGateAlarm(); }, resetSave: () => resetSave(),
   gatesArmed: () => gateAlarm.armed, armGates,
   onRedraw(c) {
     if (posTex.image !== c) { posTex.image = c; posScreen.material.map = posTex; posScreen.material.needsUpdate = true; }
@@ -8726,7 +8730,7 @@ function ambTick(dt) {
   VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
     night: 1 - tod.level, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
 }
-let pausedDrawAt = 0;
+let pausedDrawAt = 0, onFeetT = 0;
 renderer.setAnimationLoop(() => {
   if (paused) {                                 // (the store sounds fade out; the frame just sits there, so it's redrawn 4 times a second, not 60)
     clock.getDelta(); ambTick(0);
@@ -8745,6 +8749,7 @@ renderer.setAnimationLoop(() => {
   }
   document.body.classList.toggle("idle", performance.now() - lastActive > 2500);
   clockT += dt;
+  if (!seated && shiftOpen() && (onFeetT += dt) > 60) { onFeetT = 0; gainXp("you", "con", 2); }   // (CON: a minute on your feet, open hours)
   for (const m of marquee) {              // marquee chase around the posters
     if (!m.mesh.parent?.parent?.visible) continue;   // its room's culled (see regionTick)
     m.phases.forEach((ph, j) => {
