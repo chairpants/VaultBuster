@@ -101,7 +101,6 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `catalog.js` | Generated tape catalog (`window.VAULT_CATALOG`) |
 | `covers.js` | Generated TMDB cover art, embedded as data URIs (`window.VAULT_ART`) |
 | `meta.js` | Generated release year and TMDB vote count per title (`window.VAULT_META`), used to sort the New Releases walls |
-| `art.js` | The older embedded cover art. `fetch-covers.mjs` falls back to it for the few shows TMDB can't match |
 | `tests/smoke.mjs` | The smoke tests (see Testing) |
 | `tests/shot.mjs` | A screenshot (or frame timing) from anywhere in a fresh store |
 
