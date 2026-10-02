@@ -76,7 +76,8 @@ let setExteriorDay;                        // (isDay) => ... — street lamps an
 let setSky = () => {};                     // (color) => ... — sky + backdrop
 let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
 const exteriorClouds = [];                 // drifted a little each frame, see the main loop
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: false });   // (the scene's drawn into the composers' targets, which aren't multisampled: canvas MSAA only ever touched the final copy)
+renderer.debug.checkShaderErrors = !!navigator.webdriver;          // checking forces each new shader to finish compiling there and then (a hitch); on for the tests only
 renderer.setSize(innerWidth, innerHeight);
 const LOWMEM = document.documentElement.classList.contains("touch");   // phones / tablets (touch.js): iOS caps a page's canvas memory, so go lighter
 renderer.setPixelRatio(Math.min(devicePixelRatio, LOWMEM ? 1.5 : 2));
@@ -229,6 +230,7 @@ const renderScene = new RenderPass(scene, camera);
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.3, 0.4);
 const bloomComposer = new EffectComposer(renderer);
 bloomComposer.renderToScreen = false;
+bloomComposer.setPixelRatio(renderer.getPixelRatio() / 2);   // the glow pass at half resolution: a quarter of the pixels, and it's blurred anyway
 bloomComposer.addPass(renderScene);
 bloomComposer.addPass(bloomPass);
 const mixPass = new ShaderPass(new THREE.ShaderMaterial({
@@ -272,7 +274,9 @@ function tinyOccluder(o) {
   }
   return o.userData.tinyOcc;
 }
+scene.matrixWorldAutoUpdate = false;              // world matrices: worked out once a frame here, not again by each of the two passes
 function renderWithBloom() {
+  scene.updateMatrixWorld();
   scene.traverse(o => {
     if (!o.isMesh || bloomLayer.test(o.layers)) return;
     if (o.visible && tinyOccluder(o)) { o.visible = false; skippedInBloom.push(o); return; }
@@ -8312,8 +8316,7 @@ addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   bloomComposer.setSize(innerWidth, innerHeight);
-  finalComposer.setSize(innerWidth, innerHeight);
-  bloomPass.setSize(innerWidth, innerHeight);
+  finalComposer.setSize(innerWidth, innerHeight);   // (each composer sizes its own passes, the glow at its half resolution)
 });
 
 // ---------------- register terminal (pos.js) ----------------
@@ -8654,8 +8657,13 @@ function ambTick(dt) {
   VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
     night: 1 - tod.level, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
 }
+let pausedDrawAt = 0;
 renderer.setAnimationLoop(() => {
-  if (paused) { clock.getDelta(); ambTick(0); renderWithBloom(); return; }   // (the store sounds fade out; the frame just sits there)
+  if (paused) {                                 // (the store sounds fade out; the frame just sits there, so it's redrawn 4 times a second, not 60)
+    clock.getDelta(); ambTick(0);
+    const now = performance.now(); if (now - (pausedDrawAt || 0) > 250) { pausedDrawAt = now; renderWithBloom(); }
+    return;
+  }
   const dt = Math.min(clock.getDelta(), 0.05);
   if (keys.size) lastActive = performance.now();                          // walking counts as moving
   if (trashFlapT > 0) { trashFlapT = Math.max(0, trashFlapT - dt); trashFlap.rotation.x = trashFlapRest + 1.1 * Math.sin((1 - trashFlapT / 0.5) * Math.PI); }    // push flap swings in (bottom edge into the bin) and back
