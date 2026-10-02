@@ -157,6 +157,40 @@
   #jobBoard .job.off { opacity: .45; } #jobBoard .job.off .st { color: #ff7b7b; }
   #jobBoard .job.sel { background: #ffffff14; border-color: #ffd98a; }
   #jobBoard .keys { margin-top: 10px; text-align: center; color: #ffffff90; font-size: 11px; }
+  #jobBoard { width: min(860px, calc(100vw - 32px)); }
+  #jobBoard table.grid { width: 100%; border-collapse: separate; border-spacing: 4px; }
+  #jobBoard th { color: #ffd98a; font-size: 11px; letter-spacing: 1px; font-weight: bold; }
+  #jobBoard th.on { color: #fff; }
+  #jobBoard td.who { text-align: left; font-weight: bold; padding: 4px 6px; white-space: nowrap; }
+  #jobBoard td.who small { display: block; font-weight: normal; color: #ffffff90; font-size: 10px; }
+  #jobBoard td.who.on { color: var(--bb-yellow); }
+  #jobBoard td.cell { text-align: center; font-weight: bold; font-size: 16px; padding: 6px 0; border-radius: 4px; background: #ffffff10; border: 1px solid transparent; }
+  #jobBoard td.cell.p1 { color: #7ee08f; } #jobBoard td.cell.p2 { color: #d8e87e; } #jobBoard td.cell.p3 { color: #f0c070; } #jobBoard td.cell.p4 { color: #e09a7e; }
+  #jobBoard td.cell.p0 { color: #ff7b7b; opacity: .6; }
+  #jobBoard td.cell.sel { border-color: #ffd98a; background: #ffffff22; }
+  #jobBoard td.cell.now::after { content: " ▸"; color: #fff; font-size: 11px; }
+  /* ---------- the skills sheet (K) ---------- */
+  #charSheet { position: fixed; z-index: 11; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; width: min(640px, calc(100vw - 32px));
+    background: rgba(10, 20, 44, .92); border: 2px solid #7fa6ff; border-radius: 8px; padding: 12px 16px; color: #fff; font-size: 13px; }
+  #charSheet .h { color: #9fc0ff; font-weight: bold; letter-spacing: 2px; text-align: center; margin-bottom: 8px; }
+  #charSheet table { width: 100%; border-collapse: separate; border-spacing: 6px 4px; }
+  #charSheet th { color: var(--bb-yellow); font-size: 12px; } #charSheet td { text-align: center; } #charSheet td.who { text-align: left; font-weight: bold; }
+  #charSheet .bar { height: 4px; background: #ffffff22; border-radius: 2px; margin-top: 2px; } #charSheet .bar i { display: block; height: 100%; background: #7ee08f; border-radius: 2px; }
+  #charSheet .legend { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; font-size: 11px; color: #cfe0ff; }
+  #charSheet .legend b { color: var(--bb-yellow); margin-right: 4px; }
+  /* ---------- hiring: three applicants ---------- */
+  #hireScreen { position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: rgba(3, 8, 22, .88); color: #fff; padding: 16px; overflow: auto; }
+  #hireScreen .h { color: var(--bb-yellow); font-weight: bold; letter-spacing: 3px; }
+  #hireScreen .apps { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  #hireScreen .app { width: 220px; background: #0e1a3a; border: 2px solid #2a4d8a; border-radius: 8px; padding: 10px; text-align: center; font-size: 12px; }
+  #hireScreen .app img { width: 180px; height: 220px; background: linear-gradient(#1a2a55, #0b1430); border-radius: 6px; }
+  #hireScreen .nm { font-size: 15px; font-weight: bold; margin-top: 6px; } #hireScreen .lk { color: #cfe0ff; font-size: 11px; margin: 2px 0 6px; }
+  #hireScreen table { width: 100%; font-size: 11px; } #hireScreen td:first-child { color: var(--bb-yellow); text-align: left; width: 34px; } #hireScreen td:last-child { width: 14px; }
+  #hireScreen .pips i { display: inline-block; width: 10px; height: 8px; margin-right: 2px; background: #7ee08f; border-radius: 2px; }
+  #hireScreen .wage { color: #cfe0ff; margin: 6px 0; }
+  #hireScreen button { font: bold 13px Verdana, sans-serif; color: #fff; background: var(--bb-blue); border: 2px solid var(--bb-yellow); border-radius: 4px; padding: 8px 12px; cursor: pointer; width: 100%; }
+  #hireScreen button.none { width: auto; background: transparent; border-color: #ffffff55; }
 
   #tvHint { position: fixed; z-index: 10; left: 50%; bottom: 96px; transform: translateX(-50%);   /* clear of the inventory bar */
     color: #fff; font-size: 13px; font-weight: bold; display: none; }
@@ -189,15 +223,11 @@
   #invBar .slot .wind { position: absolute; left: 3px; right: 3px; bottom: 2px; height: 4px; border-radius: 2px;
     background: linear-gradient(to right, #e23232 var(--w), #3fcf6a80 var(--w)); }
 
-  /* ---------- register terminal (pos.js): an 80x25 green-screen CRT ---------- */
+  /* ---------- register terminal (pos.js): an 80x30 DOS-app CRT, painted on a canvas ---------- */
   #posTerm { position: fixed; z-index: 30; inset: 0; display: flex; align-items: center; justify-content: center; background: #000c; }
   #posTerm[hidden] { display: none; }
-  #posTerm pre { margin: 0; padding: 2.2vh 2.4vh; background: #0000aa; color: #c8c8d8; border: 14px solid #cfc7b2; border-radius: 18px;
-    font: min(1.95vw, 3.7vh)/1.0 VT323, "Courier New", monospace; text-shadow: 0 0 4px #aab4ff66;
-    box-shadow: inset 0 0 80px #000a, 0 20px 80px #000;
-    background-image: repeating-linear-gradient(#0000 0 2px, #0002 2px 3px); }
-  #posTerm .inv { background: #00aaaa; color: #000; text-shadow: none; }
-  #posTerm .sel { background: #c8c8d8; color: #0000aa; text-shadow: none; }
+  #posTerm canvas { width: min(94vw, calc((100vh - 60px) * 4 / 3)); aspect-ratio: 4 / 3; background: #0000aa; border: 14px solid #cfc7b2; border-radius: 18px;
+    box-shadow: inset 0 0 80px #000a, 0 20px 80px #000; cursor: none; }      /* the highlighted cell is the cursor */
 
   /* ---------- H toggles every HUD overlay off ---------- */
   body.nohud #nowPlaying, body.nohud #tvHint,
@@ -252,7 +282,7 @@
       <b>E / Q</b><span>interact</span>         <b>1–9 / WHEEL</b><span>switch items</span>
       <b>SHIFT</b><span>hustle</span>       <b>L</b><span>skip an hour</span>
       <b>J</b><span>the log</span>           <b>H</b><span>hide the HUD</span>
-      <b>M</b><span>store sounds</span>
+      <b>M</b><span>store sounds</span>       <b>K</b><span>skills</span>
     </div>
     <div class="keys tc">
       <b>LEFT THUMB</b><span>move</span>       <b>DRAG</b><span>look</span>
@@ -272,6 +302,8 @@
 <div id="catchCall"></div>
 <div id="callPanel"></div>
 <div id="jobBoard"></div>
+<div id="charSheet"></div>
+<div id="hireScreen"></div>
 <div id="actLog"><div class="h" onclick="logToggle()">LOG<span class="n"></span><span class="k">J hide · PgUp/PgDn</span></div><div id="actLogList"></div></div>
 <div id="shiftReport"><pre id="shiftSlip"></pre><button id="shiftNext">NEXT SHIFT ▸</button></div>
 <div id="invBar"></div>
