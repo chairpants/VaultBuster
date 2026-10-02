@@ -36,7 +36,7 @@
 // Everything placed in the room is HRTF-panned from where the camera is, and
 // the chime, steps and doors get a little of a generated room reverb.
 //
-// window.VaultAmbience = { start(), tick(state), chime(x, y, z), step(x, z, tile, weight), door(kind, action, x, y, z),
+// window.VaultAmbience = { start(), tick(state), chime(x, y, z, vol), step(x, z, tile, weight), door(kind, action, x, y, z),
 //   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted() }
 window.VaultAmbience = (() => {
   let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1;   // vol: the settings' store-sounds volume
@@ -144,9 +144,9 @@ window.VaultAmbience = (() => {
     if (!s.active) return;
     if ((carT += s.dt) >= nextCar) { carT = 0; nextCar = s.night > 0.6 ? 25 + Math.random() * 50 : 5 + Math.random() * 14; car(s.night > 0.6); }
   }
-  function chime(x, y, z) {                        // ding... dong
-    if (!ac || muted) return;
-    const p = panner(x, y, z, 2, 1), out = ac.createGain(); out.gain.value = 0.12; out.connect(p); p.connect(bed); p.connect(verbIn);
+  function chime(x, y, z, vol = 1) {               // ding... dong (vol: how much of it gets to wherever you are)
+    if (!ac || muted || vol <= 0) return;
+    const p = panner(x, y, z, 2, 1), out = ac.createGain(); out.gain.value = 0.12 * vol; out.connect(p); p.connect(bed); p.connect(verbIn);
     [[659.3, 0], [523.3, 0.55]].forEach(([f, at]) => {
       const t0 = ac.currentTime + at;
       [[1, 1, 1.4], [2.756, 0.45, 0.6], [5.404, 0.22, 0.3], [8.933, 0.1, 0.15]].forEach(([r, a, tau]) => {   // bar modes: ratio, strength, decay time
