@@ -5204,7 +5204,7 @@ function custSpawn(member = custPickMember()) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
   custArrivals.lastMember = member; shift.stats.visitors++;
-  window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2);   // the entry chime
+  window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false));   // the entry chime
   const loyal = member.loyalty || 0;
   who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
   member.likes = who.persona.taste.name;          // (for the POS: now somebody's noticed)
@@ -5816,7 +5816,7 @@ function custStep(cust, dt) {
       } break;
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
       case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
-      case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2); custGone(cust); } return;
+      case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); custGone(cust); } return;
     }
   }
   if (cust.hi > 0 && (cust.hi -= dt) <= 0) c.setMood({ browse: "browse", thWatch: playing ? "watch" : "neutral", wait: "wait", inLine: "wait", impatient: "impatient", angry: "angry" }[cust.state] || (cust.holding ? "happy" : "neutral"));
@@ -7479,12 +7479,12 @@ const holds = [];                                // promised holds: { member, ti
 const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === titleOfCopy(copy));   // a POS alert on a promised hold: the next return of it goes on the holds shelf
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
 let ringAc = null, ringOut = null;
-function ringHeard() {                           // how loud the phone is where you are: the sales floor, falling off with distance; faint from the hall, not at all past it
-  const d = Math.hypot(player.x - PHONE_AT.x, player.z - PHONE_AT.z);
-  if (player.z < STORE.z) return Math.max(0.15, 1 / (1 + (d / 8) ** 2));
-  if (player.z < BOH.hallZ && player.x > BOH.x0 && player.x < STORE.x) return 0.06;   // (through the open doorway)
-  return 0;
+function heardFrom(x, z, falloff = true) {      // how loud a sound out on the sales floor is where you are: the whole floor hears it (fainter
+  const room = player.z < STORE.z ? 1 : player.z < BOH.hallZ && player.x > BOH.x0 && player.x < STORE.x ? 0.4 : 0;   // with distance), the hall a little through the doorway, the back rooms not at all
+  if (!falloff || !room) return room;              // (falloff off: the caller's sound already fades with distance, it just needs the walls)
+  return room * Math.max(0.15, 1 / (1 + (Math.hypot(player.x - x, player.z - z) / 8) ** 2));
 }
+const ringHeard = () => heardFrom(PHONE_AT.x, PHONE_AT.z);
 function ringBurst() {                            // a desk-set ringer: a clapper buzzing between two small gongs ~20 times a second for 2 s
   try {                                           // (lowpassed and not too loud: a real bell, but across the room and not in your ear)
     const ac = ringAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ringOut = ac.createGain(), lp = ac.createBiquadFilter();
@@ -8402,7 +8402,7 @@ function startGateAlarm() {
     const osc = ac.createOscillator(), g = ac.createGain();
     osc.type = "square"; g.gain.value = 0; osc.connect(g).connect(ac.destination); osc.start();
     let hi = false;
-    const beep = () => { const t = ac.currentTime; hi = !hi; osc.frequency.setValueAtTime(hi ? 2600 : 2050, t); g.gain.setValueAtTime(0.045, t); g.gain.setValueAtTime(0, t + 0.2); };
+    const beep = () => { const t = ac.currentTime; hi = !hi; osc.frequency.setValueAtTime(hi ? 2600 : 2050, t); g.gain.setValueAtTime(0.045 * heardFrom(0, GATE_Z), t); g.gain.setValueAtTime(0, t + 0.2); };   // (as loud as it is where you are, beep by beep)
     beep(); const timer = setInterval(beep, 280);
     gateAlarm.stop = () => { clearInterval(timer); osc.stop(); osc.disconnect(); };
   } catch { /* no audio: the lights still go */ }
