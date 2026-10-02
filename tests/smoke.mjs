@@ -93,7 +93,7 @@ check("the schedule: 25 hours max, and off the clock they head out the door", aw
   const full = __t.setSched(e.id, 6, 3, true);
   e.state = "post"; e.t = 0; __t.empTick(0.05);
   return !err0 && /25 HOURS/.test(full || "") && e.leaving && e.state === "toExit"; }));
-check("skills level up with XP (you and staff)", await ev(() => { const e = __t.staff[0], l0 = __t.lv(e, "dex"); __t.gainXp(e, "dex", __t.xpToNext(l0) + 1); __t.gainXp("you", "str", __t.xpToNext(1) + 1); return __t.lv(e, "dex") === l0 + 1 && __t.lv("you", "str") >= 2; }));
+check("skills level up with XP (you and staff)", await ev(() => { const e = __t.staff[0], l0 = __t.lv(e, "dex"); __t.gainXp(e, "dex", (__t.xpToNext(l0) + 1) / __t.SKILLS.dex.rate); __t.gainXp("you", "str", (__t.xpToNext(1) + 1) / __t.SKILLS.str.rate);   /* (each stat earns at its own rate) */ return __t.lv(e, "dex") === l0 + 1 && __t.lv("you", "str") >= 2; }));
 
 console.log(`\nerrors on the page: ${errors.length}`); errors.slice(0, 3).forEach(e => console.log("   " + e));
 check("no page errors overall", errors.length === 0);
