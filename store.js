@@ -2861,7 +2861,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
 // ---------------- posters on the walls ----------------
 const marquee = [];   // flashing bulbs around the posters: { mesh, phases } — one InstancedMesh per poster, a color per bulb
 const bulbTmp = new THREE.Color();
-const posterMats = [];                     // lamps-out mode: posters glow faintly under their marquees
+const posterMats = [];                     // the posters, lit by their own bulbs: a touch always, a lot more when their zone's lights are off
 // the marquee's warm spill on the wall around each poster: one shared soft
 // halo texture, additively blended — a real point light per poster (~21 of
 // them) made every lit pixel in the store pay for every poster
@@ -2897,7 +2897,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
       const back = new THREE.Mesh(new THREE.BoxGeometry(0.97, 1.39, 0.04), mat.dark);
       back.position.z = -0.027; g.add(back);
       const pm = new THREE.MeshLambertMaterial({ map: t, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: t });
-      posterMats.push(pm);
+      pm.userData.zone = lightZoneAt(x, z); posterMats.push(pm);
       g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.31), pm));
       const bulbs = glow(new THREE.InstancedMesh(bulbGeo, bulbMat, pts.length)), bd = new THREE.Object3D();
       pts.forEach(([px, py], j) => { bd.position.set(px, py, 0.04); bd.updateMatrix(); bulbs.setMatrixAt(j, bd.matrix); bulbs.setColorAt(j, bulbTmp.set(0xffd400)); });
@@ -4279,10 +4279,10 @@ function applyLighting() {
   closetBulb.mat?.color.set(zoneOn.closet ? 0xfff2c4 : 0x3a3833);
   TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater);
   for (const l of allLights) l.intensity = l.userData.on * (zoneLvl[l.userData.zone] ?? 1);
+  for (const m of posterMats) m.emissiveIntensity = 0.12 + 0.55 * (1 - (zoneLvl[m.userData.zone] ?? 1));   // (the marquee bulbs themselves are untouched)
   const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;
   if (dark === lightsOut && applyLighting.done) return;
   applyLighting.done = true; lightsOut = dark;
-  for (const m of posterMats) m.emissiveIntensity = dark ? 0.5 : 0;   // marquees and screens glow on their own (the posters lit by their bulbs, readable in the dark)
   haloMat.opacity = dark ? 0.4 : 0.22;        // the marquee spill shows more with the lights down
   bloomPass.strength = dark ? 0.55 : 0.28;    // barely-there with the lights on; a bit more presence in the dark
   // threshold raised from .2/.4 — screen whites (menus, bright scenes) were blooming
