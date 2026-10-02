@@ -329,7 +329,8 @@ const REWIND_SECS = 10;
 let rewindAc = null;
 function rewinderLoad(rw, tape, who = "you") {
   Object.assign(rw, { tape, f0: windFrac(tape), t: 0, done: false });
-  rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (upg.rewinders ? 0.5 : 1) * Math.max(0.5, 1 - 0.025 * (lv(who, "dex") - 1));   // (DEX: threaded and running faster)
+  rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (upg.rewinders ? 0.5 : 1) * Math.max(0.5, 1 - 0.025 * (lv(who, "dex") - 1)) * (has(who, "dex", 5) ? 0.7 : 1);   // (DEX: threaded and running faster; Quick Thread)
+  if (has(who, "dex", 10) && Math.random() < 0.2) { rw.dur = 0.15; if (who === "you") toast("Lucky Spool: rewound in a blink!", true); }
   if (who !== "load") gainXp(who, "dex", 3);
   rw.tapeMesh.material = tape.sideMat || mat.tapeBody; rw.tapeMesh.visible = true;
   if (rw.f0 > 0) rewinderSound(rw, true); else rewinderFinish(rw, false);
@@ -4708,7 +4709,7 @@ function move(dt) {
   if (keys.has("KeyD") || keys.has("ArrowRight")) ix += 1;
   if (keys.has("KeyA") || keys.has("ArrowLeft")) ix -= 1;
   if (!ix && !iz) return;
-  const sp = ((keys.has("ShiftLeft") || keys.has("ShiftRight")) ? 5.2 : 3.1) * (1 + 0.02 * (lv("you", "con") - 1));   // (CON: quicker on your feet)
+  const sp = ((keys.has("ShiftLeft") || keys.has("ShiftRight")) ? 5.2 * (has("you", "con", 5) ? 1.15 : 1) : 3.1) * (1 + 0.02 * (lv("you", "con") - 1));   // (CON: quicker on your feet; Second Wind)
   const crouched = keys.has("KeyC");
   const spd = sp * (crouched ? 0.55 : 1);
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
@@ -5258,7 +5259,7 @@ function custWatched(cust, dt) {
   if (aimCustomer !== cust) { cust.watchT = 0; return; }
   if ((cust.watchT = (cust.watchT || 0) + dt) < 0.8) return;
   cust.fessRolled = true;
-  if (Math.random() >= 0.5) return;               // ...or they keep going
+  if (!has("you", "wis", 10) && Math.random() >= 0.5) return;   // ...or they keep going (Stern Look: they never do)
   const c = cust.c;
   cust.sneaking = false; cust.tagged = false; cust.thief = false;
   c.holdTape(cust.tapes.length); c.setPose("hold"); c.setMood("meh"); cust.hi = 2;
@@ -5636,11 +5637,11 @@ function custStep(cust, dt) {
           }
         }
         break;
-      case "queue": c.setPose("wait"); c.setMood("wait"); cust.state = "inLine"; cust.t = 45 * P.patience; break;
+      case "queue": c.setPose("wait"); c.setMood("wait"); cust.state = "inLine"; cust.t = 45 * P.patience * linePatience(); break;
       case "inLine": if (cust.t <= 0 && c.mood !== "impatient") c.setMood("impatient"); break;
       case "counter": if (!registerStaffed()) { dingBell(); for (const e of staff) withEmp(e, () => empSummon()); } c.setPose("wait"); c.holdProp(cust.prospect ? "form" : cust.tapes.length ? "card" : "cash");
-        c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience; break;
-      case "wait": if (cust.t <= 0) { dingBell(); for (const e of staff) withEmp(e, () => empSummon()); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience; } break;
+        c.setMood("wait"); cust.state = "wait"; cust.t = 25 * P.patience * linePatience(); break;
+      case "wait": if (cust.t <= 0) { dingBell(); for (const e of staff) withEmp(e, () => empSummon()); c.setMood("impatient"); cust.state = "impatient"; cust.t = 15 * P.patience * linePatience(); } break;
       case "impatient": if (cust.t <= 0) { c.setMood("angry"); cust.state = "angry"; cust.t = 6; } break;
       case "angry": if (cust.t <= 0) { shift.stats.walkouts++; shiftScore(-100); posTerm.loyal(cust.member, -15); logAct(`${memberName(cust.member)} got tired of waiting and walked out`, "bad", null, -100); cust.tagged = cust.tapes.length > 0; cust.alarmed = false; c.setPose("hold"); custGo(cust, "leave", CUST_DOOR); } break;
       case "tagBack": c.setPose("hold"); c.setMood("impatient"); cust.state = "tagWait"; cust.t = 30 * P.patience; break;   // at the end of the counter, tape held out
@@ -5684,18 +5685,50 @@ const SKILLS = {
   wis: { name: "WIS", long: "Wisdom", what: "spotting shoplifters, the gate alarm" },
 };
 const SKILL_IDS = Object.keys(SKILLS), SKILL_MAX = 20;
-const xpToNext = L => Math.round(40 * L ** 1.55);   // XP from level L to L+1: 40, 117, 220, 345... (gradual)
+const xpToNext = L => Math.round(60 * 1.5 ** (L - 1));   // XP from level L to L+1: 60, 90, 135, 203... x1.5 each (~4.5k total to 10, ~260k to 20)
 const skillsOf = levels => Object.fromEntries(SKILL_IDS.map(k => [k, { lvl: levels?.[k] ?? 1, xp: 0 }]));
 const you = { first: "You", skills: { ...skillsOf(), ...SAVE?.you?.skills } };
+const DEBUG_LVL = +new URLSearchParams(location.search).get("lvl");   // debug: index.html?lvl=10 sets all your stats, misshelves a few tapes, and never saves
+if (DEBUG_LVL) for (const k of SKILL_IDS) you.skills[k] = { lvl: Math.min(SKILL_MAX, DEBUG_LVL), xp: 0 };
 const whoIs = who => who === "you" || who === "player" ? you : who === "dana" ? emp : who;   // "dana": whichever employee is acting (emp)
 const lv = (who, k) => whoIs(who)?.skills?.[k]?.lvl ?? 1;
+// milestone unlocks on top of the per-level nudges: [name, what it does, staff get it too]
+const MILESTONES = {
+  dex: { 5: ["Quick Thread", "rewinders you load run 30% faster", true], 10: ["Lucky Spool", "1 in 5 rewinds is done in a blink", true] },
+  int: { 5: ["Shelf Sense", "the slot for the tape in your hand glows"], 10: ["Keen Eye", "misshelved tapes glow"] },
+  cha: { 5: ["Smooth Talker", "charging late fees never costs goodwill", true], 10: ["Store Favorite", "customers wait 30% longer in line"] },
+  str: { 5: ["Strong Grip", "carry a third trash bag"], 10: ["Pack Mule", "carry two more boxes"] },
+  con: { 5: ["Second Wind", "sprint 15% faster"], 10: ["Neat Freak", "cleaning a mess sweeps up others within 3m"] },
+  wis: { 5: ["Sixth Sense", "shoplifters glow red"], 10: ["Stern Look", "a shoplifter you stare down always gives up"] },
+};
+const has = (who, k, L) => lv(who, k) >= L;
+const linePatience = () => has("you", "cha", 10) ? 1.3 : 1;   // Store Favorite
+// glowing markers for the "see it" unlocks (Shelf Sense, Keen Eye, Sixth Sense): a small pool, re-placed every frame
+const beacons = [];
+function beaconAt(i, pos, ry, color, w = TAPE.w, h = TAPE.h, d = TAPE.d) {
+  const b = beacons[i] ||= (() => {
+    const m = glow(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })));
+    scene.add(m); return m;
+  })();
+  b.visible = true; b.position.copy(pos); b.rotation.set(0, ry, 0); b.scale.set(w, h, d); b.material.color.set(color);
+  b.material.opacity = 0.35 + 0.25 * Math.sin(performance.now() / 180);   // a slow pulse
+}
+function milestoneTick() {
+  let n = 0;
+  if (held?.offShelf && held.pos && has("you", "int", 5)) beaconAt(n++, held.pos, held.ry, 0x66ffcc, TAPE.w * 1.4, TAPE.h * 1.1, TAPE.d * 1.1);
+  if (has("you", "int", 10)) for (const s of strays) beaconAt(n++, s.mesh.position, s.mesh.rotation.y, 0xffcc33, TAPE.w * 1.3, TAPE.h * 1.2, TAPE.d * 1.3);
+  if (has("you", "wis", 5)) for (const k of custs) if (k.sneaking && !k.alarmed && k.c) beaconAt(n++, k.c.group.position.clone().setY(k.c.group.position.y + 2.05), 0, 0xff3030, 0.18, 0.18, 0.18);
+  for (let i = n; i < beacons.length; i++) beacons[i].visible = false;
+}
 function gainXp(who, k, amt) {
   const w = whoIs(who), sk = w?.skills?.[k]; if (!sk || sk.lvl >= SKILL_MAX || !amt) return;
   sk.xp += amt * (w !== you && upg.dana ? 1.5 : 1);   // (staff training: they learn faster)
   while (sk.lvl < SKILL_MAX && sk.xp >= xpToNext(sk.lvl)) {
     sk.xp -= xpToNext(sk.lvl); sk.lvl++;
     logAct(`${w === you ? "Your" : `${w.first}'s`} ${SKILLS[k].long} is up to ${sk.lvl}`, "good");
-    if (w === you) toast(`${SKILLS[k].name} up! Level ${sk.lvl}`, true);
+    const m = MILESTONES[k][sk.lvl];
+    if (m && (w === you || m[2])) logAct(`${w === you ? "Unlocked" : `${w.first} unlocked`} ${m[0]}: ${m[1]}`, "good");
+    if (w === you) toast(m ? `${SKILLS[k].name} ${sk.lvl}! Unlocked ${m[0]}: ${m[1]}` : `${SKILLS[k].name} up! Level ${sk.lvl}`, true);
   }
   sheetHud();
 }
@@ -5994,7 +6027,8 @@ function sheetHud() {
     return `<td><b>${sk.lvl}</b><div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div></td>`; }).join("")}</tr>`;
   el.innerHTML = `<div class="h">SKILLS · K to close</div><table><tr><th></th>${SKILL_IDS.map(k => `<th title="${SKILLS[k].what}">${SKILLS[k].name}</th>`).join("")}</tr>` +
     row(you, "You") + staff.map(e => row(e, e.first)).join("") + `</table>` +
-    `<div class="legend">${SKILL_IDS.map(k => `<span><b>${SKILLS[k].name}</b> ${SKILLS[k].what}</span>`).join("")}</div>`;
+    `<div class="legend">${SKILL_IDS.map(k => `<span><b>${SKILLS[k].name}</b> ${SKILLS[k].what}${Object.entries(MILESTONES[k]).map(([L, m]) =>
+      `<br><span style="opacity:${has("you", k, +L) ? 1 : 0.5}">${has("you", k, +L) ? "★" : "☆"} ${L} ${m[0]}: ${m[1]}</span>`).join("")}</span>`).join("")}</div>`;
   el.style.display = "block";
 }
 // ---- hiring: buying "hire an employee" brings up three applicants to pick from ----
@@ -6537,7 +6571,7 @@ function coFees(charge) {                        // late fees on their account: 
   const m = co.cust.member, amt = posTerm.owed(m);
   posTerm.settle(m, charge); co.cust.hi = 1.6;
   const feeBy = co.by === "player" ? "you" : co.emp;
-  posTerm.loyal(m, charge ? -Math.max(0, 3 - Math.floor((lv(feeBy, "cha") - 1) / 3)) : 6); gainXp(feeBy, "cha", charge ? 3 : 2);   // (charm takes the sting out of a fee)
+  posTerm.loyal(m, charge ? (has(feeBy, "cha", 5) ? 0 : -Math.max(0, 3 - Math.floor((lv(feeBy, "cha") - 1) / 3))) : 6); gainXp(feeBy, "cha", charge ? 3 : 2);   // (charm takes the sting out of a fee)
   if (charge) { co.fees += amt; co.feesIn = true; coRebill(); shift.stats.feesCollected += amt; co.cust.c.setMood("meh"); co.pts += 20; logAct(`${co.by === "dana" ? `${co.emp?.first} charged` : "Charged"} ${memberName(m)} their late fees`, "good", amt); }
   else { shift.stats.feesWaived += amt; co.cust.c.setMood("love"); logAct(`Waived ${memberName(m)}'s ${money(amt)} in late fees`); }
 }
@@ -6779,10 +6813,10 @@ function pickHover() {
     highlight.visible = false;
     let a = raycaster.intersectObjects(aimables, false).find(h => h.distance < 2.4 && ["chute", "trashBin", "trashBag", "door", "lightZone"].some(k => h.object.userData[k]));
     const wall = a && raycaster.intersectObjects(aimBlockers, false)[0]; if (wall && wall.distance < a.distance) a = undefined;
-    const u = a?.object.userData || {}, n = bagCarry.length, more = n < BAG_MAX;
+    const u = a?.object.userData || {}, n = bagCarry.length, more = n < bagMax();
     aimChute = !!u.chute; aimBin = u.trashBin || null; aimBag = u.trashBag || null; aimDoor = !aimChute && !aimBin && !aimBag && u.door || null; aimSwitch = !aimDoor && !aimChute && !aimBin && !aimBag && u.lightZone || null;
     const tip = $("hoverTip"); tip.style.display = "block";
-    tip.innerHTML = aimChute ? `E — send ${n === 1 ? "the bag" : "both bags"} down the chute`
+    tip.innerHTML = aimChute ? `E — send ${n === 1 ? "the bag" : n === 2 ? "both bags" : "all three bags"} down the chute`
       : aimBin ? (aimBin.n ? (more ? `E — bag the ${aimBin.name} too` : "Hands full") : `The ${aimBin.name} · empty`)
       : aimBag ? (more ? "E — pick up this bag too" : "Hands full")
       : aimDoor ? (aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`)
@@ -7126,7 +7160,7 @@ function boxDeliver() {                          // morning: yesterday's orders 
 }
 const boxHand = new THREE.Group();
 function boxPick(b) {                            // E on a box: into your arms (up to 3, stacked)
-  const most = Math.min(6, 3 + Math.floor((lv("you", "str") - 1) / 3));   // (STR: more boxes at once)
+  const most = Math.min(6, 3 + Math.floor((lv("you", "str") - 1) / 3)) + (has("you", "str", 10) ? 2 : 0);   // (STR: more boxes at once; Pack Mule)
   if (boxCarry.length >= most) { toast("That's all you can carry"); return; }
   boxCarry.push(b); b.mesh.traverse(m => { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); });
   if (!boxHand.parent) camera.add(boxHand);
@@ -7491,7 +7525,7 @@ function messClean(m, by = "you") {
 // break room (right-click sets them down). Bins over 3/4 full and bags left
 // lying about count against the closing check, and customers notice an
 // overflowing bin like any other mess. The staff do it too, under CLEANUP.
-const BAG_MAX = 2;
+const bagMax = () => has("you", "str", 5) ? 3 : 2;   // one in each hand (Strong Grip: a third hugged in front)
 const bagCarry = [];                              // in your hands: { bin, n, mesh }
 const bagsDown = [];                              // set down somewhere: { bin, n, mesh, x, z, claim }
 const bagHand = new THREE.Group();
@@ -7547,11 +7581,11 @@ function bagTie(b) {                              // -> the bag out of a bin (an
 function bagHandShow() {                          // carried low, one in each hand
   if (!bagHand.parent) camera.add(bagHand);
   bagHand.clear();
-  bagCarry.forEach((g, i) => { g.mesh.position.set(i ? -0.36 : 0.36, -0.24, -0.62); g.mesh.rotation.set(0, 0, i ? 0.08 : -0.08); g.mesh.scale.setScalar(0.8); bagHand.add(g.mesh); });
+  bagCarry.forEach((g, i) => { g.mesh.position.set([0.36, -0.36, 0][i], i > 1 ? -0.34 : -0.24, -0.62); g.mesh.rotation.set(0, 0, i ? 0.08 : -0.08); g.mesh.scale.setScalar(0.8); bagHand.add(g.mesh); });
 }
 function binBag(b) {                              // E on a bin
   if (!b.n) { toast(`The ${b.name} is empty`); return; }
-  if (bagCarry.length >= BAG_MAX) { toast("Hands full: take these to the chute first"); return; }
+  if (bagCarry.length >= bagMax()) { toast("Hands full: take these to the chute first"); return; }
   bagCarry.push(bagTie(b)); bagHandShow();
   shiftScore(5, "you"); gainXp("you", "con", 3);
 }
@@ -7569,7 +7603,7 @@ function bagsSetDown() {                          // right-click: at your feet, 
   });
 }
 function bagPickUp(g) {                           // E on one on the floor
-  if (bagCarry.length >= BAG_MAX) { toast("Hands full"); return; }
+  if (bagCarry.length >= bagMax()) { toast("Hands full"); return; }
   bagsDown.splice(bagsDown.indexOf(g), 1); g.mesh.removeFromParent(); unaim(g.mesh);
   g.mesh = makeBag(g.bin, g.n); bagCarry.push(g); bagHandShow();
 }
@@ -7934,7 +7968,11 @@ function onE() {
   if (aimBox) { boxPick(aimBox); return; }
   if (aimCupboard) { stockTake(aimCupboard); return; }
   if (aimStockSlot) { stockPlace(aimStockSlot); return; }
-  if (aimMess) { messClean(aimMess); return; }
+  if (aimMess) {
+    const m = aimMess; messClean(m);
+    if (has("you", "con", 10)) for (const o of messes.filter(o => Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
+    return;
+  }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
   if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
@@ -8103,6 +8141,7 @@ document.addEventListener("pointerlockchange", () => {
   if (paused && playing && !video.paused) { video.pause(); pausedTape = true; }
   if (locked) { relockOnInput = false; if (pausedTape) { pausedTape = false; video.play().catch(() => {}); } }
   if (locked) {
+    if (DEBUG_LVL && !started) for (let i = 0; i < 8; i++) { const c = onShelfCopy(catalog[Math.floor(Math.random() * catalog.length)]); if (c) { setOnShelf(c, false); misshelve(c, null, onShelfCopy(catalog[Math.floor(Math.random() * catalog.length)])); } }   // something for Keen Eye to find
     started = true; window.VaultAmbience?.start();
     if (resumePlay) { const r = resumePlay; resumePlay = null; playEpisode(r.idx, r.tape); }   // restored tape: rolls now that there's been a click
     $("titleScreen").classList.add("paused");
@@ -8279,7 +8318,7 @@ $("shiftNext").addEventListener("click", nextShift);
 // VCR and starts its episode again on your first click into the store (a
 // browser won't autoplay sound before that, and archive.org streams can't
 // seek, so it's the episode — not the exact minute — that resumes).
-let resumePlay = null, saveOff = false;
+let resumePlay = null, saveOff = !!DEBUG_LVL;
 const snackUnits = () => [...new Set(aimables.map(o => o.userData.unit || (o.userData.snack ? o : null)).filter(Boolean))];
 function saveState() {
   if (saveOff || !started) return;           // nothing worth keeping until you've been in the store
@@ -8594,6 +8633,7 @@ renderer.setAnimationLoop(() => {
   custTick(dt);
   empTick(dt);
   trashTick(dt);
+  milestoneTick();
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
     handGroup.visible = !inspecting && !coHand.visible;   // 3D box only for the carried-at-your-side pose; hands full with a sale: your own tape waits
