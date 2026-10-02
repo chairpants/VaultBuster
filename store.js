@@ -111,6 +111,14 @@ const TVU = {
   uThBox: { value: new THREE.Vector4() },            // auditorium: x0, x1, z0, z1
   uThScreenP: { value: new THREE.Vector3(-2.87, 1.05, 45.8) }, // theater screen center for live bounce
   uThSconce: { value: 1 },                           // auditorium wall sconces 0..1: up between films, fading out once one plays
+  // light spilling through doorways into a darker room next door (see spillTick), live ones first (uSpillN): per spill,
+  // the light it comes from (xyz, inside the lit room) + reach past the door (w), its color x strength, the box it
+  // lands in (x0, x1, z0, z1), and the door opening (plane: 0 z = const, 1 x = const; that const; center along it; half width)
+  uSpillN: { value: 0 },
+  uSpillD: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+  uSpillP: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+  uSpillC: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+  uSpillB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
 };
 // Room lighting, per fragment, by where it is (world space): no light objects,
 // so it costs the same however many zones there are, and it stops dead at the
@@ -147,6 +155,22 @@ const ROOM_FRAG = `
     vec3 moon = mix(uMoonGround, uMoonSky, 0.5 * rN.y + 0.5) + uMoonC * max(dot(rN, uMoonDir), 0.0);
     rl = mix(moon, sun, day);
   }
+  vec3 spill = vec3(0.0);                          // a lit room's light through its doorway, shaped by the opening, fading into the dark one
+  for (int i = 0; i < 8; i++) {
+    if (i >= uSpillN) break;                       // (all lit, nothing spills: no cost)
+    vec4 sb = uSpillB[i];
+    if (P.x < sb.x || P.x > sb.y || P.z < sb.z || P.z > sb.w) continue;
+    vec4 sp = uSpillP[i], dd = uSpillD[i];
+    bool xPl = dd.x > 0.5;
+    float sA = xPl ? sp.x : sp.z, t = (dd.y - sA) / ((xPl ? P.x : P.z) - sA);
+    if (t <= 0.0 || t >= 1.0) continue;
+    vec3 Q = sp.xyz + (P - sp.xyz) * t;            // where the light's path crosses the doorway's plane
+    float past = length(P - Q), soft = 0.025 + 0.035 * past;
+    float edge = max(abs((xPl ? Q.z : Q.x) - dd.z) - dd.w, max(-Q.y, Q.y - ${DOOR_H.toFixed(2)}));
+    float k = clamp(1.0 - past / sp.w, 0.0, 1.0);
+    spill += uSpillC[i].rgb * (1.0 - smoothstep(-soft, soft, edge)) * k * k * (0.35 + 0.65 * max(dot(rN, normalize(sp.xyz - P)), 0.0));
+  }
+  rl = max(rl, spill * fl);
   reflectedLight.indirectDiffuse += rl * BRDF_Lambert(diffuseColor.rgb);
 }
 `;
@@ -179,6 +203,7 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
       uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
       uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec2 uBohSplit, uThLight; uniform vec3 uThScreenP; uniform float uThSconce;
+      uniform vec4 uSpillP[8], uSpillC[8], uSpillB[8], uSpillD[8]; uniform int uSpillN;
       uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC;`)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\n" + ROOM_FRAG + TV_FRAG);
 };
@@ -5793,6 +5818,47 @@ function beaconAt(i, pos, ry, color, w = TAPE.w, h = TAPE.h, d = TAPE.d) {
   b.visible = true; b.position.copy(pos); b.rotation.set(0, ry, 0); b.scale.set(w, h, d); b.material.color.set(color);
   b.material.opacity = 0.35 + 0.25 * Math.sin(performance.now() / 180);   // a slow pulse
 }
+// ---- light spill through the back-of-house doorways ----
+// Each room's lighting stops dead at its walls (see ROOM_FRAG), so a lit room next to a dark one met it in a hard seam.
+// Instead, each doorway lets light through both ways: a lit room glows out into the dark hall (and the lit hall into a
+// dark room), fading over a few meters, as far as the door is open. [from a zone, to a box, through (x, y, z), reach]
+const SPILLS = (() => {
+  const HZ = BOH.hallZ, Z = STORE.z, X = STORE.x, hall = [BOH.x0, X, Z, HZ];
+  const brk = [BOH.x0, BOH.splitX, HZ, BOH.z1], rr = [BOH.splitX, X, HZ, BOH.z1], cl = [X, CLOSET.x1, Z, HZ], floor = [X - 6, X, Z - 6, Z];
+  // a doorway: in a wall along x (z = at) or along z (x = at), centered c, half width hw; the lit side (+1/-1 across the
+  // wall), and how far back in there (depth) and how high (y) its light is. The door itself (if any) is found by position
+  const dw = (alongX, at, c, hw, side, depth, y, door = true) => ({ alongX, at, c, hw, door,
+    src: alongX ? [c, y, at + side * depth] : [at + side * depth, y, c] });
+  const brkD = s => dw(true, HZ, BOH_DOORS.breakroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
+  const rrD = s => dw(true, HZ, BOH_DOORS.restroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
+  const clD = s => dw(false, X, BOH_DOORS.closet, CLOSET.doorW / 2, s, s > 0 ? 0.6 : 0.9, s > 0 ? 2.28 : 2.55);
+  const opD = s => dw(true, Z, BOH_DOORS.store, BOH_OPENING_W / 2, s, s < 0 ? 3 : 0.9, s < 0 ? 3.4 : 2.55, false);
+  return [
+    { from: "breakroom", into: "hall", to: hall, ...brkD(1) },
+    { from: "restroom", into: "hall", to: hall, ...rrD(1) },
+    { from: "closet", into: "hall", to: hall, ...clD(1), warm: true, reach: 2.6 },
+    { from: "lounge", into: "hall", to: hall, ...opD(-1), reach: 4.5 },                  // the sales floor through its wide opening
+    { from: "hall", into: "breakroom", to: brk, ...brkD(-1) },
+    { from: "hall", into: "restroom", to: rr, ...rrD(-1) },
+    { from: "hall", into: "closet", to: cl, ...clD(-1), reach: 2 },
+    { from: "hall", into: "lounge", to: floor, ...opD(1), reach: 4.5 },
+  ];
+})();
+function spillTick() {                            // the live spills (a lit room, its door open, a darker one through it) into the shader
+  const U = TVU, lvl = z => (z === "closet" ? 0.8 : 1) * zoneLvl[z];
+  let n = 0;
+  for (const s of SPILLS) {
+    if (s.door && s.d === undefined) s.d = doors.find(d => d.alongX === s.alongX && Math.abs(d.at - s.at) < 0.01 && Math.abs(d.c - s.c) < 0.01) || null;
+    const open = !s.door ? 1 : s.d ? Math.min(1, Math.abs(s.d.a / s.d.openA)) : 0;   // how far its door's swung (a doorway: always open)
+    const src = lvl(s.from), k = src > lvl(s.into) + 0.01 ? 0.75 * open * src : 0;
+    if (k < 0.005) continue;
+    U.uSpillP.value[n].set(...s.src, s.reach || 3.5); U.uSpillB.value[n].set(...s.to);
+    U.uSpillD.value[n].set(s.alongX ? 0 : 1, s.at, s.c, s.hw);
+    U.uSpillC.value[n].set(k * (s.warm ? 1.12 : 1), k * (s.warm ? 0.95 : 1), k * (s.warm ? 0.74 : 1), 0);
+    n++;
+  }
+  U.uSpillN.value = n;
+}
 function milestoneTick() {
   let n = 0;
   if (held?.offShelf && held.pos && has("you", "int", 5)) beaconAt(n++, held.pos, held.ry, 0x66ffcc, TAPE.w * 1.4, TAPE.h * 1.1, TAPE.d * 1.1);
@@ -8728,6 +8794,7 @@ renderer.setAnimationLoop(() => {
   empTick(dt);
   trashTick(dt);
   milestoneTick();
+  spillTick();
   pickHover();
   if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
     handGroup.visible = !inspecting && !coHand.visible;   // 3D box only for the carried-at-your-side pose; hands full with a sale: your own tape waits
