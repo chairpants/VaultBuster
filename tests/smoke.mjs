@@ -3,29 +3,11 @@
 //   npm test                   (after: npm install; npx playwright install chromium)
 // or point it at any Chromium: PLAYWRIGHT_CHROMIUM_PATH=/path/to/chrome npm test
 // Software rendering is slow, so this takes a few minutes; it exits non-zero on any failure.
-import { chromium } from "playwright-core";
-import { existsSync, readdirSync } from "fs";
-import { homedir } from "os";
-import { join, dirname } from "path";
-import { fileURLToPath, pathToFileURL } from "url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const URL = pathToFileURL(join(ROOT, "index.html")).href;
-function findChromium() {                        // an explicit path, else a Playwright-installed Chromium, else Playwright's own lookup
-  if (process.env.PLAYWRIGHT_CHROMIUM_PATH) return process.env.PLAYWRIGHT_CHROMIUM_PATH;
-  for (const base of [join(homedir(), "Library/Caches/ms-playwright"), join(homedir(), ".cache/ms-playwright")]) {
-    if (!existsSync(base)) continue;
-    for (const d of readdirSync(base).filter(d => /^chromium-\d+$/.test(d)).sort().reverse()) for (const rel of [
-      "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing", "chrome-mac/Chromium.app/Contents/MacOS/Chromium", "chrome-linux/chrome", "chrome-linux64/chrome"]) {
-      const p = join(base, d, rel); if (existsSync(p)) return p;
-    }
-  }
-  return undefined;
-}
+import { URL, launch } from "./browser.mjs";
 
 let failed = 0;
 const check = (name, ok, detail = "") => { console.log(`${ok ? "  ✓" : "  ✗"} ${name}${detail ? `  (${detail})` : ""}`); if (!ok) failed++; };
-const browser = await chromium.launch({ executablePath: findChromium(), args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--autoplay-policy=no-user-gesture-required"] });
+const browser = await launch();
 const page = await (await browser.newContext({ viewport: { width: 1000, height: 600 } })).newPage();
 const errors = []; page.on("pageerror", e => errors.push(String(e)));
 const ev = (f, a) => page.evaluate(f, a);
