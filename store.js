@@ -29,7 +29,15 @@ const BOH = { x0: 2, z1: 33, hallZ: 29.8, splitX: 8.3, h: 2.7 };   // west wall,
 const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the store's blue wall stripe
 const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
-const CLOSET = { x1: 12.6, doorW: 0.8 };                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
+const CLOSET = { x1: 12.6, doorW: 0.8 };
+// the closet's tools, taken out with E and put back the same way, one at a time (see toolTake). hand: how it's
+// carried, camera-local [position, rotation]; the closet build fills in g (the tool), home (its spot), col (its collider)
+const TOOLS = {
+  mop: { label: "mop", hand: [[0.3, -0.85, -1.35], [0.8, 0, 0]] },
+  sweeper: { label: "carpet sweeper", hand: [[0.1, -0.9, -1.4], [0.75, 0, 0]] },
+  ladder: { label: "step ladder", hand: [[0.6, -0.72, -0.2], [-Math.PI / 2, 0, 0]] },
+};
+const TROFFERS = [];                              // the sales floor's ceiling lights: { x, z, y } (a burnt-out one gets a dark cover, see lightDie)                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
 const trashBins = {};                            // the bins, registered as they're built (see "trash" further down)
 const chute = { door: null, t: 0, at: [0, 0, 0], stand: null };   // the trash chute, in the janitor's closet (likewise)
 const bath = { water: null, waterY: 0, stream: null, toiletAt: null, sinkAt: null, flushT: 0, tap: false, seat: null };   // the restroom's working parts (built with it; see bathTick)   // opening centers along their walls
@@ -897,8 +905,8 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const cyl = (r, h, m, x, y, z, par) => put(new THREE.CylinderGeometry(r, r, h, 12), m, x, y, z, par);
     const lam = c => new THREE.MeshLambertMaterial({ color: c });
     const yellow = lam(0xf2c200), grey = lam(0x6b6f74), dark = lam(0x222222), wood = lam(0xb08a5a), alu = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 80 });
-    const stick = (a, b, r, m) => {                  // a pole from point a to point b
-      const d = new THREE.Vector3().subVectors(b, a), o = cyl(r, d.length(), m, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+    const stick = (a, b, r, m, par) => {             // a pole from point a to point b
+      const d = new THREE.Vector3().subVectors(b, a), o = cyl(r, d.length(), m, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, par);
       o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); return o;
     };
     // one bare bulb on a cord from the middle of the ceiling (its own light zone: E on it, or its chain, flips it)
@@ -947,18 +955,30 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     bx(0.34, 0.2, 0.14, grey, mbx, 0.42, mbz - 0.14);                                     // wringer
     bx(0.4, 0.03, 0.03, grey, mbx, 0.55, mbz - 0.19);                                     // its lever
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) put(new THREE.SphereGeometry(0.03, 8, 6), dark, mbx + sx * 0.12, 0.03, mbz + sz * 0.18);
-    put(new THREE.CylinderGeometry(0.06, 0.09, 0.14, 10), lam(0xe8e2cf), mbx, 0.32, mbz + 0.08);   // the mop head, poking up out of the water
-    stick(new THREE.Vector3(mbx, 0.35, mbz + 0.08), new THREE.Vector3(x1 - 0.03, 1.55, mbz + 0.02), 0.013, wood);
     colliders.push({ x0: mbx - 0.18, x1, z0: mbz - 0.24, z1: mbz + 0.24, y1: 0.6 });
+    const tool = (id, g, home, col = null) => {      // one of the TOOLS: aimable, with an (invisible) spot to put it back on
+      const h = put(new THREE.BoxGeometry(...home[0]), new THREE.MeshBasicMaterial({ visible: false }), ...home[1]); h.userData.toolHome = id;
+      g.traverse(o => { if (o.isMesh) { o.userData.tool = id; aimables.push(o); } });
+      Object.assign(TOOLS[id], { g, home: h, col }); if (col) colliders.push(col);
+    };
+    {                                                // the mop, stood in the bucket (its head poking up out of the water)
+      const g = new THREE.Group(); g.position.set(mbx, 0.32, mbz + 0.08); scene.add(g);
+      put(new THREE.CylinderGeometry(0.06, 0.09, 0.14, 10), lam(0xe8e2cf), 0, 0, 0, g);
+      stick(new THREE.Vector3(0, 0.03, 0), new THREE.Vector3(x1 - 0.03 - mbx, 1.23, -0.06), 0.013, wood, g);
+      tool("mop", g, [[0.25, 1.3, 0.25], [mbx + 0.1, 0.95, mbz + 0.05]]);
+    }
     // carpet sweeper: low housing with a rubber bumper, the handle back against the wall
     const swx = x1 - 0.3, swz = z0 + 0.75;
-    bx(0.22, 0.08, 0.34, lam(0x8c1c1c), swx, 0.06, swz);
-    bx(0.24, 0.025, 0.36, dark, swx, 0.035, swz);                                          // bumper
-    for (const sz of [-1, 1]) cyl(0.022, 0.02, dark, swx, 0.022, swz + sz * 0.15).rotation.x = Math.PI / 2;
-    bx(0.03, 0.04, 0.03, alu, swx, 0.115, swz);                                            // the yoke
-    stick(new THREE.Vector3(swx, 0.12, swz), new THREE.Vector3(x1 - 0.03, 1.25, swz), 0.011, alu);
-    put(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), dark, x1 - 0.04, 1.25, swz).rotation.x = Math.PI / 2;   // grip
-    colliders.push({ x0: swx - 0.13, x1, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
+    {
+      const g = new THREE.Group(); g.position.set(swx, 0, swz); scene.add(g);
+      bx(0.22, 0.08, 0.34, lam(0x8c1c1c), 0, 0.06, 0, g);
+      bx(0.24, 0.025, 0.36, dark, 0, 0.035, 0, g);                                          // bumper
+      for (const sz of [-1, 1]) cyl(0.022, 0.02, dark, 0, 0.022, sz * 0.15, g).rotation.x = Math.PI / 2;
+      bx(0.03, 0.04, 0.03, alu, 0, 0.115, 0, g);                                            // the yoke
+      stick(new THREE.Vector3(0, 0.12, 0), new THREE.Vector3(x1 - 0.03 - swx, 1.25, 0), 0.011, alu, g);
+      put(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), dark, x1 - 0.04 - swx, 1.25, 0, g).rotation.x = Math.PI / 2;   // grip
+      tool("sweeper", g, [[0.36, 1.3, 0.42], [swx + 0.1, 0.65, swz]], { x0: swx - 0.13, x1, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
+    }
     // step ladder, folded and leaned against the right-hand wall, just inside the door
     {
       const g = new THREE.Group(); g.position.set(x0 + 0.35, 0, z1 - 0.07); g.rotation.x = 0.09; scene.add(g);   // leaning into the wall (+z)
@@ -966,7 +986,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       for (let i = 0; i < 3; i++) bx(0.36, 0.025, 0.07, alu, 0, 0.27 + i * 0.25, -0.03, g);                       // steps
       bx(0.44, 0.05, 0.1, lam(0x2a5fb0), 0, 1.07, -0.022, g);                                                      // the top cap
       for (const sx of [-1, 1]) bx(0.05, 0.03, 0.08, dark, sx * 0.2, 0.015, -0.022, g);                            // feet
-      colliders.push({ x0: g.position.x - 0.25, x1: g.position.x + 0.25, z0: z1 - 0.2, z1, y1: 1.1 });
+      tool("ladder", g, [[0.5, 1.15, 0.18], [g.position.x, 0.57, z1 - 0.09]], { x0: g.position.x - 0.25, x1: g.position.x + 0.25, z0: z1 - 0.2, z1, y1: 1.1 });
     }
     // shelf on the back wall, up out of the way: carpet shampoo, floor cleaner, a gallon of bleach, glass cleaner
     const sy = 1.5, sz0 = z0 + 0.35, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
@@ -1576,20 +1596,21 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       ctx.fillStyle = g; ctx.fillRect(0, cy - H * 0.14, W, H * 0.28);
     }
   }, 128, 64);
-  const troffer = (x, z, y, snapZ = true) => {
+  const troffer = (x, z, y, snapZ = true) => {      // -> where it ended up
     x = Math.round((x - CEIL_TILE.x / 2) / CEIL_TILE.x) * CEIL_TILE.x + CEIL_TILE.x / 2;   // centered in a tile slot
     if (snapZ) z = Math.round((z - CEIL_TILE.z / 2) / CEIL_TILE.z) * CEIL_TILE.z + CEIL_TILE.z / 2;   // (the hall's grid is its own: its lights go where they're told)
     const p = new THREE.PlaneGeometry(CEIL_TILE.x - 0.02, CEIL_TILE.z - 0.02); p.rotateX(Math.PI / 2); p.translate(x, y - 0.02, z);
     const key = `${lightZoneAt(x, z)}:${Math.floor(Math.random() * PANEL_GROUPS)}`;
     if (!panelBuckets.has(key)) panelBuckets.set(key, []);
     panelBuckets.get(key).push(p);
+    return { x, z, y: y - 0.02 };
   };
   for (const [x, z] of [[-5.4, 30.15], [-1.8, 30.15]]) troffer(x, z, BOH.h);   // movie theater lobby troffers
   // every other tile slot across, every fourth along — a tile or more of
   // plain ceiling on every side, so no two fixtures ever touch
   for (let x = -9.9; x <= STORE.x - 1; x += 2 * CEIL_TILE.x) for (let z = 3.15; z <= STORE.z - 1; z += 4 * CEIL_TILE.z) {
     if (x - CEIL_TILE.x / 2 < XL + 0.3) continue;   // don't float panels past the pulled-in movie-side wall
-    troffer(x, z, STORE.h);
+    TROFFERS.push(troffer(x, z, STORE.h));
   }
   for (const x of [4.5, 8.1]) troffer(x, hallMid, BOH.h, false);              // down the middle of the hall (its ceiling grid is centered there too)
   for (const [x, z] of [[4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // breakroom, restroom
@@ -4900,7 +4921,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -5216,7 +5237,7 @@ function custSpawn(member = custPickMember(true)) {
   if (shift.h >= 23 && Math.random() < 0.5) { who.persona.stops = 7 + Math.floor(Math.random() * 4); who.persona.dwell *= 1.5; }   // the 11:30 walk-in, in no hurry at all
   if (loyal >= 40) logAct(`${memberName(member)}, one of the regulars, came in`);
   cust.litterT = Math.random() < 0.15 ? 15 + Math.random() * 60 : Infinity;   // now and then somebody drops something
-  const grot = messes.length + binList().filter(binFull).length + bagsDown.length;   // litter, overflowing bins, bags left lying about
+  const grot = messes.length + binList().filter(binFull).length + bagsDown.length + deadLights.length;   // litter, overflowing bins, bags left lying about, dead lights
   if (grot >= 3) { posTerm.loyal(member, -2); if (clockT - (custSpawn.messNote || -999) > 120) { custSpawn.messNote = clockT; logAct(`Customers are noticing the mess (${messes.length} spots to clean${binList().some(binFull) ? ", the trash overflowing" : ""})`, "bad"); } }
   cust.thief = Math.random() < 0.06 * (upg.cameras ? 0.6 : 1) * (upg.sign ? 0.7 : 1);   // now and then somebody means to walk out with it (less, with cameras and signs up)
   cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
@@ -5608,7 +5629,7 @@ function custTick(dt) {
   wisTick(dt);
   for (const k of [...custs]) {
     custHearAlarm(k, dt); custWatched(k, dt);
-    if ((k.litterT -= dt) <= 0 && k.path.length && k.state !== "leave") { k.litterT = Infinity; const p = k.c.group.position; messAdd(Math.random() < 0.6 ? "wrapper" : "popcorn", p.x, p.z); }
+    if ((k.litterT -= dt) <= 0 && k.path.length && k.state !== "leave") { k.litterT = Infinity; const p = k.c.group.position; const r = Math.random(); messAdd(r < 0.5 ? "wrapper" : r < 0.8 ? "popcorn" : "spill", p.x, p.z); }
     custStep(k, dt);
   }
 }
@@ -7011,7 +7032,7 @@ window.VaultAim = {
   center() { aimNDC.x = aimNDC.y = 0; pickHover(); },
 };
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
@@ -7099,6 +7120,9 @@ function pickHover() {
     else if (aim?.object.userData.stock && aim.distance < 2.2) aimCupboard = aim.object.userData.stock;
     else if (aim?.object.userData.box && aim.distance < 2.4) aimBox = aim.object.userData.box;
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
+    else if (aim?.object.userData.tool && aim.distance < 2.4) aimTool = aim.object.userData.tool;
+    else if (aim?.object.userData.toolHome && aim.distance < 2.4 && toolHeld === aim.object.userData.toolHome) aimTool = toolHeld;
+    else if (aim?.object.userData.deadLight && aim.distance < 3.8) aimDead = aim.object.userData.deadLight;
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
     else if (aim?.object.userData.jobBoard && aim.distance < 2.4) aimBoard = true;
@@ -7167,7 +7191,10 @@ function pickHover() {
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
       const ask = !held && custAsks.find(k => k.state === "asking" && k.want.kind === "hold" && k.want.hold.copy);
       tip.innerHTML = h ? `E — put ${tapeName(held)} on hold for ${memberName(h.member)}` : ask ? `E — take down ${tapeName(ask.want.title)} for ${memberName(ask.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${tapeName(h.title)} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
-    else if (aimMess) tip.innerHTML = `E — clean up the ${MESS[aimMess.kind].label}`;
+    else if (aimMess) { const need = MESS_TOOL[aimMess.kind];
+      tip.innerHTML = need && toolHeld !== need ? `The ${MESS[aimMess.kind].label}<div class="cat">needs the ${TOOLS[need].label} · janitor's closet</div>` : `E — clean up the ${MESS[aimMess.kind].label}${need ? ` with the ${TOOLS[need].label}` : ""}`; }
+    else if (aimTool) tip.innerHTML = toolHeld === aimTool ? `E — put the ${TOOLS[aimTool].label} back` : toolHeld ? `Put the ${TOOLS[toolHeld].label} back first` : `E — take the ${TOOLS[aimTool].label}`;
+    else if (aimDead) tip.innerHTML = toolHeld === "ladder" ? "E — set up the ladder and swap the tube" : `A burnt-out light<div class="cat">the step ladder's in the janitor's closet</div>`;
     else if (aimPrinter) tip.innerHTML = co?.by === "player" && coStep()?.id === "tear" ? (printer.job?.done ? "E — tear off the receipt" : "Printing…") : "Receipt printer";
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
     else if (aimDesens) { const p = padTarget(); tip.innerHTML = p?.tape ? `E — desensitize ${p.tape.title}${p.of}` : `Desensitizer<div class="cat">${p ? "everything in hand is desensitized" : "bring a tape over to desensitize it"}</div>`; }
@@ -7734,13 +7761,52 @@ function strayTake(s) {                          // off the shelf and into a han
 // theater. E cleans one up; Dana does too when things are quiet. A messy store
 // puts customers off
 const messes = [];                               // { kind, mesh, x, y, z }
+const MESS_TOOL = { spill: "mop", popcorn: "sweeper" };   // messes that want a tool from the janitor's closet (staff just see to it)
 const MESS = {
+  spill: { label: "spilled soda", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0x4a2410, transparent: true, opacity: 0.85, depthWrite: false });
+    for (let i = 0; i < 4; i++) { const d = new THREE.Mesh(new THREE.CircleGeometry(0.07 + Math.random() * 0.1, 18), m); d.rotation.x = -Math.PI / 2; d.position.set((Math.random() - 0.5) * 0.25, 0.002 + i * 0.0005, (Math.random() - 0.5) * 0.25); g.add(d); }
+    return g; } },
   wrapper: { label: "candy wrapper", make: () => new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.006, 0.05), new THREE.MeshLambertMaterial({ color: [0xd23b3b, 0x3b7bd2, 0xe0b020][Math.floor(Math.random() * 3)] })) },
   popcorn: { label: "spilled popcorn", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0xf6e7a8 });
     for (let i = 0; i < 14; i++) { const k = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), m); k.position.set((Math.random() - 0.5) * 0.35, 0.012, (Math.random() - 0.5) * 0.35); g.add(k); } return g; } },
   towel: { label: "paper towel", make: () => { const t = new THREE.Mesh(new THREE.IcosahedronGeometry(0.035, 0), new THREE.MeshLambertMaterial({ color: 0xf6f3ea })); t.position.y = 0.03; t.rotation.set(1, 2, 0); return t; } },
   cup: { label: "empty cup", make: () => { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.14, 12), new THREE.MeshLambertMaterial({ color: 0xd9d9d9 })); c.rotation.z = Math.PI / 2; c.position.y = 0.045; return c; } },
 };
+// ---- the janitor's closet at work: a tool in hand (one at a time), and the ceiling lights that burn out ----
+let toolHeld = null;
+const toolHand = new THREE.Group();
+const aimOn = (g, on) => g.traverse(o => { if (!o.isMesh) return; const i = aimables.indexOf(o); if (on && i < 0) aimables.push(o); if (!on && i >= 0) aimables.splice(i, 1); });
+function toolTake(id) {
+  const t = TOOLS[id]; toolHeld = id;
+  t.g.visible = false; aimOn(t.g, false); aimOn(t.home, true);
+  if (t.col) colliders.splice(colliders.indexOf(t.col), 1);
+  if (!toolHand.parent) camera.add(toolHand);
+  toolHand.clear(); const c = t.g.clone(); c.visible = true; c.position.set(...t.hand[0]); c.rotation.set(...t.hand[1]); toolHand.add(c);
+}
+function toolReturn() {
+  const t = TOOLS[toolHeld]; toolHeld = null;
+  t.g.visible = true; aimOn(t.g, true); aimOn(t.home, false);
+  if (t.col) colliders.push(t.col);
+  toolHand.clear();
+}
+const deadLights = [];                            // { i (into TROFFERS), mesh, t (still flickering) }
+const deadMat = new THREE.MeshBasicMaterial({ color: 0x1d2026 });
+function lightDie(i, flicker = 4) {               // a tube goes: a few seconds' flicker, then a dark panel
+  const tr = TROFFERS[i]; if (!tr || deadLights.some(d => d.i === i)) return;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(CEIL_TILE.x - 0.02, CEIL_TILE.z - 0.02), deadMat);
+  m.rotation.x = Math.PI / 2; m.position.set(tr.x, tr.y - 0.004, tr.z); scene.add(m);
+  const d = { i, mesh: m, t: flicker }; m.userData.deadLight = d; aimables.push(m); deadLights.push(d);
+  if (flicker) logAct("A ceiling light just went out: the step ladder's in the janitor's closet", "bad");
+}
+function lightFix(d) {
+  d.mesh.removeFromParent(); aimables.splice(aimables.indexOf(d.mesh), 1); deadLights.splice(deadLights.indexOf(d), 1);
+  shiftScore(10, "you"); gainXp("you", "con", 4); gainXp("you", "str", 2);
+  logAct("Up the ladder: swapped the tube in a burnt-out light", "good", null, 10);
+}
+function deadLightTick(dt) {
+  for (const d of deadLights) if (d.t > 0) { d.t -= dt; d.mesh.visible = d.t <= 0 || Math.random() < 0.5; }
+  if (shiftOpen() && deadLights.length < 3 && TROFFERS.length && Math.random() < dt / 2400) lightDie(Math.floor(Math.random() * TROFFERS.length));   // one every couple of shifts
+}
 function messAdd(kind, x, z, y = floorHeightAt(x, z)) {
   if (messes.length >= 20) return;
   const mesh = MESS[kind].make(); mesh.position.set(x, y + 0.005 + (mesh.position.y || 0), z); mesh.rotation.y = Math.random() * 6.28;
@@ -8206,10 +8272,14 @@ function onE() {
   if (aimCupboard) { stockTake(aimCupboard); return; }
   if (aimStockSlot) { stockPlace(aimStockSlot); return; }
   if (aimMess) {
-    const m = aimMess; messClean(m);
-    if (has("you", "con", 10)) for (const o of messes.filter(o => Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
+    const m = aimMess, need = MESS_TOOL[m.kind], can = o => !MESS_TOOL[o.kind] || MESS_TOOL[o.kind] === toolHeld;
+    if (!can(m)) { toast(`That needs the ${TOOLS[need].label}: it's in the janitor's closet`); return; }
+    messClean(m);
+    if (has("you", "con", 10)) for (const o of messes.filter(o => can(o) && Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
     return;
   }
+  if (aimTool) { if (toolHeld === aimTool) toolReturn(); else if (toolHeld) toast(`Put the ${TOOLS[toolHeld].label} back first`); else toolTake(aimTool); return; }
+  if (aimDead) { if (toolHeld === "ladder") lightFix(aimDead); else toast("You'll need the step ladder: it's in the janitor's closet"); return; }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
   if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
@@ -8480,12 +8550,12 @@ function openPOS() {
 function clockOut() {
   keys.clear(); shift.report = true; $("hoverTip").style.display = "none";
   document.exitPointerLock();
-  const chk = { bin: returnBin.length, strays: strays.length, messes: messes.length, empty: emptySpots().length, trash: binList().filter(b => b.n >= b.cap * 0.75).length + bagsDown.length + bagCarry.length };   // the closing walk-through: what's been left undone
-  const chkPts = -10 * (chk.bin + chk.strays + chk.messes + chk.trash) - 2 * chk.empty;
+  const chk = { bin: returnBin.length, strays: strays.length, messes: messes.length, lights: deadLights.length, empty: emptySpots().length, trash: binList().filter(b => b.n >= b.cap * 0.75).length + bagsDown.length + bagCarry.length };   // the closing walk-through: what's been left undone
+  const chkPts = -10 * (chk.bin + chk.strays + chk.messes + chk.trash + chk.lights) - 2 * chk.empty;
   const hrs = staff.reduce((a, e) => a + bits(e.sched[weekday()]), 0);
   const wages = SIM ? +staff.reduce((a, e) => a + bits(e.sched[weekday()]) * empRate(e), 0).toFixed(2) : 0; if (wages) posTerm.sale(-wages);   // the staff's pay for the day: their scheduled hours
   if (posTerm.budget() < 0) logAct(`The store's in the red: -$${(-posTerm.budget()).toFixed(2)}. Nothing on the register can be bought until it's back up`, "bad");
-  if (chkPts) { shiftScore(chkPts); logAct(`Closing check: ${[chk.bin && `${chk.bin} in the returns bin`, chk.strays && `${chk.strays} misshelved`, chk.messes && `${chk.messes} messes`, chk.trash && `${chk.trash} lots of trash not taken out`, chk.empty && `${chk.empty} empty rack spots`].filter(Boolean).join(", ")}`, "bad", null, chkPts); }
+  if (chkPts) { shiftScore(chkPts); logAct(`Closing check: ${[chk.bin && `${chk.bin} in the returns bin`, chk.strays && `${chk.strays} misshelved`, chk.messes && `${chk.messes} messes`, chk.lights && `${chk.lights} burnt-out light${chk.lights > 1 ? "s" : ""}`, chk.trash && `${chk.trash} lots of trash not taken out`, chk.empty && `${chk.empty} empty rack spots`].filter(Boolean).join(", ")}`, "bad", null, chkPts); }
   const s = shift.stats, d = shiftDate(), W = 34, money = n => "$" + n.toFixed(2);
   const row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v;
   const tried = s.served + s.walkouts, score = (tried ? 100 * s.served / tried : 100) - 15 * s.stolen;
@@ -8506,7 +8576,7 @@ function clockOut() {
     row("RENTALS", money(s.rentalTake)), row("SNACKS", money(s.snackTake)), row("SHOW TICKETS", money(s.tickets * SHOW.ticket - s.refunds)), row("LATE FEES", money(s.feesCollected)),
     row("FEES WAIVED", money(s.feesWaived)), row("TOTAL TAKE", money(s.rentalTake + s.snackTake + s.feesCollected + s.tickets * SHOW.ticket - s.refunds)),
     ...(wages ? [row(`STAFF WAGES (${hrs} HRS)`, "-" + money(wages))] : []), row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
-    row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  TRASH NOT TAKEN OUT", chk.trash), row("  EMPTY RACK SPOTS", chk.empty),
+    row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  BURNT-OUT LIGHTS", chk.lights), row("  TRASH NOT TAKEN OUT", chk.trash), row("  EMPTY RACK SPOTS", chk.empty),
     row("  POINTS", chkPts.toLocaleString()), line, "",
     row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`), ...repProgress(),
     ...(SIM ? [row("NEW MEMBERS SIGNED UP", s.signups), row("WORD OF MOUTH: TOMORROW", `+${growth.pending}`)] : []),
@@ -8578,7 +8648,7 @@ function saveState() {
     trash: { bins: Object.fromEntries(binList().map(b => [b.id, b.n])),   // bags in anyone's hands are saved where they're standing
       bags: [...bagsDown.map(g => [g.bin.id, g.n, g.x, g.z]), ...bagCarry.map(g => [g.bin.id, g.n, player.x, player.z]),
         ...staff.filter(e => e.trash?.bag && e.c).map(e => [e.trash.bag.bin.id, e.trash.bag.n, e.c.group.position.x, e.c.group.position.z])].map(([id, n, x, z]) => [id, n, +x.toFixed(2), +z.toFixed(2)]) },
-    strays: strays.map(s => [copyKey(s.copy), copyKey(s.at)]), messes: messes.map(m => [m.kind, +m.x.toFixed(2), +m.z.toFixed(2), +m.y.toFixed(2)]), returns: returnBin.map(copyKey), rewinders: rewinders.map(rw => rw.tape && copyKey(rw.tape)),
+    strays: strays.map(s => [copyKey(s.copy), copyKey(s.at)]), messes: messes.map(m => [m.kind, +m.x.toFixed(2), +m.z.toFixed(2), +m.y.toFixed(2)]), deadLights: deadLights.map(d => d.i), returns: returnBin.map(copyKey), rewinders: rewinders.map(rw => rw.tape && copyKey(rw.tape)),
     inv: inv.map(item), invSel, invEmpty,
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
@@ -8639,6 +8709,7 @@ function loadState(S) {
     holdsRender();
     for (const [k, at] of S.strays || []) { const c = copyByKey(k), a = copyByKey(at); if (c && a?.pos) { setOnShelf(c, false); misshelve(c, null, a); } }
     for (const [kind, x, z, y] of S.messes || []) if (MESS[kind]) messAdd(kind, x, z, y);
+    for (const i of S.deadLights || []) lightDie(i, 0);
     for (const [id, n, x, z] of S.trash?.bags || []) if (trashBins[id]) bagPlace(trashBins[id], n, x, z);
     if (inv.length) invSelect(S.invSel >= 0 ? S.invSel : S.invEmpty >= 0 ? S.invEmpty : inv.length - 1);
     const pt = S.playing && copyByKey(S.playing.key);
@@ -8875,6 +8946,7 @@ renderer.setAnimationLoop(() => {
   custTick(dt);
   empTick(dt);
   trashTick(dt);
+  deadLightTick(dt);
   milestoneTick();
   spillTick();
   pickHover();
@@ -8911,6 +8983,6 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
