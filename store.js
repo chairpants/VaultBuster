@@ -4435,7 +4435,9 @@ function upgVisuals() {                          // what you can see of what you
   if (upg.cameras && !upgVisuals.cams) {
     upgVisuals.cams = true;
     const dome = new THREE.MeshPhongMaterial({ color: 0x1a1a1e, specular: 0x666666, shininess: 60, transparent: true, opacity: 0.85 }), base = new THREE.MeshLambertMaterial({ color: 0xe8e8e8 });
-    for (const [x, z] of [[0, 3.2], [-5, 12], [5, 18], [-2, 24]]) {
+    // where they'd actually earn their keep (each in a ceiling tile clear of the light panels): the door and the gates,
+    // the register, down the center aisles, the back-hall opening and the right-hand aisles, the far back-left corner
+    for (const [x, z] of [[0.9, 4.95], [-4.5, 2.25], [0, 12.15], [9.9, 26.55], [-6.3, 26.55]]) {
       const b = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 16), base); b.position.set(x, STORE.h - 0.02, z); scene.add(b);
       const d = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), dome); d.position.set(x, STORE.h - 0.035, z); scene.add(d);
       const led = glow(new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2020 }))); led.position.set(x + 0.05, STORE.h - 0.06, z); scene.add(led);
