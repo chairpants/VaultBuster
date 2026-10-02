@@ -106,7 +106,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 
 ### Testing
 
-`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save slots, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store. It needs Node and a Chromium:
+`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save slots, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store: hiring and schedules, skill milestones, the rewinder upgrades, staff clocking out, members' visiting rhythm, day goals, the janitor's closet and the register's sale screen. It needs Node and a Chromium:
 
 ```sh
 npm install                      # playwright-core (dev only; the game itself has no build)

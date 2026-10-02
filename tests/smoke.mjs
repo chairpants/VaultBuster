@@ -95,6 +95,43 @@ check("the schedule: 25 hours max, and off the clock they head out the door", aw
   return !err0 && /25 HOURS/.test(full || "") && e.leaving && e.state === "toExit"; }));
 check("skills level up with XP (you and staff)", await ev(() => { const e = __t.staff[0], l0 = __t.lv(e, "dex"); __t.gainXp(e, "dex", (__t.xpToNext(l0) + 1) / __t.SKILLS.dex.rate); __t.gainXp("you", "str", (__t.xpToNext(1) + 1) / __t.SKILLS.str.rate);   /* (each stat earns at its own rate) */ return __t.lv(e, "dex") === l0 + 1 && __t.lv("you", "str") >= 2; }));
 
+console.log("\nsimulation: unlocks, upgrades, staff, the closet, the register");
+check("milestones: DEX 5 unlocks Quick Thread", await ev(() => {
+  const sk = __t.you.skills.dex; sk.lvl = 4; sk.xp = 0; const before = __t.has("you", "dex", 5);
+  __t.gainXp("you", "dex", (__t.xpToNext(4) + 1) / __t.SKILLS.dex.rate);
+  return !before && __t.has("you", "dex", 5) && /Unlocked Quick Thread/.test(document.getElementById("actLog").textContent); }));
+const rw = await ev(() => { const st = () => __t.rewinders.map(r => r.on ? (r.car ? "car" : "box") : "-").join("+");
+  const out = [st(), __t.upgBuy("rewinders")]; __t.upgBuy("rewinder2"); out.push(st()); __t.upgBuy("rewinders"); out.push(st()); return out; });
+check("rewinders: one box, a second, then the cars (in that order)", rw.join() === "box+-,SECOND REWINDER FIRST.,box+box,car+car", rw.join(" | "));
+check("staff: once the shift's over, no new jobs, and returns go back in the tote", await ev(() => {
+  const e = __t.staff[1], tapes = __t.catalog.filter(t => t.pos && !t.offShelf).slice(0, 3);
+  e.sched = Array(7).fill((1 << 15) - 1); if (!e.c) __t.empTick(0.05);
+  for (const t of tapes) { __t.setOnShelf(t, false); __t.returnBin.push(t); }
+  e.jobs.forEach(j => j.pri = j.id === "returns" ? 1 : 0); e.sched = Array(7).fill(0);
+  Object.assign(e, { state: "post", t: 0, paused: false, task: "register" }); __t.empTick(0.05);   // shift over, work waiting: they leave anyway
+  const left = e.state === "toExit";
+  const t = __t.returnBin.pop();                    // (and mid-returns, carrying one:)
+  e.task = "returns"; e.carry = [t]; __t.withEmp(e, () => __t.empNext());
+  return left && e.task === "register" && !e.carry.length && __t.returnBin.includes(t); }));
+check("members come on their own rhythm (nobody who was just in)", await ev(() => {
+  const ms = __t.posTerm.members.filter(m => m.active), now = __t.shift.day + __t.shift.h / 24, was = ms.map(m => m.lastVisit);
+  ms.forEach(m => m.lastVisit = now); const none = [0, 1, 2, 3, 4].every(() => !__t.custPickMember());
+  ms.forEach((m, i) => m.lastVisit = was[i]); return none && !!__t.custPickMember(true); }));
+check("day goals: two of them", await ev(() => __t.shift.goals?.length === 2));
+check("the closet: the ladder fixes a dead light, and goes back", await ev(() => {
+  __t.lightDie(0, 0); const dead = __t.deadLights.length === 1;
+  __t.toolTake("ladder"); const held = __t.toolHeld() === "ladder" && !__t.TOOLS.ladder.g.visible;
+  __t.lightFix(__t.deadLights[0]); __t.toolReturn();
+  return dead && held && !__t.deadLights.length && !__t.toolHeld() && __t.TOOLS.ladder.g.visible; }));
+check("the register shows the sale once the card's tapped", await ev(() => {
+  __t.setFrontLock(true); for (const e of __t.staff) e.state = "test"; for (const k of [...__t.custs]) __t.custGone(k);
+  __t.custSpawn(); const k = __t.custs.at(-1), tape = __t.catalog.find(t => !t.offShelf && !t.lost && t.pos && !t.libLocked);
+  __t.setOnShelf(tape, false); k.tapes = [tape]; k.holding = 1; k.tickets = 0;
+  k.c.group.position.set(__t.CUST_COUNTER.x, 0, __t.CUST_COUNTER.z); k.path = []; k.state = "wait"; k.t = 99; __t.custLine.push(k);
+  __t.custInteract(k); const before = __t.posTerm.ringing();
+  __t.coAct("register"); const s = __t.posTerm.ringing();
+  return before && !before.carded && s?.carded && s.member === k.member && s.items.length === 1; }));
+
 console.log(`\nerrors on the page: ${errors.length}`); errors.slice(0, 3).forEach(e => console.log("   " + e));
 check("no page errors overall", errors.length === 0);
 await browser.close();
