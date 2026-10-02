@@ -6,3 +6,6 @@ node_modules/
 # at runtime. Add this back / push separately if you want the raw source
 # images archived too.
 art/
+
+# written by fetch-covers.mjs as a by-product; nothing reads it
+tmdb-covers.json
