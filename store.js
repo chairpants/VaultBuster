@@ -2316,7 +2316,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
     ph.traverse(m => { if (m.isMesh) { m.userData.phone = true; aimables.push(m); } });
     // stack of brown paper bags
     const kraft = new THREE.MeshLambertMaterial({ color: 0xa8804f });
-    for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.3, 0.008, 0.2), kraft, -5.6 + (i % 2) * 0.01, BHt + 0.004 + i * 0.008, bz);
+    for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.3, 0.008, 0.2), kraft, -5.75 + (i % 2) * 0.01, BHt + 0.004 + i * 0.008, bz).rotation.y = Math.PI / 2;   // turned endwise, clear of the job board
     // reserved holds: whatever's been put aside for someone, stacked with a slip on each (see holdsRender)
     const pad = put(new THREE.BoxGeometry(0.4, 0.2, 0.34), new THREE.MeshBasicMaterial({ visible: false }), -4.4, BHt + 0.1, bz);
     pad.userData.holds = true; aimables.push(pad);
