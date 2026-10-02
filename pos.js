@@ -806,7 +806,8 @@ window.createPOS = function createPOS(api) {
     setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
     sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
-    ring(s) { sale = s; draw(); },               // the sale on the register: { member, carded, signup, clerk, items: [[name, price]], feesCharged, feesWaived, total, cashIn, change, next } or null
+    ring(s) { sale = s; draw(); },
+    ringing: () => sale,                         // (what the sale window is showing, for the tests)               // the sale on the register: { member, carded, signup, clerk, items: [[name, price]], feesCharged, feesWaived, total, cashIn, change, next } or null
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     cancel(copy) {                               // void a rental outright (no fees): the store never had it to rent
       const r = copy.rental; if (!r) return;
