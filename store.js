@@ -2329,7 +2329,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
     const frame = put(new THREE.BoxGeometry(0.52, 0.36, 0.02), new THREE.MeshLambertMaterial({ color: 0x5a3b22 }), 0, 0.2, 0, jb);
     const cork = put(new THREE.BoxGeometry(0.47, 0.31, 0.012), new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => {
       g.fillStyle = "#b98a55"; g.fillRect(0, 0, w, h); for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(${90 + Math.random() * 60},${60 + Math.random() * 40},30,.35)`; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
-      g.fillStyle = "#fff8c8"; g.fillRect(w * 0.08, h * 0.1, w * 0.84, h * 0.2); g.fillStyle = "#222"; g.font = `bold ${h * 0.12}px Arial`; g.textAlign = "center"; g.fillText("DANA'S JOBS", w / 2, h * 0.25);
+      g.fillStyle = "#fff8c8"; g.fillRect(w * 0.08, h * 0.1, w * 0.84, h * 0.2); g.fillStyle = "#222"; g.font = `bold ${h * 0.12}px Arial`; g.textAlign = "center"; g.fillText("JOB BOARD", w / 2, h * 0.25);
       ["#ffd6d6", "#d6f0ff", "#e3ffd6", "#fff0c8", "#f0d6ff", "#d6fff4"].forEach((c, i) => { g.fillStyle = c; g.fillRect(w * (0.08 + (i % 3) * 0.29), h * (0.4 + Math.floor(i / 3) * 0.28), w * 0.25, h * 0.22); });
     }, 256, 170) }), 0, 0.2, 0.012, jb);
     for (const m of [frame, cork]) { m.userData.jobBoard = true; aimables.push(m); }
