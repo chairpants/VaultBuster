@@ -78,7 +78,7 @@ const sim = await ev(() => { const all = __t.catalog.flatMap(t => [t, ...(t.copi
   return { dana: __t.staff.length, board: __t.jobBoardMesh().g.visible, theater: hall.locked, lib: all.filter(c => c.libLocked).length, members: __t.posTerm.members.filter(m => m.active).length }; });
 check("no Dana, no job board", !sim.dana && !sim.board);
 check("theater locked, library tiers off the shelves", sim.theater && sim.lib > 0, `${sim.lib} tapes`);
-check("a small member base", sim.members === 25, `${sim.members}`);
+check("a small member base", sim.members === 40, `${sim.members}`);
 await ev(() => __t.upgBuy("hire")); await page.waitForTimeout(1500);
 const apps = await ev(() => ({ open: __t.hiring.open, n: __t.hiring.apps.length, totals: __t.hiring.apps.map(a => Object.values(a.levels).reduce((x, y) => x + y, 0)), names: new Set(__t.hiring.apps.map(a => a.first + a.last)).size }));
 check("hiring: three applicants, every one's stats add up the same", apps.open && apps.n === 3 && apps.totals.every(t => t === apps.totals[0]) && apps.names === 3, JSON.stringify(apps));

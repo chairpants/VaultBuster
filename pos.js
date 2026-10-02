@@ -9,7 +9,7 @@
 //   savedRental(copy),  [member #, out ms] from last visit, if this copy's rental was saved
 //   budget,             store budget from last visit (a fresh store starts with $300)
 //   activeMembers,      member #s signed up (saved), or startMembers: how many a new store begins with (else: everyone)
-//   savedRecords,       { member #: { incidents, status, until } } from last visit
+//   savedRecords,       { member #: { incidents, status, until, loyalty, lastVisit } } from last visit
 //   savedOwed,          { member #: late fees owed } from last visit
 //   today, clock(),     the shift's date (ms) and its clock ("HH:MM") — store.js runs its own calendar
 //   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
@@ -793,7 +793,7 @@ window.createPOS = function createPOS(api) {
     setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
     loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
-    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty }])),
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit }])),
     join(n) {                                    // n new sign-ups (not anyone who's banned or been sent packing) -> who
       const pool = customers.filter(c => !c.active && !c.status), got = [];
       while (got.length < n && pool.length) { const c = pool.splice(Math.floor(rnd() * pool.length), 1)[0]; c.active = true; got.push(c); }
