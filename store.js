@@ -5005,8 +5005,9 @@ function rushLevel() {
   let r = h < 12 ? 0.5 : h < 14 ? 0.9 : h < 15 ? 0.7 : h < 17.5 ? 1.2 : h < 18.5 ? 0.9 : h < 21.5 ? 1.5 : h < 23 ? 0.9 : 0.5;
   if (weekend && h >= 18) r *= 1.35;
   if (d === 2) r *= 1.15;                         // new release Tuesday
-  const members = SIM ? (rushLevel.n ??= posTerm.members.filter(m => m.active).length) : 140;   // (simulation: a small member base is a quiet store)
-  return r * repMult() * (0.45 + 0.55 * Math.min(1, members / 100));
+  const members = SIM ? (rushLevel.n ??= posTerm.members.filter(m => m.active).length) : 150;   // (simulation: a small member base is a quiet store)
+  const easeIn = SIM ? Math.min(1, 0.25 + 0.15 * shift.day) : 1;   // (simulation: a gentle first week, 40% busy on day 1 up to full on day 5)
+  return r * repMult() * (0.45 + 0.55 * Math.min(1, members / 150)) * easeIn;
 }
 const custMax = () => Math.min(6, Math.round(2 + 2 * rushLevel()));
 const custs = [], custLine = [];
