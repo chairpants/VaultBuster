@@ -38,6 +38,7 @@ const TOOLS = {
   ladder: { label: "step ladder", hand: [[0.6, -0.72, -0.2], [-Math.PI / 2, 0, 0]] },
 };
 const TROFFERS = [];                              // the sales floor's ceiling lights: { x, z, y } (a burnt-out one gets a dark cover, see lightDie)                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
+let wallStripe = null;                           // the blue band on the side walls: { inL: its face off the west wall, y0: its bottom } (the pass-through leaf stops against it)
 const trashBins = {};                            // the bins, registered as they're built (see "trash" further down)
 const chute = { door: null, t: 0, at: [0, 0, 0], stand: null };   // the trash chute, in the janitor's closet (likewise)
 const bath = { water: null, waterY: 0, stream: null, toiletAt: null, sinkAt: null, flushT: 0, tap: false, seat: null };   // the restroom's working parts (built with it; see bathTick)   // opening centers along their walls
@@ -780,6 +781,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   [[XC, 2.25, Z - T / 2 - 0.012, XW, 0],
    [XL + T + 0.01, 2.25, Z / 2, T, Z], [XR - T - 0.01, 2.25, Z / 2, T, Z]]
     .forEach(([x, y, z, w, d]) => box(w, 0.22, d, mat.stripe, x, y, z));
+  wallStripe = { inL: XL + T + 0.01 + T / 2, y0: 2.25 - 0.11 };
 
   // entrance: aluminum-framed double door, closed — large top & bottom
   // glass lites split by a mid rail, vertical push/pull bars on the
@@ -1930,7 +1932,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 let cashDrawer = null, drawerOpen = 0;          // the register's till; drawerOpen eases 0..1 (see the main loop)
 let returnSlotMesh;                          // the E target for the returns counter, set below
 let refreshReturnsBin = () => {};            // redraws the tapes sitting in the returns counter — set with the counter below
-let flapPivot, flapGate, flapCollider;        // the counter pass-through: lift-up leaf + swinging half gate, set below
+let flapPivot, flapGate, flapCollider, flapOpenA = Math.PI / 2 * 0.97;   // flapOpenA: how far the leaf lifts (worked out below: till it meets the wall's band)        // the counter pass-through: lift-up leaf + swinging half gate, set below
 let posScreen;                                // the register monitor's glass (pos.js mirrors its terminal onto it)
 // the counter's VHS rewinders (models built with the counter, logic near the
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
@@ -2224,6 +2226,11 @@ const GATE_Z = 4.0;                           // security gate line across the e
   const pull = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.07), chromeC); pull.position.set(gw - 0.08, TOP - 0.34, 0); flapGate.add(pull);
   for (const m of [flapMesh, flapEdge, gate, gRail, pull]) { m.userData.flap = flapPivot; aimables.push(m); }
   flapCollider = { x0: FLAP_X0, x1: FLAP_X1, z0: 4 - CD / 2, z1: 4 + CD / 2 };
+  if (wallStripe) {                              // lifted, the leaf's top face leans toward the wall: stop it a few mm shy of the band's bottom edge
+    const X0 = FLAP_X0, Y0 = TOP - 0.04, th = 0.04, clear = a => { const c = Math.cos(a), s = Math.sin(a), lx = (wallStripe.y0 - Y0 - th * c) / s;
+      return lx > FW || X0 - th * s + lx * c >= wallStripe.inL + 0.005; };
+    while (flapOpenA > 0.5 && !clear(flapOpenA)) flapOpenA -= 0.002;
+  }
   colliders.push(flapCollider);                // starts closed/blocked; toggleFlap() adds/removes this
 
   // ---- on the counter ----
@@ -8926,7 +8933,7 @@ renderer.setAnimationLoop(() => {
     if (tvBake) { const t0 = performance.now(); while (performance.now() - t0 < 6) if (tvBake.next().done) { tvBake = null; break; } }   // startup shadow bake, a slice per frame
   }
   for (const p of lampPools) p.material.opacity = lightsOut ? 1 : 0;   // overhead fluorescents drown the lamps' own floor pools out entirely
-  flapPivot.rotation.z += ((flapOpen ? Math.PI / 2 * 0.97 : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
+  flapPivot.rotation.z += ((flapOpen ? flapOpenA : 0) - flapPivot.rotation.z) * Math.min(1, dt * 6);   // leaf lifts up against the wall
   flapGate.rotation.y += ((flapOpen ? Math.PI / 2 : 0) - flapGate.rotation.y) * Math.min(1, dt * 5);          // gate swings in behind the counter
   coolerDoor.rotation.y += ((coolerOpen ? 1.75 : 0) - coolerDoor.rotation.y) * Math.min(1, dt * 5);        // cooler door swings out ~100°
   coolerThermo.tick(dt); drinkTempTick(dt); phoneLook(performance.now());
@@ -9004,7 +9011,7 @@ window.__t = {
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
-  flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
+  flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
   stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
