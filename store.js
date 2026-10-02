@@ -6047,6 +6047,7 @@ function empGo(state, spot, avoidPlayer = false) {
 }
 const shelfSpot = copy => ({ x: copy.pos.x + Math.cos(copy.ry) * 0.8, z: copy.pos.z - Math.sin(copy.ry) * 0.8, ry: Math.atan2(-Math.cos(copy.ry), Math.sin(copy.ry)) });
 function empNext() {                              // processing returns: what's next with what she's carrying
+  if (emp.leaving) return empBackToRegister();     // shift's over: what's in hand goes back in the tote, and off to clock out
   const c = emp.c;
   c.reachTo(null);
   c.holdTape(Math.min(3, emp.carry.length)); c.setPose(emp.carry.length ? "hold" : "idle");
@@ -6450,7 +6451,7 @@ function empTickOne(dt) {
       case "toPost": emp.state = "post"; c.setPose("idle"); c.setMood("neutral"); break;
       case "toExit": empDespawn(); return;      // out the front door
       case "post": {                              // ring up whoever's waiting (if that's her job right now); shut the gates up
-        const best = co?.emp === emp ? "register" : danaBestJob();
+        const best = co?.emp === emp ? "register" : emp.leaving ? null : danaBestJob();   // (shift's over: nothing new, just finish the sale in hand)
         if (custWaiting() && best === "register") {
           c.setMood("happy");
           if (!co && (emp.ringT += dt) > 1.5) { emp.ringT = 0; coStart("dana"); if (co) co.emp = emp; }   // their turn: start ringing them up
@@ -8893,6 +8894,6 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staff, you, gainXp, lv, xpToNext, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
