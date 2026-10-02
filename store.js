@@ -4376,21 +4376,21 @@ function repProgress() {
   return [`  NEXT STAR [${"#".repeat(k)}${"-".repeat(20 - k)}]`, `  ~${nights} MORE A NIGHT${nights > 1 ? "S" : ""} TO ${starStr(n + 1)}`];
 }
 // ---- upgrades, bought on the register out of the store budget ----
-const LIBRARY = [                               // simulation: the library comes in tiers, each after the one before
+const LIBRARY = [                               // the library comes in tiers, each after the one before
   { cats: ["Kids & Educational", "Holiday", "Reality TV", "Music", "Broadcast Blocks"] },
   { cats: ["Classic Sitcoms", "Sketch Comedy & Late Night"] },
   { cats: ["Anime", "Horror & Anthology", "MonsterVision"] },
 ];
-const owned = id => !SIM || !!upg[id];           // sandbox has it all
-const libTier = () => SIM ? (upg.library || 0) : LIBRARY.length;
-const libLocked = c => SIM && LIBRARY.slice(libTier()).some(t => t.cats.includes(c.category));
+const owned = id => !!upg[id];                   // (sandbox too: it starts with nothing, just a fat budget)
+const libTier = () => upg.library || 0;
+const libLocked = c => LIBRARY.slice(libTier()).some(t => t.cats.includes(c.category));
 const UPGRADES = [
   { id: "hire", name: "HIRE AN EMPLOYEE", cost: 250, repeat: true, desc: "3 APPLICANTS TO CHOOSE FROM" },
-  { id: "popcorn", name: "POPCORN MACHINE", cost: 150, sim: true, desc: "FRESH POPCORN, RIGHT IN THE STORE" },
-  { id: "theater", name: "OPEN THE THEATER", cost: 600, sim: true, desc: "UNLOCK THE LOBBY AND THE AUDITORIUM" },
-  { id: "lib1", name: "LIBRARY UPGRADE 1", cost: 200, sim: true, lib: 1, desc: "KIDS, HOLIDAY, REALITY TV, MUSIC" },
-  { id: "lib2", name: "LIBRARY UPGRADE 2", cost: 350, sim: true, lib: 2, desc: "CLASSIC SITCOMS, SKETCH & LATE NIGHT" },
-  { id: "lib3", name: "LIBRARY UPGRADE 3", cost: 500, sim: true, lib: 3, desc: "ANIME, HORROR ANTHOLOGY, MONSTERVISION" },
+  { id: "popcorn", name: "POPCORN MACHINE", cost: 150, desc: "FRESH POPCORN, RIGHT IN THE STORE" },
+  { id: "theater", name: "OPEN THE THEATER", cost: 600, desc: "UNLOCK THE LOBBY AND THE AUDITORIUM" },
+  { id: "lib1", name: "LIBRARY UPGRADE 1", cost: 200, lib: 1, desc: "KIDS, HOLIDAY, REALITY TV, MUSIC" },
+  { id: "lib2", name: "LIBRARY UPGRADE 2", cost: 350, lib: 2, desc: "CLASSIC SITCOMS, SKETCH & LATE NIGHT" },
+  { id: "lib3", name: "LIBRARY UPGRADE 3", cost: 500, lib: 3, desc: "ANIME, HORROR ANTHOLOGY, MONSTERVISION" },
   { id: "cameras", name: "SECURITY CAMERAS", cost: 450, desc: "EVERY SHOPLIFTER ON TAPE; FEWER TRY" },
   { id: "sign", name: "ANTI-THEFT SIGNAGE", cost: 60, desc: "\"SHOPLIFTERS WILL BE PROSECUTED\"" },
   { id: "rewinder2", name: "SECOND REWINDER", cost: 90, desc: "TWO TAPES REWINDING AT ONCE" },
@@ -4399,6 +4399,11 @@ const UPGRADES = [
   { id: "dana", name: "STAFF TRAINING", cost: 250, desc: "THE STAFF LEARN 50% FASTER" },
   { id: "ad", name: "NEWSPAPER AD", cost: 120, repeat: true, desc: SIM ? "NEW MEMBERS, A BIT OF BUZZ (1/DAY)" : "+REPUTATION (ONE A DAY)" },
 ];
+if (!SIM && SAVE?.upg && !upg.v) {              // a sandbox saved back when sandbox had everything: it keeps it
+  for (const u of UPGRADES) if (!u.repeat) upg[u.id] = true;
+  upg.library = LIBRARY.length;
+}
+upg.v = 2;                                       // (marks stores saved from here on)
 function upgBuy(id) {                            // -> null if bought, else why not
   const u = UPGRADES.find(q => q.id === id); if (!u) return "NO SUCH UPGRADE.";
   if (!u.repeat && owned(id)) return "ALREADY INSTALLED.";
@@ -7437,8 +7442,7 @@ function amenities() {
     }
   }
 }
-function libLock() {                             // simulation: sections you haven't bought come off the shelves
-  if (!SIM) return;
+function libLock() {                             // sections you haven't bought come off the shelves
   for (const t of catalog) for (const c of [t, ...(t.copies || [])]) {
     if (!libLocked(c)) continue;
     c.libLocked = true;
@@ -8402,7 +8406,7 @@ function armGates(on) {                      // disarmed gates go dark and ignor
 let gateLastZ = player.z;
 
 const posTerm = window.createPOS({
-  catalog, rented: rentedCopies, budget: SAVE?.budget ?? (SIM ? 300 : 5000),
+  catalog, rented: rentedCopies, budget: SAVE?.budget ?? (SIM ? 300 : 10000),
   activeMembers: SAVE?.members, startMembers: SIM && !SAVE?.members ? 25 : null,   // simulation: a small base to start
   savedOwed: SAVE?.owed, savedRecords: SAVE?.records,
   today: +shiftDate(), clock: () => { const m = Math.floor(shift.h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; },   // the shift's date and clock on the screen
@@ -8415,7 +8419,7 @@ const posTerm = window.createPOS({
   schedInfo: { h0: SCHED_H0, slots: SCHED_SLOTS, max: SCHED_MAX },
   staffSched: () => staff.map(e => ({ id: e.id, first: e.first, last: e.last, sched: e.sched, hours: schedHours(e), rate: empRate(e), on: !!e.c })),
   setSched,
-  upgrades: () => UPGRADES.filter(u => SIM || !u.sim).map(u => ({ ...u, cost: u.id === "hire" ? hireCost() : u.cost, owned: !u.repeat && owned(u.id),
+  upgrades: () => UPGRADES.map(u => ({ ...u, cost: u.id === "hire" ? hireCost() : u.cost, owned: !u.repeat && owned(u.id),
     ranToday: u.id === "ad" && upg.adDay === shift.day, desc: u.id === "hire" ? (staff.length >= STAFF_MAX ? "THE STAFF ROOM'S FULL" : `3 APPLICANTS · ${staff.length} ON STAFF`) : u.desc })), buyUpgrade: upgBuy,
   theaterOpen: () => owned("theater"), mode: MODE,
   reputation: () => ({ stars: repStars(), v: rep.v }),
