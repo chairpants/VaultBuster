@@ -69,7 +69,11 @@ window.createPOS = function createPOS(api) {
     "ALWAYS ASKS FOR STAFF PICKS", "RETURNED TAPE IN WRONG CASE 2X", "ACCT FROZEN ONCE - FEES PAID 07/96"];
   const customers = [];
   const usedNums = new Set();
-  for (let i = 0; i < 140; i++) {
+  for (let i = 0; i < 140; i++) addCustomer();     // the original 140, as in every older save
+  const seed140 = seed;
+  for (let i = 140; i < 300; i++) addCustomer();   // 160 more locals to sign up over time...
+  seed = seed140;                                   // ...drawn without shifting anything rnd() makes after this
+  function addCustomer() {
     let num; do num = int(10001, 48999); while (usedNums.has(num)); usedNums.add(num);
     const first = pick(FIRST);
     customers.push({
