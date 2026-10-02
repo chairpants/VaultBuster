@@ -224,35 +224,32 @@ const $ = id => document.getElementById(id);
 // Only things explicitly marked with BLOOM_LAYER actually glow (CRT/TV
 // screens, marquee bulbs, lamp shades) — genre signs, endcap tags and other
 // unlit signage stay off this layer, so they never bloom no matter how bright
-// their flat color is. Standard three.js selective-bloom recipe: render the
-// scene once with everything NOT on the bloom layer blacked out and blur that,
-// then render the real scene and additively composite the blurred glow on top.
+// their flat color is. The scene's drawn once (mainRT, keeping its depth); then
+// just the glowing things are drawn again into glowRT, which shares that depth,
+// so anything in front of a glow still hides it without being drawn a second
+// time (~100 draws instead of ~3,000); that's blurred and added on top
 const BLOOM_LAYER = 1;
 const bloomLayer = new THREE.Layers(); bloomLayer.set(BLOOM_LAYER);
-const darkMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
-const hiddenMaterials = new Map();
 function glow(obj) { obj.layers.enable(BLOOM_LAYER); return obj; }   // mark a mesh as a real light source
 
-const renderScene = new RenderPass(scene, camera);
-// subtle by default (lights on) — applyLighting() turns it up a bit for the dark
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.3, 0.4);
-const bloomComposer = new EffectComposer(renderer);
-bloomComposer.renderToScreen = false;
-bloomComposer.setPixelRatio(renderer.getPixelRatio() / 2);   // the glow pass at half resolution: a quarter of the pixels, and it's blurred anyway
-bloomComposer.addPass(renderScene);
-bloomComposer.addPass(bloomPass);
+const rtSize = () => [Math.round(innerWidth * renderer.getPixelRatio()), Math.round(innerHeight * renderer.getPixelRatio())];
+const mainRT = new THREE.WebGLRenderTarget(...rtSize(), { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(...rtSize()) });
+const glowRT = new THREE.WebGLRenderTarget(...rtSize(), { type: THREE.HalfFloatType, depthTexture: mainRT.depthTexture });
+const mixRT = new THREE.WebGLRenderTarget(...rtSize(), { type: THREE.HalfFloatType, depthBuffer: false });
+// subtle by default (lights on) — applyLighting() turns it up a bit for the dark. Its blur runs at half resolution
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.28, 0.3, 0.4);
 const mixPass = new ShaderPass(new THREE.ShaderMaterial({
-  uniforms: { baseTexture: { value: null }, bloomTexture: { value: bloomComposer.renderTarget2.texture } },
+  uniforms: { baseTexture: { value: null }, bloomTexture: { value: glowRT.texture } },
   vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
   fragmentShader: `varying vec2 vUv; uniform sampler2D baseTexture; uniform sampler2D bloomTexture;
     void main(){ gl_FragColor = texture2D(baseTexture, vUv) + vec4(1.0) * texture2D(bloomTexture, vUv); }`,
 }), "baseTexture");
-mixPass.needsSwap = true;
-const finalComposer = new EffectComposer(renderer);
-finalComposer.addPass(renderScene);
-finalComposer.addPass(mixPass);
-finalComposer.addPass(new OutputPass());
-const clearMaterial = new THREE.MeshBasicMaterial({ visible: false });   // see-through overlays (screen glass) mustn't black out the glow behind them
+const outputPass = new OutputPass(); outputPass.renderToScreen = true;
+function bloomResize() {
+  const [w, h] = rtSize(); for (const rt of [mainRT, glowRT, mixRT]) rt.setSize(w, h);
+  bloomPass.setSize(w / 2, h / 2);
+}
+bloomResize();
 // a light at zero intensity still costs every lit pixel its full shading
 // loop, so switched-off lights (ceiling CRT glows with nothing playing, the
 // lot lights by day, a dark zone) leave the scene: hidden once they've been
@@ -262,40 +259,32 @@ let sceneLights = null;
 cullDarkLights.n = 0;
 function cullDarkLights(dt) {
   if (!sceneLights || ++cullDarkLights.n % 120 === 0) {   // re-gathered now and then: some lights arrive after startup
-    sceneLights = []; scene.traverse(o => o.isLight && !o.isAmbientLight && !o.isHemisphereLight && sceneLights.push(o));
+    sceneLights = []; scene.traverse(o => {
+      if (!o.isLight) return;
+      o.layers.enable(BLOOM_LAYER);              // (the glow pass sees the same lights as the main one: otherwise three re-checks every lit glow's shader, twice a frame)
+      if (!o.isAmbientLight && !o.isHemisphereLight) sceneLights.push(o);
+    });
   }
   for (const l of sceneLights) {
     if (l.intensity > 0) { l.userData.darkT = 0; l.visible = true; }
     else if ((l.userData.darkT = (l.userData.darkT || 0) + dt) > 1) l.visible = false;
   }
 }
-// in the glow pass, non-glowing meshes only matter as blockers (drawn black so
-// glow behind them is hidden). Small ones — snacks, cans, knobs, fingers —
-// block next to nothing, so that pass skips them outright: ~a thousand fewer
-// draw calls a frame in the store
-const occScale = new THREE.Vector3(), skippedInBloom = [];
-function tinyOccluder(o) {
-  if (o.userData.tinyOcc === undefined) {
-    const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
-    o.getWorldScale(occScale);
-    o.userData.tinyOcc = !o.isInstancedMesh && g.boundingSphere.radius * Math.max(occScale.x, occScale.y, occScale.z) < 0.12;
-  }
-  return o.userData.tinyOcc;
-}
-scene.matrixWorldAutoUpdate = false;              // world matrices: worked out once a frame here, not again by each of the two passes
+scene.matrixWorldAutoUpdate = false;              // world matrices: worked out once a frame here, not again by each pass
+const clearWas = new THREE.Color();
 function renderWithBloom() {
   scene.updateMatrixWorld();
-  scene.traverse(o => {
-    if (!o.isMesh || bloomLayer.test(o.layers)) return;
-    if (o.visible && tinyOccluder(o)) { o.visible = false; skippedInBloom.push(o); return; }
-    hiddenMaterials.set(o, o.material); o.material = o.userData.clearToBloom ? clearMaterial : darkMaterial;
-  });
-  bloomComposer.render();
-  hiddenMaterials.forEach((m, o) => o.material = m);
-  hiddenMaterials.clear();
-  for (const o of skippedInBloom) o.visible = true;   // only ever skipped while visible, so this puts it back as it was
-  skippedInBloom.length = 0;
-  finalComposer.render();
+  renderer.setRenderTarget(mainRT); renderer.render(scene, camera);
+  // the glow: just the glowing things, over a clear (black) target that keeps mainRT's depth. (A color
+  // background makes three clear the depth too, so the sky's out of this pass)
+  const bg = scene.background, mask = camera.layers.mask, alpha = renderer.getClearAlpha(); renderer.getClearColor(clearWas);
+  scene.background = null; camera.layers.set(BLOOM_LAYER); renderer.autoClear = false;
+  renderer.setRenderTarget(glowRT); renderer.setClearColor(0x000000, 0); renderer.clear(true, false, false);
+  renderer.render(scene, camera);
+  renderer.autoClear = true; camera.layers.mask = mask; scene.background = bg; renderer.setClearColor(clearWas, alpha);
+  bloomPass.render(renderer, null, glowRT, 0, false);   // blurred, and added back onto glowRT
+  mixPass.render(renderer, mixRT, mainRT);               // the scene + the glow
+  outputPass.render(renderer, null, mixRT);              // tone mapping, sRGB, to the screen
 }
 
 const catalog = window.VAULT_CATALOG || [];
@@ -1570,7 +1559,6 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       }
       const beam = new THREE.Mesh(cone, projBeamMat);
       beam.position.copy(P0); beam.lookAt(P1);
-      beam.userData.clearToBloom = true;
       scene.add(beam);
 
       const lens = glow(new THREE.Mesh(new THREE.CircleGeometry(0.075, 16), new THREE.MeshBasicMaterial({ color: 0xfffbe6 })));
@@ -8458,8 +8446,7 @@ document.addEventListener("pointerlockchange", () => {
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  bloomComposer.setSize(innerWidth, innerHeight);
-  finalComposer.setSize(innerWidth, innerHeight);   // (each composer sizes its own passes, the glow at its half resolution)
+  bloomResize();
 });
 
 // ---------------- register terminal (pos.js) ----------------
