@@ -57,15 +57,6 @@ You need an internet connection, because three.js loads from a CDN.
 
 **Locally:** open `index.html` in a browser. It works from `file://` with no server needed.
 
-**Or serve it locally:**
-
-```sh
-node server.js          # http://localhost:5000
-node server.mjs [port]  # http://localhost:8123 by default
-```
-
-Neither server has any dependencies.
-
 ---
 
 ## Controls
@@ -111,8 +102,8 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `covers.js` | Generated TMDB cover art, embedded as data URIs (`window.VAULT_ART`) |
 | `meta.js` | Generated release year and TMDB vote count per title (`window.VAULT_META`), used to sort the New Releases walls |
 | `art.js` | The older embedded cover art. `fetch-covers.mjs` falls back to it for the few shows TMDB can't match |
-| `server.js`, `server.mjs` | Optional static servers, no dependencies |
-| `drive.mjs` | Headless Playwright smoke test that walks in, picks a tape, and plays it |
+| `tests/smoke.mjs` | The smoke tests (see Testing) |
+| `tests/shot.mjs` | A screenshot (or frame timing) from anywhere in a fresh store |
 
 ### Testing
 
@@ -122,6 +113,13 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 npm install                      # playwright-core (dev only; the game itself has no build)
 npx playwright install chromium  # or set PLAYWRIGHT_CHROMIUM_PATH to any Chrome/Chromium
 npm test                         # a few minutes: it renders in software
+```
+
+To look at something, `tests/shot.mjs` puts you at a spot and takes a screenshot. Add `--setup "<js>"` to arrange things first through the `window.__t` hooks, or `--gpu --fps` to time frames on the real GPU:
+
+```sh
+node tests/shot.mjs closet.png 10.3,29.1,-1.7,0.1 --setup "__t.setZone('closet', true)"
+node tests/shot.mjs - 3,12,3.14,0 --mode simulation --gpu --fps
 ```
 
 ### Rebuilding the data
