@@ -309,6 +309,7 @@ const MODE = SAVE?.mode === "simulation" ? "simulation" : "sandbox", SIM = MODE 
 const rep = { v: SAVE?.rep ?? 50 };             // store reputation 0..100 (see repStars)
 const growth = { pending: SAVE?.signups ?? (SIM ? 2 : 0), prospects: SAVE?.prospects ?? 0, pT: 30 };   // (a new simulation: a couple of curious locals on day one)  // simulation: new members who'll sign up tomorrow morning (word of mouth, ads, what you've built)
 const upg = { ...SAVE?.upg };                   // upgrades bought (see UPGRADES)
+if (!("rewinder2" in upg)) upg.rewinder2 = !!SAVE?.upg;   // a store saved before the second rewinder was an upgrade already had two
 // a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
 // [tape, ...tape.copies] (shelving is deterministic, so n holds every load).
 // id + season is unique per tape; the id alone isn't (every season of a show shares it)
@@ -353,7 +354,7 @@ function setWindFrac(c, f) {
   const x = Math.min(1, f) * n, ep = Math.min(n - 1, Math.floor(x));
   c.tapePos = { ep, t: (x - ep) * d, d: c.tapePos?.d };
 }
-// the counter rewinders (two, either side of the returns tote): E puts the
+// the counter rewinders (one to start, a second bought, either side of the returns tote): E puts the
 // tape in hand in; it winds back over up to REWIND_SECS (scaled by how far
 // it's wound) with a motor whir, clunks when done, and E takes it out — early,
 // it comes out only partly rewound. Each machine is its own object in rewinders
@@ -361,7 +362,7 @@ const REWIND_SECS = 10;
 let rewindAc = null;
 function rewinderLoad(rw, tape, who = "you") {
   Object.assign(rw, { tape, f0: windFrac(tape), t: 0, done: false });
-  rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (upg.rewinders ? 0.5 : 1) * Math.max(0.5, 1 - 0.025 * (lv(who, "dex") - 1)) * (has(who, "dex", 5) ? 0.7 : 1);   // (DEX: threaded and running faster; Quick Thread)
+  rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (owned("rewinders") ? 0.5 : 1) * Math.max(0.5, 1 - 0.025 * (lv(who, "dex") - 1)) * (has(who, "dex", 5) ? 0.7 : 1);   // (DEX: threaded and running faster; Quick Thread)
   if (has(who, "dex", 10) && Math.random() < 0.2) { rw.dur = 0.15; if (who === "you") toast("Lucky Spool: rewound in a blink!", true); }
   if (who !== "load") gainXp(who, "dex", 3);
   rw.tapeMesh.material = tape.sideMat || mat.tapeBody; rw.tapeMesh.visible = true;
@@ -1925,6 +1926,11 @@ let posScreen;                                // the register monitor's glass (p
 // the counter's VHS rewinders (models built with the counter, logic near the
 // rewind policy): each { tape = the copy inside, f0/dur/t = rewind progress, tapeMesh, led, snd }
 const rewinders = [];
+const rewinderKit = { model: null };             // (rw, car) => dress a rewinder as the plain box or the sports car (built with the counter)
+function rewinderOn(rw, on) {                    // the second one only once it's bought: hidden, and nothing to aim at
+  if (rw.on === on) return; rw.on = on; rw.g.visible = on;
+  rw.g.traverse(o => { if (o.isMesh) { const i = aimables.indexOf(o); if (on && i < 0) aimables.push(o); if (!on && i >= 0) aimables.splice(i, 1); } });
+}
 let phoneLook = () => {};                    // (set when the phone is built)
 let popcornMachine = null, theaterSign = null, jobBoardMesh = null;
 const COUNTER = { y: 1.08, tops: [], groups: {} };   // the checkout counter's usable worktop (rectangles, world x/z) and the things on it that can be moved (see counter moves)   // (simulation: bought later — see amenities)
@@ -2076,15 +2082,27 @@ const GATE_Z = 4.0;                           // security gate line across the e
     cord.rotation.y = 0.55;
     pos.traverse(o => { if (o.isMesh) { o.userData.pos = true; aimables.push(o); } });   // E anywhere on it logs in
   }
-  // tape rewinders: the classic little sports-car shaped ones, a pair on the
-  // lane counter either side of the returns tote (placed below, once RZ is
-  // known). Each is a little convertible facing the employee side; a loaded tape rides in its open cockpit
-  function buildRewinder(x, z, ry) {
-    const rw = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null };
-    const g = new THREE.Group(); g.position.set(x, TOP, z); g.rotation.y = ry; scene.add(g);
+  // tape rewinders, a pair on the lane counter either side of the returns tote (placed below, once RZ is known).
+  // The machine (rw.g: where it sits, what you aim at and move) wears a model: a plain black box to start; the
+  // classic little sports car once they're high-speed (rewinderKit.model swaps it, see amenities). Either way a
+  // loaded tape lies in the top, lengthwise along local x, and a status LED on the side faces the employee
+  function boxModel(m, rw) {
+    const add = (geo, mt, x, y, z) => { const o = new THREE.Mesh(geo, mt); o.position.set(x, y, z); m.add(o); return o; };
+    const body = new THREE.MeshPhongMaterial({ color: 0x1c1c1f, specular: 0x333333, shininess: 25 }), well = new THREE.MeshLambertMaterial({ color: 0x0a0a0a });
+    const L = 0.26, H = 0.07, W = 0.15;
+    add(new THREE.BoxGeometry(L, H, W), body, 0, 0.008 + H / 2, 0);
+    add(new THREE.BoxGeometry(TAPE.h + 0.02, 0.003, TAPE.d + 0.012), well, -0.015, 0.008 + H + 0.0005, 0);   // the tape well
+    add(new THREE.BoxGeometry(0.028, 0.012, 0.03), chromeC, 0.1, 0.008 + H + 0.004, 0);                     // eject
+    for (const x of [-0.11, 0.11]) for (const z of [-0.06, 0.06]) add(new THREE.BoxGeometry(0.025, 0.008, 0.025), well, x, 0.004, z);   // feet
+    const lbl = textPlane("REWINDER", 0.09, 0.016, "#c8c8c8", "#1c1c1f", "Arial Black", 60); lbl.material = new THREE.MeshLambertMaterial({ map: lbl.material.map });
+    lbl.position.set(-0.04, 0.008 + H * 0.55, W / 2 + 0.001); m.add(lbl);
+    rw.led = glow(add(new THREE.BoxGeometry(0.012, 0.012, 0.004), new THREE.MeshBasicMaterial({ color: 0x222222 }), 0.08, 0.008 + H * 0.55, W / 2 + 0.002));
+    rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.015, 0.008 + H + TAPE.w / 2 - 0.01, 0);   // sat down in the well
+  }
+  function carModel(m, rw) {                    // a little convertible facing the employee side; the tape rides in its open cockpit
     const red = new THREE.MeshPhongMaterial({ color: 0xc41e1e, specular: 0xffffff, shininess: 80 });
     const blackP = new THREE.MeshPhongMaterial({ color: 0x151515, specular: 0x555555, shininess: 50 });
-    const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
+    const add = (geo, mt, x, y, z) => { const o = new THREE.Mesh(geo, mt); o.position.set(x, y, z); m.add(o); return o; };
     const W = 0.17, A = 0.036;                  // body width; wheel-arch radius
     // side profile (+x = nose), extruded across the width with rounded edges; the dip is the open cockpit
     const p = new THREE.Shape();
@@ -2118,9 +2136,23 @@ const GATE_Z = 4.0;                           // security gate line across the e
     }
     rw.led = glow(add(new THREE.BoxGeometry(0.012, 0.012, 0.004), new THREE.MeshBasicMaterial({ color: 0x222222 }), 0.03, 0.04, W / 2 + 0.002));   // status LED on the side
     rw.tapeMesh = add(new THREE.BoxGeometry(TAPE.h, TAPE.w, TAPE.d), mat.tapeBody, -0.02, 0.059 + TAPE.w / 2, 0);   // lies lengthwise in the cockpit
-    rw.tapeMesh.visible = false;
-    g.traverse(o => { if (o.isMesh) { o.userData.rewinder = rw; aimables.push(o); } });
+  }
+  rewinderKit.model = (rw, car) => {            // dress the machine (keeping its tape, LED state, aim and move handles)
+    if (rw.model && rw.car === car) return;
+    const was = rw.model, led = rw.led?.material.color.getHex() ?? 0x222222, tapeOn = !!rw.tapeMesh?.visible, tapeMat = rw.tapeMesh?.material;
+    if (was) { was.traverse(o => { const i = aimables.indexOf(o); if (i >= 0) aimables.splice(i, 1); }); rw.g.remove(was); }
+    const m = new THREE.Group(); rw.g.add(m); rw.model = m; rw.car = car;
+    (car ? carModel : boxModel)(m, rw);
+    rw.led.material.color.setHex(led); rw.tapeMesh.visible = tapeOn; if (tapeMat) rw.tapeMesh.material = tapeMat;
+    m.traverse(o => { if (o.isMesh) { o.userData.rewinder = rw; if (rw.on) aimables.push(o); } });
+    const it = was && counterItems?.find(k => k.g === rw.g);   // (a swap: if it's movable, its new outline, and the new parts are handles)
+    if (it) { it.fp = footprint(rw.g); m.traverse(o => { if (o.isMesh) o.userData.movable = it; }); }
+  };
+  function buildRewinder(x, z, ry) {
+    const rw = { tape: null, f0: 0, dur: 0, t: 0, done: false, tapeMesh: null, led: null, snd: null, on: true };
+    const g = new THREE.Group(); g.position.set(x, TOP, z); g.rotation.y = ry; scene.add(g);
     rw.g = g; rewinders.push(rw);
+    rewinderKit.model(rw, false);
   }
 
   // ---- returns: a stainless drop slot on the lane face, into a tote in the cubby behind ----
@@ -4361,7 +4393,8 @@ const UPGRADES = [
   { id: "lib3", name: "LIBRARY UPGRADE 3", cost: 500, sim: true, lib: 3, desc: "ANIME, HORROR ANTHOLOGY, MONSTERVISION" },
   { id: "cameras", name: "SECURITY CAMERAS", cost: 450, desc: "EVERY SHOPLIFTER ON TAPE; FEWER TRY" },
   { id: "sign", name: "ANTI-THEFT SIGNAGE", cost: 60, desc: "\"SHOPLIFTERS WILL BE PROSECUTED\"" },
-  { id: "rewinders", name: "HIGH-SPEED REWINDERS", cost: 180, desc: "REWINDS IN HALF THE TIME" },
+  { id: "rewinder2", name: "SECOND REWINDER", cost: 90, desc: "TWO TAPES REWINDING AT ONCE" },
+  { id: "rewinders", name: "HIGH-SPEED REWINDERS", cost: 300, desc: "HALF THE TIME, AND THEY LOOK FAST" },
   { id: "compressor", name: "COOLER COMPRESSOR", cost: 220, desc: "COOLER STAYS COLD, RECOVERS FASTER" },
   { id: "dana", name: "STAFF TRAINING", cost: 250, desc: "THE STAFF LEARN 50% FASTER" },
   { id: "ad", name: "NEWSPAPER AD", cost: 120, repeat: true, desc: SIM ? "NEW MEMBERS, A BIT OF BUZZ (1/DAY)" : "+REPUTATION (ONE A DAY)" },
@@ -4370,6 +4403,7 @@ function upgBuy(id) {                            // -> null if bought, else why 
   const u = UPGRADES.find(q => q.id === id); if (!u) return "NO SUCH UPGRADE.";
   if (!u.repeat && owned(id)) return "ALREADY INSTALLED.";
   if (id === "dana" && !staff.length) return "HIRE SOMEONE FIRST.";
+  if (id === "rewinders" && !owned("rewinder2")) return "SECOND REWINDER FIRST.";
   if (id === "hire") {                           // three applicants come up to pick from (the POS has taken the money; not hiring refunds it)
     if (staff.length >= STAFF_MAX) return `THE STAFF ROOM'S FULL (${STAFF_MAX}).`;
     if (hiring.open) return "ALREADY INTERVIEWING.";
@@ -6582,7 +6616,7 @@ function empTickOne(dt) {
           rewinderEmpty(out); emp.t = 0.5; c.setMood("neutral");
           c.holdTape(Math.min(3, emp.carry.length - emp.rewinding.length)); break;
         }
-        const t = emp.carry.find(x => !isRewound(x) && !emp.rewinding.includes(x)), free = rewinders.find(rw => !rw.tape);
+        const t = emp.carry.find(x => !isRewound(x) && !emp.rewinding.includes(x)), free = rewinders.find(rw => rw.on && !rw.tape);
         if (t && free) {                           // in it goes
           rewinderLoad(free, t, "dana"); emp.rewinding.push(t); c.reachTo(free.tapeMesh.getWorldPosition(new THREE.Vector3())); emp.t = 0.8; c.setMood("wait");
           c.holdTape(Math.min(3, emp.carry.length - emp.rewinding.length)); break;
@@ -7371,6 +7405,8 @@ function custWarmDrink(cust, u) {
 
 // ---------------- the build-up (simulation): what the store has so far ----------------
 function amenities() {
+  rewinderOn(rewinders[1], owned("rewinder2"));
+  for (const rw of rewinders) rewinderKit.model(rw, owned("rewinders"));
   if (jobBoardMesh) {                              // Dana's job board: only once there's a Dana
     const on = staff.length > 0;
     if (jobBoardMesh.g.visible !== on) {
@@ -7598,7 +7634,7 @@ const onTop = (x, z) => COUNTER.tops.some(t => x >= t.x0 && x <= t.x1 && z >= t.
 function fits(it, x, z, ry) {                    // all of it on the worktop, and not into anything else
   const o = obb(it.fp, x, z, ry);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) if (!onTop(o.x + o.ux[0] * o.hx * sx + o.uz[0] * o.hz * sz, o.z + o.ux[1] * o.hx * sx + o.uz[1] * o.hz * sz)) return false;
-  return ![...counterItemsList().filter(k => k !== it), ...counterItems.fixed].some(k => obbHit(o, obbOf(k)));
+  return ![...counterItemsList().filter(k => k !== it && k.g.visible), ...counterItems.fixed].some(k => obbHit(o, obbOf(k)));
 }
 function ghostOf(g) {                             // a see-through copy (visible parts only; the receipt strip stays home)
   const copy = o => {
@@ -7646,7 +7682,7 @@ function staffSpotFor(x, z) {                     // where you'd stand behind th
   return top.run === "north" ? { x: Math.max(COUNTER.tops[0].x0 + 0.3, Math.min(x, COUNTER.tops[1].staff - 0.1)), z: top.staff, ry: 0 } : { x: top.staff, z, ry: Math.PI / 2 };
 }
 function rewinderSpot() {                         // Dana's spot for the rewinders: at the free one nearest her (or the first)
-  const p = emp.c.group.position, free = rewinders.filter(rw => !rw.tape), pick = (free.length ? free : rewinders).reduce((a, b) => b.g.position.distanceTo(p) < a.g.position.distanceTo(p) ? b : a);
+  const p = emp.c.group.position, on = rewinders.filter(rw => rw.on), free = on.filter(rw => !rw.tape), pick = (free.length ? free : on).reduce((a, b) => b.g.position.distanceTo(p) < a.g.position.distanceTo(p) ? b : a);
   return staffSpotFor(pick.g.position.x, pick.g.position.z);
 }
 const onNorthRun = at => COUNTER.tops[0] && at.z >= COUNTER.tops[0].z0 - 0.05 && at.x <= COUNTER.tops[0].x1;
@@ -8548,7 +8584,7 @@ function loadState(S) {
     refreshReturnsBin();
     (S.rewinders || [S.rewinder]).forEach((k, i) => {   // (older saves had the one)
       const c = k && copyByKey(k);
-      if (c && rewinders[i]) { setOnShelf(c, false); rewinderLoad(rewinders[i], c, "load"); }   // picks up rewinding from wherever it had got to
+      if (c && rewinders[i] && (i === 0 || owned("rewinder2"))) { setOnShelf(c, false); rewinderLoad(rewinders[i], c, "load"); }   // picks up rewinding from wherever it had got to
     });
     const units = snackUnits();
     for (const it of S.inv || []) {          // re-pick each item up in order, exactly as if you'd grabbed it
