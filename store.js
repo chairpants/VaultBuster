@@ -5438,7 +5438,7 @@ function custWatched(cust, dt) {
   if (aimCustomer !== cust) { cust.watchT = 0; return; }
   if ((cust.watchT = (cust.watchT || 0) + dt) < 0.8) return;
   cust.fessRolled = true; gainXp("you", "wis", 4);
-  if (!has("you", "wis", 10) && Math.random() >= 0.5) return;   // ...or they keep going (Stern Look: they never do)
+  if (Math.random() >= (has("you", "wis", 10) ? 0.85 : 0.5)) return;   // ...or they keep going (Stern Look: they mostly don't)
   gainXp("you", "wis", 8);
   const c = cust.c;
   cust.sneaking = false; cust.tagged = false; cust.thief = false;
@@ -5878,10 +5878,10 @@ const lv = (who, k) => whoIs(who)?.skills?.[k]?.lvl ?? 1;
 const MILESTONES = {
   dex: { 5: ["Quick Thread", "rewinders you load run 30% faster", true], 10: ["Lucky Spool", "1 in 5 rewinds is done in a blink", true] },
   int: { 5: ["Shelf Sense", "the slot for the tape in your hand glows"], 10: ["Keen Eye", "misshelved tapes glow"] },
-  cha: { 5: ["Smooth Talker", "charging late fees never costs goodwill", true], 10: ["Store Favorite", "customers wait 30% longer in line"] },
+  cha: { 5: ["Smooth Talker", "charging late fees costs half the goodwill", true], 10: ["Store Favorite", "customers wait 30% longer in line"] },
   str: { 5: ["Strong Grip", "carry a third trash bag"], 10: ["Pack Mule", "carry two more boxes"] },
   con: { 5: ["Second Wind", "sprint 15% faster"], 10: ["Neat Freak", "cleaning a mess sweeps up others within 3m"] },
-  wis: { 5: ["Sixth Sense", "shoplifters glow red"], 10: ["Stern Look", "a shoplifter you stare down always gives up"] },
+  wis: { 5: ["Sixth Sense", "shoplifters glow red"], 10: ["Stern Look", "a shoplifter you stare down gives up 85% of the time"] },
 };
 const has = (who, k, L) => lv(who, k) >= L;
 const linePatience = () => has("you", "cha", 10) ? 1.3 : 1;   // Store Favorite
@@ -6795,7 +6795,8 @@ function coFees(charge) {                        // late fees on their account: 
   const m = co.cust.member, amt = posTerm.owed(m);
   posTerm.settle(m, charge); co.cust.hi = 1.6;
   const feeBy = co.by === "player" ? "you" : co.emp;
-  posTerm.loyal(m, charge ? (has(feeBy, "cha", 5) ? 0 : -Math.max(0, 3 - Math.floor((lv(feeBy, "cha") - 1) / 3))) : 6); gainXp(feeBy, "cha", charge ? 3 : 2);   // (charm takes the sting out of a fee)
+  const sting = Math.max(0, 3 - Math.floor((lv(feeBy, "cha") - 1) / 3));
+  posTerm.loyal(m, charge ? -(has(feeBy, "cha", 5) ? Math.ceil(sting / 2) : sting) : 6);   // (Smooth Talker: half the sting) gainXp(feeBy, "cha", charge ? 3 : 2);   // (charm takes the sting out of a fee)
   if (charge) { co.fees += amt; co.feesIn = true; coRebill(); shift.stats.feesCollected += amt; co.cust.c.setMood("meh"); co.pts += 20; logAct(`${co.by === "dana" ? `${co.emp?.first} charged` : "Charged"} ${memberName(m)} their late fees`, "good", amt); }
   else { co.feesWaived = amt; shift.stats.feesWaived += amt; co.cust.c.setMood("love"); logAct(`Waived ${memberName(m)}'s ${money(amt)} in late fees`); }
 }
