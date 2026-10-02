@@ -54,7 +54,7 @@ console.log("\nsandbox: the counter");
 await freshStore("sandbox");
 check("in the store, no errors", errors.length === 0, errors[0]);
 const co = await ev(async () => {
-  __t.shift.h = 13; __t.setFrontLock(true); __t.emp.state = "test"; for (const k of [...__t.custs]) __t.custGone(k);
+  __t.shift.h = 13; __t.setFrontLock(true); for (const e of __t.staff) e.state = "test"; for (const k of [...__t.custs]) __t.custGone(k);
   __t.custSpawn(); const k = __t.custs.at(-1), tape = __t.catalog.find(t => !t.offShelf && !t.lost && t.pos);
   __t.setOnShelf(tape, false); k.tapes = [tape]; k.holding = 1; k.member.owed = 2; k.tickets = 0;
   k.c.group.position.set(__t.CUST_COUNTER.x, 0, __t.CUST_COUNTER.z); k.path = []; k.state = "wait"; k.t = 99; __t.custLine.push(k);
@@ -77,6 +77,10 @@ await page.waitForTimeout(2500);
 await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
 check("save/reload keeps the counter layout and the hold", await ev(() => Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && __t.holds.length === 1));
 
+check("trash: a full bin spills, bag it, down the chute", await ev(() => { const b = __t.trashBins.lobby, m0 = __t.messes.length; __t.trashAdd(b, b.cap + 1);
+  const spilled = __t.messes.length > m0; __t.binBag(b); const bagged = __t.bagCarry.length === 1 && b.n === 0; const s0 = __t.shift.stats.score; __t.chuteDrop();
+  return spilled && bagged && !__t.bagCarry.length && __t.shift.stats.score === s0 + 10; }));
+
 console.log("\nsandbox: the restroom");
 await ev(() => { const d = __t.doors.find(d => !d.push && Math.abs(d.c - 9.65) < 0.1); if (d && !d.open) __t.toggleDoor(d);
   __t.player.x = 10.25; __t.player.z = 31.2; const dx = 0, dy = 0.41 - 1.65, dz = 32.3 - 31.2; __t.player.yaw = Math.atan2(-dx, -dz); __t.player.pitch = Math.atan2(dy, Math.hypot(dx, dz)); });
@@ -89,12 +93,25 @@ check("stand back up: pants up", await ev(() => { const hip = __t.meBody().rig.l
 console.log("\nsimulation: starts bare");
 await freshStore("simulation");
 const sim = await ev(() => { const all = __t.catalog.flatMap(t => [t, ...(t.copies || [])]), hall = __t.doors.find(d => d.push && !d.alongX);
-  return { dana: !!__t.emp.c, board: __t.jobBoardMesh().g.visible, theater: hall.locked, lib: all.filter(c => c.libLocked).length, members: __t.posTerm.members.filter(m => m.active).length }; });
+  return { dana: __t.staff.length, board: __t.jobBoardMesh().g.visible, theater: hall.locked, lib: all.filter(c => c.libLocked).length, members: __t.posTerm.members.filter(m => m.active).length }; });
 check("no Dana, no job board", !sim.dana && !sim.board);
 check("theater locked, library tiers off the shelves", sim.theater && sim.lib > 0, `${sim.lib} tapes`);
 check("a small member base", sim.members === 25, `${sim.members}`);
-await ev(() => __t.upgBuy("hireDana")); await page.waitForTimeout(1500);
-check("hiring Dana: she shows up, the board goes up", await ev(() => !!__t.emp.c && __t.jobBoardMesh().g.visible));
+await ev(() => __t.upgBuy("hire")); await page.waitForTimeout(1500);
+const apps = await ev(() => ({ open: __t.hiring.open, n: __t.hiring.apps.length, totals: __t.hiring.apps.map(a => Object.values(a.levels).reduce((x, y) => x + y, 0)), names: new Set(__t.hiring.apps.map(a => a.first + a.last)).size }));
+check("hiring: three applicants, every one's stats add up the same", apps.open && apps.n === 3 && apps.totals.every(t => t === apps.totals[0]) && apps.names === 3, JSON.stringify(apps));
+await ev(() => { __t.hirePick(1); __t.staff[0].sched[__t.weekday()] = (1 << 15) - 1; }); await page.waitForTimeout(1500);   // (on the clock all day today)
+check("the hire shows up and the board goes up", await ev(() => __t.staff.length === 1 && !!__t.staff[0].c && __t.jobBoardMesh().g.visible && !__t.hiring.open));
+const cost = await ev(async () => { const c0 = __t.hireCost(); __t.upgBuy("hire"); await new Promise(r => setTimeout(r, 3000)); __t.hirePick(0); return { c0, c1: __t.hireCost(), n: __t.staff.length }; });
+check("a second hire, and the next one costs more", cost.n === 2 && cost.c1 > cost.c0, JSON.stringify(cost));
+check("the schedule: 25 hours max, and off the clock they head out the door", await ev(() => {
+  const e = __t.staff[0], d = __t.weekday(); e.sched = Array(7).fill(0);
+  const err0 = __t.setSched(e.id, d, 5, true);
+  e.sched = Array(7).fill(0); for (let k = 0; k < 25; k++) e.sched[Math.floor(k / 5)] |= 1 << (10 + k % 5);   // 25 hours, all evenings (not now)
+  const full = __t.setSched(e.id, 6, 3, true);
+  e.state = "post"; e.t = 0; __t.empTick(0.05);
+  return !err0 && /25 HOURS/.test(full || "") && e.leaving && e.state === "toExit"; }));
+check("skills level up with XP (you and staff)", await ev(() => { const e = __t.staff[0], l0 = __t.lv(e, "dex"); __t.gainXp(e, "dex", __t.xpToNext(l0) + 1); __t.gainXp("you", "str", __t.xpToNext(1) + 1); return __t.lv(e, "dex") === l0 + 1 && __t.lv("you", "str") >= 2; }));
 
 console.log(`\nerrors on the page: ${errors.length}`); errors.slice(0, 3).forEach(e => console.log("   " + e));
 check("no page errors overall", errors.length === 0);
