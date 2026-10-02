@@ -1,6 +1,6 @@
 // Fetch real posters from TMDB for every tape and embed them in covers.js
 // (file:// can't load local images into WebGL, so they ride along as data
-// URIs), plus art.js's old VaultVision art for the few shows TMDB can't match. TV tapes get their own season's poster when TMDB has one —
+// URIs); the few shows TMDB can't match keep the cover they already had in covers.js. TV tapes get their own season's poster when TMDB has one —
 // usually the DVD season art — else the show poster; movies get the poster.
 // Matching: VaultVision's CREDITS.md TMDB link when present, else a search.
 // Review/override bad matches in OVERRIDES, then rerun. No deps:
@@ -107,24 +107,26 @@ async function work() {
 }
 await Promise.all(Array.from({ length: 8 }, work));   // 8 in flight stays well under TMDB's rate limit
 
-// unmatched shows keep their old art.js cover; everything else in art.js is shadowed
-await import("./art.js");
-for (const t of window.VAULT_CATALOG) if (!art[`tmdb/${t.id}.jpg`] && window.VAULT_ART?.[t.art]) art[t.art] = window.VAULT_ART[t.art];
+// unmatched shows keep the cover they had: the last covers.js's (a first run has none, and they go without)
+await import("./covers.js").catch(() => {});
+const prev = window.VAULT_ART || {};
+for (const t of window.VAULT_CATALOG) if (!art[`tmdb/${t.id}.jpg`] && prev[t.art]) art[t.art] = prev[t.art];
 // wall posters, most-voted first: a few TV shows in their original VaultVision
 // poster art (the -tall variant — TMDB season/box art isn't poster art), no
 // cartoons (anime's fine), and movies in their real TMDB poster at w500
 const byVotes = ids => ids.filter(id => manifest[id]?.votes).sort((a, b) => manifest[b].votes - manifest[a].votes);
 const isMovie = id => shows.get(id).flat && shows.get(id).eps === 1;
+const tallFile = id => path.join(ROOT, "art", `${id}-tall.jpg`);
+const tallArt = id => {                           // the show's tall VaultVision poster: the file if it's small enough to embed, else last run's copy
+  const f = tallFile(id); if (!fs.existsSync(f)) return null;
+  return fs.statSync(f).size < 200e3 ? "data:image/jpeg;base64," + fs.readFileSync(f).toString("base64") : prev[`art/${id}-tall.jpg`] ?? null;   // ponytail: size cap keeps covers.js < 50 MB (GitHub warns past it)
+};
 const tvPosters = byVotes([...shows.keys()].filter(id => !isMovie(id) && !["Animation", "Broadcast Blocks"].includes(shows.get(id).category)
-  && window.VAULT_ART?.[`art/${id}-tall.jpg`]))
+  && tallArt(id)))
   // ponytail: one per franchise by 8-char id prefix (DragonBall/Z/Super took 3 of 6) — crude but enough here
   .filter((id, i, a) => !a.slice(0, i).some(p => p.slice(0, 8) === id.slice(0, 8))).slice(0, 6);
 const moviePosters = byVotes([...shows.keys()].filter(id => isMovie(id) && manifest[id]?.poster)).slice(0, 18);
-for (const id of tvPosters) {                    // full-res original when it's small enough, else art.js's downscale
-  const f = path.join(ROOT, "art", `${id}-tall.jpg`);
-  art[`art/${id}-tall.jpg`] = fs.existsSync(f) && fs.statSync(f).size < 200e3   // ponytail: size cap keeps covers.js < 50 MB (GitHub warns past it)
-    ? "data:image/jpeg;base64," + fs.readFileSync(f).toString("base64") : window.VAULT_ART[`art/${id}-tall.jpg`];
-}
+for (const id of tvPosters) art[`art/${id}-tall.jpg`] = tallArt(id);
 for (const id of moviePosters) art[`poster/${id}.jpg`] = await toData("https://image.tmdb.org/t/p/w500" + manifest[id].poster);
 const posters = moviePosters.map(id => `poster/${id}.jpg`);
 tvPosters.forEach((id, i) => posters.splice(i * 4, 0, `art/${id}-tall.jpg`));   // a show every 4th poster
