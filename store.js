@@ -2865,18 +2865,30 @@ const posterMats = [];                     // lamps-out mode: posters glow faint
 // the marquee's warm spill on the wall around each poster: one shared soft
 // halo texture, additively blended — a real point light per poster (~21 of
 // them) made every lit pixel in the store pay for every poster
+const MARQUEE_PTS = [];                    // bulb ring around one poster, wall-local coords
+for (let j = 0; j < 7; j++) { MARQUEE_PTS.push([-0.485 + (j + 0.5) * 0.97 / 7, 0.695]); MARQUEE_PTS.push([-0.485 + (j + 0.5) * 0.97 / 7, -0.695]); }
+for (let j = 0; j < 9; j++) { MARQUEE_PTS.push([-0.485, -0.695 + (j + 0.5) * 1.39 / 9]); MARQUEE_PTS.push([0.485, -0.695 + (j + 0.5) * 1.39 / 9]); }
+const HALO = { w: 1.7, h: 2.1 };           // the halo plane, meters
 const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false,
-  map: (() => { const c = document.createElement("canvas"); c.width = 64; c.height = 80; const g = c.getContext("2d");
-    const r = g.createRadialGradient(32, 40, 10, 32, 40, 40); r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.55, "rgba(255,255,255,.45)"); r.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = r; g.fillRect(0, 0, 64, 80); return new THREE.CanvasTexture(c); })() });
+  map: (() => {                            // shaped by the bulbs: a glow along their rectangle, a hot spot at each one, fading off the wall
+    const W = 170, H = 210, c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d"), img = g.createImageData(W, H);
+    const hx = 0.485, hy = 0.695;
+    for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+      const x = (px + 0.5) / W * HALO.w - HALO.w / 2, y = HALO.h / 2 - (py + 0.5) / H * HALO.h;
+      const dx = Math.max(Math.abs(x) - hx, 0), dy = Math.max(Math.abs(y) - hy, 0), out = Math.hypot(dx, dy);   // outside the ring: distance to it
+      const ring = Math.abs(x) <= hx && Math.abs(y) <= hy ? Math.min(hx - Math.abs(x), hy - Math.abs(y)) : out;   // (inside: to the nearest edge)
+      let v = 0.6 * Math.exp(-ring / 0.08);
+      for (const [bx, by] of MARQUEE_PTS) { const d2 = (x - bx) ** 2 + (y - by) ** 2; if (d2 < 0.04) v += 0.45 * Math.exp(-d2 / 0.0035); }
+      const edge = Math.min(HALO.w / 2 - Math.abs(x), HALO.h / 2 - Math.abs(y)), fade = Math.min(1, edge / 0.2);   // all the way out to nothing before the plane's edge
+      img.data[(py * W + px) * 4 + 3] = 255 * Math.min(1, v) * fade * fade; img.data.fill(255, (py * W + px) * 4, (py * W + px) * 4 + 3);
+    }
+    g.putImageData(img, 0, 0); return new THREE.CanvasTexture(c); })() });
 {
   // chosen by fetch-covers.mjs: top movies + a few top non-cartoon shows
   const picks = (window.VAULT_POSTERS || []).map(art => ({ art }));
   const loader = new THREE.TextureLoader();
   const bulbGeo = new THREE.SphereGeometry(0.022, 6, 5), bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff });   // white: the instance colors carry the chase
-  const pts = [];                          // bulb ring around one poster, wall-local coords
-  for (let j = 0; j < 7; j++) { pts.push([-0.485 + (j + 0.5) * 0.97 / 7, 0.695]); pts.push([-0.485 + (j + 0.5) * 0.97 / 7, -0.695]); }
-  for (let j = 0; j < 9; j++) { pts.push([-0.485, -0.695 + (j + 0.5) * 1.39 / 9]); pts.push([0.485, -0.695 + (j + 0.5) * 1.39 / 9]); }
+  const pts = MARQUEE_PTS;
   function placePoster(tape, x, y, z, ry, i) {  // group faces +z local; wall sits just behind
     if (!tape) return;                       // fewer posters than wall spots: leave the spot bare
     loader.load(artUrl(tape.art), t => {
@@ -2892,7 +2904,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
       g.add(bulbs);
       marquee.push({ mesh: bulbs, phases: pts.map((_, j) => i * 1.3 + j * 0.55) });
       // the bulbs' warm spill on the wall around it (see haloMat)
-      const halo = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.1), haloMat); halo.position.z = -0.046; g.add(halo);
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(HALO.w, HALO.h), haloMat); halo.position.z = -0.046; g.add(halo);
       scene.add(g);
     });
   }
