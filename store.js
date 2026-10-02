@@ -4369,7 +4369,29 @@ const shift = {
   day: SAVE?.shift?.day ?? 1, h: SAVE?.shift?.h ?? SHIFT.start, warp: 0,
   date0: SAVE?.shift?.date0 ?? new Date().setHours(12, 0, 0, 0),   // day 1's date (noon, like the POS's)
   stats: { ...shiftStats(), ...SAVE?.shift?.stats }, greet: null, report: false,
+  goals: SAVE?.shift?.goals ?? null,              // today's two goals: [{ id, n }] (see GOALS)
 };
+// ---- day goals: two a day, something to aim at (and $20 + 50 points each, at close). The numbers grow with the
+// days. got(stats) -> how far along (a count) or, for the yes/no ones, whether it still holds; done at close
+const GOALS = {
+  serve: { text: n => `Ring up ${n} customers`, n: d => Math.min(30, 6 + 2 * d), got: s => s.served },
+  rent: { text: n => `Rent out ${n} tapes`, n: d => Math.min(40, 8 + 3 * d), got: s => s.rentals },
+  signup: { sim: true, text: n => `Sign up ${n} new member${n > 1 ? "s" : ""}`, n: d => Math.min(4, 1 + Math.floor(d / 3)), got: s => s.signups },
+  upsell: { text: n => `Sell ${n} snack${n > 1 ? "s" : ""} at the counter`, n: d => Math.min(8, 2 + Math.floor(d / 2)), got: s => s.upsells },
+  noWalk: { text: () => "Nobody walks out", got: s => s.walkouts === 0 },
+  tidy: { text: () => "A clean closing check", got: (s, chk) => chk ? !(chk.bin + chk.strays + chk.messes + chk.trash + chk.lights) : null },
+};
+function dayGoals() {
+  const ids = Object.keys(GOALS).filter(id => SIM || !GOALS[id].sim), out = [];
+  while (out.length < 2) { const id = ids.splice(Math.floor(Math.random() * ids.length), 1)[0]; out.push({ id, n: GOALS[id].n?.(shift.day) ?? 0 }); }
+  return out;
+}
+function goalState(g, chk) {                      // -> { text, mark: "✓" | "✗" | "☐", have }
+  const G = GOALS[g.id], got = G.got(shift.stats, chk), counted = G.n !== undefined;
+  const ok = counted ? got >= g.n : !!chk && got === true;   // (the yes/no ones only count once the day's done...)
+  const failed = counted ? !!chk && !ok : got === false;     // (...but fail as soon as they fail)
+  return { text: G.text(g.n), mark: ok ? "✓" : failed ? "✗" : "☐", have: counted ? `${Math.min(got, g.n)}/${g.n}` : "" };
+}
 const shiftDate = () => new Date(shift.date0 + (shift.day - 1) * 864e5);
 // ---- reputation: 0..100 (1-5 stars), moved each night by how the shift went.
 // A better name brings more people in (and sells more tickets) ----
@@ -4565,10 +4587,13 @@ function skipHour() {                             // L: fast-forward an hour (th
 }
 let shiftHudTxt = "";
 function shiftHud() {
+  shift.goals ||= dayGoals();
+  const goalsTxt = shift.goals.map(g => { const st = goalState(g); return `${st.mark} ${st.text}${st.have && st.mark !== "✓" ? ` ${st.have}` : ""}`; }).join("|");
   const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} ${starStr(repStars())} · ${(b => (b < 0 ? "-$" : "$") + Math.abs(b).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }))(posTerm.budget())} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()}${staff.length ? ` · STAFF ${shift.stats.dana.toLocaleString()}` : ""}`;
-  if (txt === shiftHudTxt) return; shiftHudTxt = txt;
+  if (txt + goalsTxt === shiftHudTxt) return; shiftHudTxt = txt + goalsTxt;
   const [t, sub] = txt.split("|"), el = $("shiftClock");
-  el.innerHTML = `${t}<div class="h">${sub}</div>`; el.classList.toggle("late", late); el.style.display = "block";
+  el.innerHTML = `${t}<div class="h">${sub}</div><div class="goals">${goalsTxt.split("|").map(g => `<div class="${g[0] === "✓" ? "done" : g[0] === "✗" ? "miss" : ""}">${g}</div>`).join("")}</div>`;
+  el.classList.toggle("late", late); el.style.display = "block";
 }
 
 // the light switches: a plate of toggles on the wall, one per zone. Built in
@@ -8551,7 +8576,10 @@ function clockOut() {
   const wages = SIM ? +staff.reduce((a, e) => a + bits(e.sched[weekday()]) * empRate(e), 0).toFixed(2) : 0; if (wages) posTerm.sale(-wages);   // the staff's pay for the day: their scheduled hours
   if (posTerm.budget() < 0) logAct(`The store's in the red: -$${(-posTerm.budget()).toFixed(2)}. Nothing on the register can be bought until it's back up`, "bad");
   if (chkPts) { shiftScore(chkPts); logAct(`Closing check: ${[chk.bin && `${chk.bin} in the returns bin`, chk.strays && `${chk.strays} misshelved`, chk.messes && `${chk.messes} messes`, chk.lights && `${chk.lights} burnt-out light${chk.lights > 1 ? "s" : ""}`, chk.trash && `${chk.trash} lots of trash not taken out`, chk.empty && `${chk.empty} empty rack spots`].filter(Boolean).join(", ")}`, "bad", null, chkPts); }
+  const goals = (shift.goals || []).map(g => goalState(g, chk)), met = goals.filter(g => g.mark === "✓").length;
+  if (met) { posTerm.sale(20 * met); shiftScore(50 * met); logAct(`Day goals: ${met} of ${goals.length} met`, "good", 20 * met, 50 * met); }
   const s = shift.stats, d = shiftDate(), W = 34, money = n => "$" + n.toFixed(2);
+  const members = posTerm.members.filter(m => m.active).length, nextM = [50, 75, 100, 125, 150].find(n => n > members);
   const row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v;
   const tried = s.served + s.walkouts, score = (tried ? 100 * s.served / tried : 100) - 15 * s.stolen;
   const gradeOf = sc => sc >= 93 ? "A" : sc >= 85 ? "B" : sc >= 75 ? "C" : sc >= 60 ? "D" : "F";
@@ -8572,16 +8600,17 @@ function clockOut() {
     row("FEES WAIVED", money(s.feesWaived)), row("TOTAL TAKE", money(s.rentalTake + s.snackTake + s.feesCollected + s.tickets * SHOW.ticket - s.refunds)),
     ...(wages ? [row(`STAFF WAGES (${hrs} HRS)`, "-" + money(wages))] : []), row("STORE BUDGET", money(posTerm.budget())), line, "CLOSING CHECK",
     row("  LEFT IN RETURNS BIN", chk.bin), row("  MISSHELVED TAPES", chk.strays), row("  MESSES", chk.messes), row("  BURNT-OUT LIGHTS", chk.lights), row("  TRASH NOT TAKEN OUT", chk.trash), row("  EMPTY RACK SPOTS", chk.empty),
-    row("  POINTS", chkPts.toLocaleString()), line, "",
+    row("  POINTS", chkPts.toLocaleString()), line, "DAY GOALS", ...goals.map(g => row(`  ${g.mark} ${g.text}`.slice(0, W - 8), g.mark === "✓" ? "+$20" : "-")), line, "",
     row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`), ...repProgress(),
-    ...(SIM ? [row("NEW MEMBERS SIGNED UP", s.signups), row("WORD OF MOUTH: TOMORROW", `+${growth.pending}`)] : []),
+    ...(SIM ? [row("NEW MEMBERS SIGNED UP", s.signups), row("WORD OF MOUTH: TOMORROW", `+${growth.pending}`),
+      row("MEMBERS", nextM ? `${members} (NEXT: ${nextM})` : members)] : []),
     row("STORE SCORE", s.score.toLocaleString()), row("  YOURS", s.you.toLocaleString()), row("  THE STAFF'S", s.dana.toLocaleString()),
     row("  LOST (WALKOUTS, THEFT)", (s.score - s.you - s.dana).toLocaleString()), "", `SHIFT GRADE:  ${grade}`.padStart(22), "", "THANK YOU - BE KIND, REWIND".padStart(30),
   ].join("\n");
   $("shiftReport").style.display = "flex";
 }
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
-  shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats();
+  shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
   posTerm.setDate(shiftDate());
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
@@ -8633,7 +8662,7 @@ function saveState() {
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg,
     counterItems: Object.fromEntries(counterItemsList().map(it => { const f = cmove.item === it ? cmove.from : null; return [it.id, f ? [f.x, f.z, f.ry] : [+it.g.position.x.toFixed(3), +it.g.position.z.toFixed(3), +it.g.rotation.y.toFixed(3)]]; })), members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
-    lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
+    lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats, goals: shift.goals }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
     lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), records: posTerm.recordsAll(),
