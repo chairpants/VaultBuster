@@ -31,7 +31,7 @@ const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, cl
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
 const trashBins = {};                            // the bins, registered as they're built (see "trash" further down)
-const chute = { door: null, t: 0, at: [0, 0, 0], stand: null };   // the break room's trash chute (likewise)
+const chute = { door: null, t: 0, at: [0, 0, 0], stand: null };   // the trash chute, in the janitor's closet (likewise)
 const bath = { water: null, waterY: 0, stream: null, toiletAt: null, sinkAt: null, flushT: 0, tap: false, seat: null };   // the restroom's working parts (built with it; see bathTick)   // opening centers along their walls
 const BOH_OPENING_W = 1.8;                  // the store → hall opening: wide and doorless, just a cased opening
 // cooler stock, shelf by shelf (see the cooler): r/h in meters; glass = bottle
@@ -911,6 +911,34 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       parts.push(cyl(0.0025, 0.3, alu, bx0 + 0.02, BH - 0.52, bz0), put(new THREE.SphereGeometry(0.008, 8, 6), alu, bx0 + 0.02, BH - 0.675, bz0));   // pull chain + its bead
       for (const o of parts) { o.userData.lightZone = "closet"; aimables.push(o); }
     }
+    // the trash chute, on the wall to the left as you come in: a stainless hopper door
+    // (tips out from the top) down to the dumpster room. Bagged trash goes here
+    {
+      const cx = x0 + 0.45, g = new THREE.Group(); g.position.set(cx, 0, z0); scene.add(g);   // local +z: out of the wall into the room
+      const brushed = makeTexture((ctx, W, H) => {
+        ctx.fillStyle = "#b9bec4"; ctx.fillRect(0, 0, W, H);
+        for (let i = 0; i < 220; i++) { ctx.fillStyle = Math.random() < 0.5 ? `rgba(255,255,255,${0.03 + Math.random() * 0.05})` : `rgba(50,55,62,${0.03 + Math.random() * 0.05})`; ctx.fillRect(0, Math.random() * H, W, 1); }
+      }, 128, 128);
+      const steel = new THREE.MeshPhongMaterial({ color: 0xffffff, map: brushed, specular: 0xffffff, shininess: 70 });
+      const parts = [], add = (geo, m, x, y, z, par = g) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); parts.push(o); return o; };
+      add(new THREE.BoxGeometry(0.66, 1.02, 0.015), steel, 0, 1.13, 0.0075);                         // wall plate
+      add(new THREE.BoxGeometry(0.56, 0.045, 0.1), steel, 0, 1.31, 0.065);                           // the frame round the opening
+      add(new THREE.BoxGeometry(0.56, 0.045, 0.1), steel, 0, 0.815, 0.065);
+      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.045, 0.45, 0.1), steel, sx * 0.258, 1.06, 0.065);
+      add(new THREE.BoxGeometry(0.47, 0.45, 0.01), new THREE.MeshBasicMaterial({ color: 0x050505 }), 0, 1.06, 0.03);   // the throat, dark behind the door
+      const door = new THREE.Group(); door.position.set(0, 0.84, 0.105); g.add(door);              // hinged along its bottom edge
+      add(new THREE.BoxGeometry(0.46, 0.44, 0.018), steel, 0, 0.22, 0, door);
+      add(new THREE.BoxGeometry(0.3, 0.024, 0.024), steel, 0, 0.37, 0.05, door);                    // pull bar
+      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.02, 0.024, 0.05), steel, sx * 0.14, 0.37, 0.025, door);
+      const plate = textPlane("TRASH CHUTE", 0.42, 0.075, "#ffffff", "#9b1c1c", "Arial Black", 60);
+      plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map }); plate.position.set(0, 1.5, 0.017); g.add(plate); parts.push(plate);
+      const warn = textPlane("NO BOXES · NO LIQUIDS · KEEP CLOSED", 0.46, 0.035, "#1a1a1a", "#f2c200", "Arial", 40);
+      warn.material = new THREE.MeshLambertMaterial({ map: warn.material.map }); warn.position.set(0, 0.74, 0.017); g.add(warn); parts.push(warn);
+      for (const o of parts) { o.userData.chute = true; aimables.push(o); }
+      chute.door = door; chute.at = [cx, 1.05, z0 + 0.15]; chute.stand = { x: cx, z: z0 + 0.62, ry: Math.PI };
+      colliders.push({ x0: cx - 0.33, x1: cx + 0.33, z0, z1: z0 + 0.16, y1: 1.7 });
+    }
+
     // mop bucket: yellow tub on casters, the wringer on one end, grey water, the mop stood in it
     const mbx = x1 - 0.26, mbz = z1 - 0.3;
     bx(0.32, 0.3, 0.44, yellow, mbx, 0.2, mbz);
@@ -1034,34 +1062,6 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       const liner = put(new THREE.TorusGeometry(0.168, 0.007, 6, 30), new THREE.MeshLambertMaterial({ color: 0xd8dde2 }), cx, 0.55, cz); liner.rotation.x = Math.PI / 2;
       trashBins.breakroom = { id: "breakroom", name: "break room trash", cap: 10, x: cx, z: cz, rimY: 0.55, r: 0.15, liner: 0xd8dde2, parts: [can, liner], stand: { x: cx, z: cz - 0.62, ry: 0 } };
       colliders.push({ x0: cx - 0.17, x1: cx + 0.17, z0: cz - 0.17, z1: cz + 0.17, y1: 0.55 });
-    }
-
-    // the trash chute, on the west wall past the lockers: a stainless hopper door
-    // (tips out from the top) down to the dumpster room. Bagged trash goes here
-    {
-      const cz = 32.32, g = new THREE.Group(); g.position.set(x0, 0, cz); g.rotation.y = Math.PI / 2; scene.add(g);   // local +z: out of the wall into the room
-      const brushed = makeTexture((ctx, W, H) => {
-        ctx.fillStyle = "#b9bec4"; ctx.fillRect(0, 0, W, H);
-        for (let i = 0; i < 220; i++) { ctx.fillStyle = Math.random() < 0.5 ? `rgba(255,255,255,${0.03 + Math.random() * 0.05})` : `rgba(50,55,62,${0.03 + Math.random() * 0.05})`; ctx.fillRect(0, Math.random() * H, W, 1); }
-      }, 128, 128);
-      const steel = new THREE.MeshPhongMaterial({ color: 0xffffff, map: brushed, specular: 0xffffff, shininess: 70 });
-      const parts = [], add = (geo, m, x, y, z, par = g) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); parts.push(o); return o; };
-      add(new THREE.BoxGeometry(0.66, 1.02, 0.015), steel, 0, 1.13, 0.0075);                         // wall plate
-      add(new THREE.BoxGeometry(0.56, 0.045, 0.1), steel, 0, 1.31, 0.065);                           // the frame round the opening
-      add(new THREE.BoxGeometry(0.56, 0.045, 0.1), steel, 0, 0.815, 0.065);
-      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.045, 0.45, 0.1), steel, sx * 0.258, 1.06, 0.065);
-      add(new THREE.BoxGeometry(0.47, 0.45, 0.01), new THREE.MeshBasicMaterial({ color: 0x050505 }), 0, 1.06, 0.03);   // the throat, dark behind the door
-      const door = new THREE.Group(); door.position.set(0, 0.84, 0.105); g.add(door);              // hinged along its bottom edge
-      add(new THREE.BoxGeometry(0.46, 0.44, 0.018), steel, 0, 0.22, 0, door);
-      add(new THREE.BoxGeometry(0.3, 0.024, 0.024), steel, 0, 0.37, 0.05, door);                    // pull bar
-      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.02, 0.024, 0.05), steel, sx * 0.14, 0.37, 0.025, door);
-      const plate = textPlane("TRASH CHUTE", 0.42, 0.075, "#ffffff", "#9b1c1c", "Arial Black", 60);
-      plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map }); plate.position.set(0, 1.5, 0.017); g.add(plate); parts.push(plate);
-      const warn = textPlane("NO BOXES · NO LIQUIDS · KEEP CLOSED", 0.46, 0.035, "#1a1a1a", "#f2c200", "Arial", 40);
-      warn.material = new THREE.MeshLambertMaterial({ map: warn.material.map }); warn.position.set(0, 0.74, 0.017); g.add(warn); parts.push(warn);
-      for (const o of parts) { o.userData.chute = true; aimables.push(o); }
-      chute.door = door; chute.at = [x0 + 0.15, 1.05, cz]; chute.stand = { x: x0 + 0.62, z: cz, ry: -Math.PI / 2 };
-      colliders.push({ x0, x1: x0 + 0.16, z0: cz - 0.33, z1: cz + 0.33, y1: 1.7 });
     }
 
     // bulletin board on the hall wall (inside face), pinned notices + a schedule
@@ -4977,7 +4977,7 @@ function cutoutPutDown() {
 // patient, then leave — rung up (E on them at the counter) or not, in which
 // case the tape they walk out with sets the gates off. Paths come from a grid
 // A* over the colliders, rebuilt per trip, so doors and the moved standee count.
-const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: STORE.x, z1: 46.5, pad: 0.3 };
+const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: CLOSET.x1, z1: 46.5, pad: 0.3 };   // (x1: out to the janitor's closet)
 function navGrid(skip, extra = []) {                // extra: temporary obstacles (you, standing in the way)
   const { cell, x0, z0, pad } = NAV, nx = Math.ceil((NAV.x1 - x0) / cell), nz = Math.ceil((NAV.z1 - z0) / cell);
   const g = new Uint8Array(nx * nz), hard = new Uint8Array(nx * nz);   // g: blocked with walking room around things; hard: the things themselves
@@ -6985,7 +6985,7 @@ function pickHover() {
       : aimBag ? (more ? "E — pick up this bag too" : "Hands full")
       : aimDoor ? (aimDoor.locked ? "Locked" : `E — ${aimDoor.open ? "close" : "open"} the door`)
       : aimSwitch ? `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
-      : `Carrying ${n === 1 ? "a trash bag" : `${n} trash bags`} · the chute's in the break room<div class="cat">Right-click — set ${n === 1 ? "it" : "them"} down</div>`;
+      : `Carrying ${n === 1 ? "a trash bag" : `${n} trash bags`} · the chute's in the janitor's closet<div class="cat">Right-click — set ${n === 1 ? "it" : "them"} down</div>`;
     return;
   }
   const hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
@@ -7721,7 +7721,7 @@ function binShow(b) {                             // how full it looks
 function trashAdd(b, k = 1, spill = true) {       // something into a bin; a full one spills onto the floor in front of it
   if (!b) return;
   for (let i = 0; i < k; i++) {
-    if (b.n < b.cap) { if (++b.n === b.cap && spill) logAct(`The ${b.name} is full: bag it and take it to the chute in the break room`, "bad"); }
+    if (b.n < b.cap) { if (++b.n === b.cap && spill) logAct(`The ${b.name} is full: bag it and take it to the chute in the janitor's closet`, "bad"); }
     else if (spill) {
       messAdd(b.towels ? "towel" : Math.random() < 0.6 ? "wrapper" : "cup", b.stand.x + (Math.random() - 0.5) * 0.7, b.stand.z + (Math.random() - 0.5) * 0.3);
       if (!b.spilled) { b.spilled = true; logAct(`The ${b.name} is overflowing onto the floor`, "bad"); }
