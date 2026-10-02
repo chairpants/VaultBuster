@@ -296,7 +296,7 @@ const SLOTS = 3, slotKey = n => n === 1 ? "vaultbuster-save" : `vaultbuster-save
 const SLOT = (() => { try { const n = +localStorage.getItem("vaultbuster-slot"); return n >= 1 && n <= SLOTS ? n : 1; } catch { return 1; } })();
 const SAVE_KEY = slotKey(SLOT);
 // settings (per browser, not per store): see the title menu's SETTINGS
-const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
+const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, aa: !LOWMEM, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
 // the game mode. Simulation: a bare-bones store you build up (no staff, no
@@ -8363,7 +8363,13 @@ function saveSettings() { try { localStorage.setItem("vaultbuster-settings", JSO
 function applySettings() {
   window.VaultAmbience?.setVolume?.(SETTINGS.sound / 100);
   SHIFT.hour = SETTINGS.shiftMin * 60 / 14;
+  aaApply();
 }
+function aaApply() {                              // smooth edges: 4x multisampling on the main pass (rebuilt with the glow target: they share a depth texture)
+  const n = SETTINGS.aa ? 4 : 0; if (mainRT.samples === n) return;
+  mainRT.samples = n; mainRT.dispose(); glowRT.dispose();
+}
+aaApply();
 // the main menu: continue the store in the active slot (or resume), load another slot, start a new
 // store in a slot (then pick the mode), settings. Switching stores reloads the page into that slot
 function titleMenu() {
@@ -8406,6 +8412,7 @@ function titleMenu() {
   bind("setSound", "sound", v => `${v}%`);
   bind("setSens", "sens", v => `${v}%`);
   bind("setInvert", "invertY", v => v ? "on" : "off");
+  bind("setAA", "aa", v => v ? "on" : "off");
   bind("setShift", "shiftMin", v => `${v} min`);
   const tv = $("setTv"), tvV = $("setTvV"); tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`;
   tv.oninput = () => { tvSet.volume = +tv.value; tvV.textContent = `${tvSet.volume}%`; applyTv(); };   // (the same setting as the TV's own picture menu)
