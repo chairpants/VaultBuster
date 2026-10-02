@@ -20,13 +20,15 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), join(n), prospect(skip), enroll(member), activeNums(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, rentMax, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), join(n), prospect(skip), enroll(member), activeNums(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
-  const COLS = 80, ROWS = 25;
-  // DOS-app palette: blue screen, light grey text, cyan title/key bars, grey
-  // highlight bar for the arrow-key selection. VT323 (Google Fonts, loaded in
-  // index.html) with a monospace fallback offline
-  const C = { bg: "#0000aa", fg: "#c8c8d8", bar: "#00aaaa", barFg: "#000000", sel: "#c8c8d8", selFg: "#0000aa" };
+  const COLS = 80, ROWS = 30;
+  // DOS-app palette: blue screen, light grey text, bright white values, cyan
+  // labels and frames, yellow headings, green money, red warnings; a grey bar
+  // for the selection. VT323 (Google Fonts, loaded in index.html) with a
+  // monospace fallback offline
+  const P = { bg: "#0000aa", fg: "#c8c8d8", hi: "#ffffff", yel: "#ffff55", cyan: "#55ffff", dcyan: "#00aaaa", grn: "#55ff55", red: "#ff5555",
+    gray: "#8a8ad0", blk: "#000000", deep: "#000077", shadow: "#000044", sel: "#c8c8d8" };
   const FONT = "VT323, 'Courier New', monospace";
 
   // ---- seeded randomness: the same customers every visit within a session ----
@@ -71,7 +73,8 @@ window.createPOS = function createPOS(api) {
     let num; do num = int(10001, 48999); while (usedNums.has(num)); usedNums.add(num);
     const first = pick(FIRST);
     customers.push({
-      num, first, female: FIRST.indexOf(first) % 2 === 1, last: pick(LAST),   // FIRST alternates his / her names phone: `555-${String(int(0, 9999)).padStart(4, "0")}`,
+      num, first, female: FIRST.indexOf(first) % 2 === 1, last: pick(LAST),   // FIRST alternates his / her names
+      phone: `555-${String(num * 7919 % 10000).padStart(4, "0")}`,   // (from the member #, not rnd(): the same people as in saves made before phones came back)
       addr: `${int(12, 9870)} ${pick(STREETS)}`, since: int(1987, 1996), lifetime: int(3, 640),
       notes: pick(NOTES), heavy: rnd() < 0.2, rentals: [],
     });
@@ -89,14 +92,19 @@ window.createPOS = function createPOS(api) {
   const fullName = c => `${c.last}, ${c.first}`;
   // every copy store.js pulled off the shelf is checked out to somebody —
   // regulars take the lion's share
-  const rentals = api.rented.map(copy => {
+  // (nobody has more than RENT_MAX out: a saved store from before the limit gets its extras spread
+  // round other members; anything no member has room for goes back on the shelf)
+  const RENT_MAX = 3, room = c => c.rentals.length < RENT_MAX;
+  const rentals = [...api.rented].map(copy => {   // (a copy of the list: unrent takes copies out of the real one)
     const saved = api.savedRental?.(copy), p = priceOf(copy);
-    const cust = saved && customers.find(c => c.num === saved[0]) || (rnd() < 0.55 ? pick(heavy) : pick(members()));
+    let cust = saved && customers.find(c => c.num === saved[0]), keep = !!cust && room(cust);
+    if (!keep) { const hv = heavy.filter(room), ms = members().filter(room); cust = rnd() < 0.55 && hv.length ? pick(hv) : ms.length ? pick(ms) : null; }   // (members only: a small base keeps fewer tapes out)
+    if (!cust) { api.unrent?.(copy); return null; }
     cust.active = true;                            // (anyone with a tape out is a member, whatever the list said)
-    const out = saved ? new Date(saved[1]) : new Date(TODAY - int(0, p.nights + 4) * DAY), due = new Date(+out + p.nights * DAY);
+    const out = keep ? new Date(saved[1]) : new Date(TODAY - int(0, p.nights + 4) * DAY), due = new Date(+out + p.nights * DAY);
     const r = { copy, cust, out, due };
     copy.rental = r; cust.rentals.push(r); return r;
-  });
+  }).filter(Boolean);
   const daysLate = r => Math.max(0, Math.round((TODAY - r.due) / DAY));
   const lateFee = r => daysLate(r) * priceOf(r.copy).late;
   const custFees = c => (c.owed || 0) + c.rentals.reduce((a, r) => a + lateFee(r), 0);   // on the account, plus what the late ones out now are running up
@@ -107,86 +115,240 @@ window.createPOS = function createPOS(api) {
     : c.offShelf ? "UNACCOUNTED" : "ON SHELF";
   const copyIn = t => copiesOf(t).filter(c => !c.offShelf).length;
 
-  // ---- terminal state ----
+  // ---- the screen: an 80x30 grid of cells, each { ch, fg, bg } (or px: [top, bottom], two
+  // square "pixels" for the logo), painted onto a canvas: the in-world monitor's, and a big one
+  // for the close-up. Box-drawing lines and blocks are drawn as shapes, not font glyphs, so the
+  // sections' borders join up cleanly at any size ----
   const canvas = document.createElement("canvas"); canvas.width = 800; canvas.height = 600;   // ~the monitor glass's 4:3
-  const ctx = canvas.getContext("2d");
   const el = document.createElement("div"); el.id = "posTerm"; el.hidden = true;
-  const pre = document.createElement("pre"); el.appendChild(pre); document.body.appendChild(el);
-  let open = false, mode = "boot", input = "", user = "";
-  let scroll = ["Starting MS-DOS...", "", "MS-DOS Version 6.22", "", "VAULTBUSTER VIDEO #0417 - REGISTER 01", "", "C:\\>"];   // scroll: raw console lines before the app starts
-  let screen = null;                               // app screen: { title, lines(), prompt, submit(v), back() }
+  const view = document.createElement("canvas"); el.appendChild(view); document.body.appendChild(el);   // the close-up
+  let open = false, mode = "login", input = "", user = "", blink = true, login = 0;   // login: 0 waiting, 1-9 the badge/password sequence
+  let screen = null;                               // app screen: { title, lines() | render(g, top, rows), prompt, submit(v), pick }
   const stack = [];
-  let msg = "";                                    // one-line status message under the body
+  let msg = "";                                    // one-line status message above the prompt
+  let hover = null, hits = [], layout = { top: 3, rows: 22 };   // hover: the cell under the mouse; hits: clickable spans this frame
+  const WD = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+  const BODY = ROWS - 8;                           // body rows under the compact header (see frame)
 
-  function blankApp() { return Array.from({ length: ROWS }, () => ({ t: "", inv: false })); }
-  function frame() {                               // -> ROWS rows of { t, inv }
-    if (mode !== "app") {
-      const rows = blankApp(), lines = [...scroll];
-      lines.slice(-ROWS).forEach((l, i) => rows[i].t = l);
-      return rows;
+  const blankGrid = () => Array.from({ length: ROWS }, () => Array.from({ length: COLS }, () => ({ ch: " ", fg: P.fg, bg: P.bg, px: null })));
+  function put(g, r, c, s, fg, bg) { s = String(s); for (let i = 0; i < s.length; i++) { const k = g[r]?.[c + i]; if (!k) continue; k.ch = s[i]; k.px = null; if (fg) k.fg = fg; if (bg) k.bg = bg; } }
+  function tint(g, r, c0, c1, fg, bg) { for (let c = c0; c <= c1; c++) { const k = g[r]?.[c]; if (!k) continue; if (fg) k.fg = fg; if (bg) k.bg = bg; } }
+  const center = (g, r, s, fg, bg, c0 = 0, c1 = COLS - 1) => put(g, r, c0 + Math.floor((c1 - c0 + 1 - s.length) / 2), s, fg, bg);
+  function box(g, r0, c0, r1, c1, dbl, fg) {      // an outline
+    const [h, v, tl, tr, bl, br] = dbl ? "═║╔╗╚╝" : "─│┌┐└┘";
+    put(g, r0, c0, tl + h.repeat(c1 - c0 - 1) + tr, fg); put(g, r1, c0, bl + h.repeat(c1 - c0 - 1) + br, fg);
+    for (let r = r0 + 1; r < r1; r++) { put(g, r, c0, v, fg); put(g, r, c1, v, fg); }
+  }
+  function rule(g, r, c0, c1, kind, fg) {          // a divider across a box: "dbl" ╠═╣ · "mid" ╟─╢ · "single" ├─┤
+    const [a, h, b] = kind === "dbl" ? "╠═╣" : kind === "mid" ? "╟─╢" : "├─┤";
+    put(g, r, c0, a + h.repeat(c1 - c0 - 1) + b, fg);
+  }
+
+  // the logo: VAULTBUSTER in 5x7 pixel letters, yellow running to orange, with a drop shadow:
+  // 8 pixel rows = 4 rows of half-block cells
+  const FONT5 = {
+    V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"], A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"], L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"], B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+    S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"], E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+  };
+  const LOGO = "VAULTBUSTER", LOGO_W = LOGO.length * 6;  // (5 wide + a gap; the last gap holds the shadow)
+  const RAMP = ["#ffff88", "#ffff55", "#ffee33", "#ffcc22", "#ffaa11", "#ff8800", "#ff6600"];
+  function logo(g, r0, c0) {
+    const on = (x, y) => { const i = Math.floor(x / 6), k = x % 6; return y >= 0 && y < 7 && i >= 0 && i < LOGO.length && k < 5 && FONT5[LOGO[i]][y][k] === "1"; };
+    for (let row = 0; row < 4; row++) for (let x = 0; x < LOGO_W; x++) {
+      const k = g[r0 + row]?.[c0 + x]; if (!k) continue;
+      const px = [0, 1].map(h => { const y = row * 2 + h; return on(x, y) ? RAMP[y] : on(x - 1, y - 1) ? P.shadow : k.bg; });
+      if (px[0] !== k.bg || px[1] !== k.bg) { k.px = px; k.ch = " "; }
     }
-    const rows = blankApp();
-    rows[0] = { t: L(` VAULTBUSTER VIDEO  POS/NET 2.3    STORE #0417  TERM 01  ${user}`, COLS - 16) + R(`${fmtD(TODAY)} ${clock()} `, 16), inv: true };
-    rows[1].t = " " + screen.title;
-    rows[2].t = " " + "-".repeat(COLS - 2);
-    screen.lines().slice(0, ROWS - 7).forEach((l, i) => rows[3 + i].t = l);
+  }
+  const TAG = "·  V I D E O   ·   P O S / N E T   2 . 3  ·";
+
+  function statusBar(g, r) {                       // who, when, money: split by bars
+    const parts = [[`EMP ${user || "----"}`, P.hi], ["TERM 01", P.fg], [`${WD[TODAY.getDay()]} ${fmtD(TODAY)}`, P.yel], [clock(), P.yel], [`BUDGET ${money(budget)}`, budget < 0 ? P.red : P.grn]];
+    if (api.reputation) parts.push(["*".repeat(api.reputation().stars).padEnd(5, "."), P.yel]);
+    let c = 2; parts.forEach(([t, fg], i) => { if (i) { put(g, r, c, "│", P.dcyan); c += 2; } put(g, r, c, t, fg); c += t.length + 1; });
+  }
+  function headerBig(g) {                          // main menu: the logo up top
+    logo(g, 1, Math.floor((COLS - LOGO_W) / 2));
+    center(g, 5, TAG, P.cyan);
+    rule(g, 6, 0, COLS - 1, "dbl", P.dcyan); statusBar(g, 7); rule(g, 8, 0, COLS - 1, "mid", P.dcyan);
+  }
+  function headerSmall(g) {                        // everywhere else: the name in the top border, the screen's title on a bar
+    put(g, 0, 2, " VAULTBUSTER ", P.yel); put(g, 0, 15, " POS/NET 2.3 ", P.cyan);
+    const right = ` EMP ${user} │ ${fmtD(TODAY)} ${clock()} │ ${money(budget)} `; put(g, 0, COLS - 2 - right.length, right, P.fg);
+    tint(g, 1, 1, COLS - 2, P.blk, P.dcyan); put(g, 1, 2, "► " + screen.title.slice(0, COLS - 6), P.blk, P.dcyan);
+    rule(g, 2, 0, COLS - 1, "mid", P.dcyan);
+  }
+  function keyBar(g, r, keys) {                    // [cap, label, action]: black strip under the frame, cyan key caps
+    tint(g, r, 0, COLS - 1, P.fg, P.blk);
+    let c = 1;
+    for (const [k, label, act] of keys) {
+      put(g, r, c, ` ${k} `, P.blk, P.dcyan); put(g, r, c + k.length + 2, ` ${label}`, P.hi, P.blk);
+      hits.push({ r, c0: c, c1: c + k.length + label.length + 2, act }); c += k.length + label.length + 5;
+    }
+  }
+  const press = k => () => key({ key: k, preventDefault() {} });   // (a click on a key cap: as if it were pressed)
+  function footer(g) {
+    rule(g, ROWS - 5, 0, COLS - 1, "mid", P.dcyan);
+    if (msg) put(g, ROWS - 4, 2, msg.slice(0, COLS - 4), /INVALID|UNKNOWN|INSUFFICIENT|REQUIRED|NOT |NO SUCH|FULL|FIRST|CAN'T|PART TIME/.test(msg) ? P.red
+      : /ORDERED|PURCHASED|SET:|ARMED|ACCEPTED|SILENCED|WELCOME|CLEARED|SAVED|HIRED/.test(msg) ? P.grn : P.yel);
+    const label = `${screen.prompt || "SELECTION"}: `;
+    put(g, ROWS - 3, 2, label, P.cyan); put(g, ROWS - 3, 2 + label.length, input, P.hi); put(g, ROWS - 3, 2 + label.length + input.length, blink ? "█" : " ", P.hi);
+    keyBar(g, ROWS - 1, [["F1", "HELP", press("F1")], ...(screen.pager ? [["N", "NEXT", () => { msg = ""; screen.submit("N"); }], ["P", "PREV", () => { msg = ""; screen.submit("P"); }]] : [["F2", "FIND", press("F2")]]),
+      ["ENTER", "OK", press("Enter")], ["ESC", "BACK", press("Escape")], ["F10", "LOG OFF", press("F10")]]);
+  }
+  // a body line: plain text, colored by what it looks like (or { t, head: true } for a column heading)
+  function colorLine(g, r, l) {
+    const head = typeof l === "object" && l, t = (head ? l.t : l || "").slice(0, COLS - 2);
+    if (head) { tint(g, r, 1, COLS - 2, P.yel, P.deep); put(g, r, 1, t, P.yel); return; }
+    put(g, r, 1, t, P.fg);
+    const lab = /^(\s*[A-Z#][A-Z #/.'-]*?\.{2,}:)/.exec(t);   // " TITLE....: value"
+    if (lab) { tint(g, r, 1, lab[1].length, P.cyan); tint(g, r, 1 + lab[1].length, COLS - 2, P.hi); }
+    const mark = (re, fg) => { for (const m of t.matchAll(re)) tint(g, r, 1 + m.index, m.index + m[0].length, fg); };
+    mark(/\$-?[\d,]+\.\d\d/g, P.grn); mark(/PAGE \d+ OF \d+/g, P.gray);
+    mark(/\bON SHELF\b|\bREGULAR\b|GOOD STANDING|\bINSTALLED\b/g, P.grn);
+    mark(/\bLATE \d+D\b|LOST - STOLEN|\bUNHAPPY\b|\bDISARMED\b/g, P.red); mark(/\*\*\*[^*]*\*\*\*/g, P.red);
+  }
+  const pickRect = (pk, i) => { if (pk.rect) return pk.rect(i); const l = pk.line(i); return l >= 0 && l < layout.rows ? { r: layout.top + l, c0: 1, c1: COLS - 2 } : null; };
+
+  function frame() {                               // -> the grid for this moment
+    const g = blankGrid(); hits = [];
+    box(g, 0, 0, ROWS - 2, COLS - 1, true, P.dcyan);
+    if (mode === "login") { loginScreen(g); return g; }
+    const big = screen === mainMenu, top = big ? 9 : 3, rows = ROWS - 5 - top;   // the body runs down to the footer's divider
+    layout = { top, rows };
+    if (big) headerBig(g); else headerSmall(g);
+    if (screen.render) screen.render(g, top, rows);
+    else screen.lines().slice(0, rows).forEach((l, i) => colorLine(g, top + i, l));
     const pk = screen.pick;
-    if (pk && pk.count()) { pk.cur = Math.min(pk.cur, pk.count() - 1); const r = rows[3 + pk.line(pk.cur)]; if (r) r.sel = true; }
-    rows[ROWS - 4].t = " " + "-".repeat(COLS - 2);
-    rows[ROWS - 3].t = msg ? " " + msg : "";
-    rows[ROWS - 2].t = ` ${screen.prompt || "SELECTION"}: ${input}\u2588`;
-    rows[ROWS - 1] = { t: L((screen.pick ? " \u2191\u2193=MOVE  " : " ") + "ENTER=SELECT   ESC=BACK   F10=LOG OFF" + (screen.pager ? "   N/P=PAGE" : ""), COLS), inv: true };
-    return rows;
+    if (pk && pk.count()) { pk.cur = Math.min(pk.cur, pk.count() - 1); const rc = pickRect(pk, pk.cur); if (rc) tint(g, rc.r, rc.c0, rc.c1, P.bg, P.sel); }
+    footer(g);
+    return g;
+  }
+
+  // ---- the login screen: what the monitor shows whenever nobody's logged in ----
+  function loginScreen(g) {
+    logo(g, 2, Math.floor((COLS - LOGO_W) / 2)); center(g, 6, TAG, P.cyan);
+    const x0 = 19, x1 = 60, y0 = 8, y1 = 14;
+    box(g, y0, x0, y1, x1, false, P.dcyan); center(g, y0, " SECURE LOGIN ", P.yel, null, x0, x1);
+    const field = (r, k, v, fg = P.hi) => { put(g, r, x0 + 3, k, P.cyan); put(g, r, x0 + 3 + k.length + 1, v, fg); };
+    field(y0 + 1, "STORE.....:", "#0417  ELM ST PLAZA"); field(y0 + 2, "TERMINAL..:", "REGISTER 01");
+    field(y0 + 3, "EMPLOYEE..:", login >= 1 ? "0042  (BADGE)" : "____", login >= 1 ? P.hi : P.gray);
+    field(y0 + 4, "PASSWORD..:", login >= 2 ? "*".repeat(Math.min(6, login - 1)).padEnd(6, "_") : "______", login >= 2 ? P.hi : P.gray);
+    field(y0 + 5, "STATUS....:", login >= 9 ? "ACCESS GRANTED" : login >= 8 ? "VERIFYING..." : "READY", login >= 9 ? P.grn : login >= 8 ? P.yel : P.fg);
+    const btn = login ? "              " : "[  LOG IN  ]";
+    center(g, y1 + 2, btn, P.blk, login ? null : P.dcyan);
+    if (!login) { const c0 = Math.floor((COLS - btn.length) / 2); hits.push({ r: y1 + 2, c0, c1: c0 + btn.length - 1, act: startLogin }); }
+    center(g, y1 + 4, login ? "" : "SWIPE BADGE OR PRESS ENTER TO LOG IN", !open || blink ? P.yel : P.bg);
+    rule(g, 20, 0, COLS - 1, "mid", P.dcyan);
+    const late = rentals.filter(r => daysLate(r)).length, f = api.feature?.();
+    put(g, 21, 2, "RETURNS BIN", P.cyan); put(g, 21, 14, R(api.returnBin().length, 3), P.hi);
+    put(g, 22, 2, "OVERDUE....", P.cyan); put(g, 22, 14, R(late, 3), late ? P.red : P.hi);
+    put(g, 23, 2, "MEMBERS....", P.cyan); put(g, 23, 14, R(members().length, 3), P.hi);
+    put(g, 21, 24, "TONIGHT...", P.cyan); put(g, 21, 35, f ? `${up(f.title).slice(0, 26)} 8PM` : "NO FEATURE", f ? P.hi : P.gray);
+    put(g, 22, 24, "GATES.....", P.cyan); put(g, 22, 35, api.alarm() ? "*** ALARM ***" : api.gatesArmed() ? "ARMED" : "DISARMED", api.alarm() ? P.red : api.gatesArmed() ? P.grn : P.red);
+    put(g, 23, 24, "BUDGET....", P.cyan); put(g, 23, 35, money(budget), budget < 0 ? P.red : P.grn);
+    const when = `${WD[TODAY.getDay()]} ${fmtD(TODAY)}`; put(g, 21, COLS - 3 - when.length, when, P.yel); put(g, 22, COLS - 3 - clock().length, clock(), P.yel);
+    put(g, 23, COLS - 21, "SCO UNIX 3.2 · TTY01", P.gray);
+    put(g, ROWS - 3, 2, `LAST LOGIN: ${fmtD(new Date(TODAY - DAY))} 21:47 ON TTY01`, P.gray);
+    keyBar(g, ROWS - 1, open ? [["ENTER", "LOG IN", startLogin], ["ESC", "WALK AWAY", press("Escape")]] : []);
+  }
+  let loginTimers = [];
+  function startLogin() {                          // the badge, the password, a beat to verify, and in
+    if (login) return;
+    const steps = [[0, 1], [160, 2], [230, 3], [300, 4], [370, 5], [440, 6], [510, 7], [580, 8], [950, 9]];
+    loginTimers = steps.map(([t, s]) => setTimeout(() => { login = s; draw(); }, t));
+    loginTimers.push(setTimeout(() => {
+      login = 0; user = "0042"; mode = "app"; stack.length = 0; screen = mainMenu; input = "";
+      msg = `BADGE ACCEPTED. WELCOME BACK. LAST LOGIN: ${fmtD(new Date(TODAY - DAY))} 21:47 ON TTY01`; draw();
+    }, 1250));
+  }
+  function loginReset() { loginTimers.forEach(clearTimeout); loginTimers = []; login = 0; }
+
+  // ---- painting a grid onto a canvas ----
+  const BLOCKS = { "█": [0, 1, 1], "▀": [0, 0.5, 1], "▄": [0.5, 1, 1], "░": [0, 1, 0.25], "▒": [0, 1, 0.5], "▓": [0, 1, 0.75] };   // [top, bottom, alpha]
+  function boxLines(x, ch, l, t, w, h, lw) {        // a box-drawing character as strokes; -> false if it isn't one
+    const r = l + w, b = t + h, o = lw % 2 ? 0.5 : 0, cx = Math.round(l + w / 2) + o, cy = Math.round(t + h / 2) + o, d = Math.max(2, Math.round(w * 0.2));
+    const S = [];
+    const s = (a, b2, c, e) => S.push([a, b2, c, e]);
+    switch (ch) {
+      case "─": s(l, cy, r, cy); break; case "│": s(cx, t, cx, b); break;
+      case "┌": s(cx, cy, r, cy); s(cx, cy, cx, b); break; case "┐": s(l, cy, cx, cy); s(cx, cy, cx, b); break;
+      case "└": s(cx, t, cx, cy); s(cx, cy, r, cy); break; case "┘": s(cx, t, cx, cy); s(l, cy, cx, cy); break;
+      case "├": s(cx, t, cx, b); s(cx, cy, r, cy); break; case "┤": s(cx, t, cx, b); s(l, cy, cx, cy); break;
+      case "┬": s(l, cy, r, cy); s(cx, cy, cx, b); break; case "┴": s(l, cy, r, cy); s(cx, t, cx, cy); break;
+      case "┼": s(l, cy, r, cy); s(cx, t, cx, b); break;
+      case "═": s(l, cy - d, r, cy - d); s(l, cy + d, r, cy + d); break;
+      case "║": s(cx - d, t, cx - d, b); s(cx + d, t, cx + d, b); break;
+      case "╔": s(cx - d, cy - d, r, cy - d); s(cx - d, cy - d, cx - d, b); s(cx + d, cy + d, r, cy + d); s(cx + d, cy + d, cx + d, b); break;
+      case "╗": s(l, cy - d, cx + d, cy - d); s(cx + d, cy - d, cx + d, b); s(l, cy + d, cx - d, cy + d); s(cx - d, cy + d, cx - d, b); break;
+      case "╚": s(cx - d, t, cx - d, cy + d); s(cx - d, cy + d, r, cy + d); s(cx + d, t, cx + d, cy - d); s(cx + d, cy - d, r, cy - d); break;
+      case "╝": s(cx + d, t, cx + d, cy + d); s(l, cy + d, cx + d, cy + d); s(cx - d, t, cx - d, cy - d); s(l, cy - d, cx - d, cy - d); break;
+      case "╠": s(cx - d, t, cx - d, b); s(cx + d, t, cx + d, cy - d); s(cx + d, cy - d, r, cy - d); s(cx + d, b, cx + d, cy + d); s(cx + d, cy + d, r, cy + d); break;
+      case "╣": s(cx + d, t, cx + d, b); s(cx - d, t, cx - d, cy - d); s(l, cy - d, cx - d, cy - d); s(cx - d, b, cx - d, cy + d); s(l, cy + d, cx - d, cy + d); break;
+      case "╟": s(cx - d, t, cx - d, b); s(cx + d, t, cx + d, b); s(cx + d, cy, r, cy); break;
+      case "╢": s(cx - d, t, cx - d, b); s(cx + d, t, cx + d, b); s(l, cy, cx - d, cy); break;
+      case "╤": s(l, cy - d, r, cy - d); s(l, cy + d, r, cy + d); s(cx, cy + d, cx, b); break;
+      case "╧": s(l, cy - d, r, cy - d); s(l, cy + d, r, cy + d); s(cx, t, cx, cy - d); break;
+      default: return false;
+    }
+    x.beginPath(); for (const [a, b2, c, e] of S) { x.moveTo(a, b2); x.lineTo(c, e); } x.stroke(); return true;
+  }
+  function paint(cv, g) {
+    const x = cv.getContext("2d"), W = cv.width, H = cv.height, cw = W / COLS, ch = H / ROWS;
+    const X = c => Math.round(c * cw), Y = r => Math.round(r * ch);
+    x.fillStyle = P.bg; x.fillRect(0, 0, W, H);
+    x.font = `${Math.round(ch * 1.0)}px ${FONT}`; x.textBaseline = "middle"; x.textAlign = "center";
+    const lw = Math.max(1, Math.round(ch / 13)); x.lineWidth = lw; x.lineCap = "square";
+    g.forEach((row, r) => {
+      for (let c = 0; c < COLS;) {                 // backgrounds, in runs
+        let e = c; while (e + 1 < COLS && row[e + 1].bg === row[c].bg) e++;
+        if (row[c].bg !== P.bg) { x.fillStyle = row[c].bg; x.fillRect(X(c), Y(r), X(e + 1) - X(c), Y(r + 1) - Y(r)); }
+        c = e + 1;
+      }
+      row.forEach((k, c) => {
+        const l = X(c), t = Y(r), w = X(c + 1) - l, h = Y(r + 1) - t;
+        if (k.px) { const m = Math.round(h / 2); x.fillStyle = k.px[0]; x.fillRect(l, t, w, m); x.fillStyle = k.px[1]; x.fillRect(l, t + m, w, h - m); return; }
+        if (k.ch === " ") return;
+        const bl = BLOCKS[k.ch];
+        if (bl) { x.globalAlpha = bl[2]; x.fillStyle = k.fg; x.fillRect(l, t + Math.round(h * bl[0]), w, Math.round(h * (bl[1] - bl[0]))); x.globalAlpha = 1; return; }
+        x.strokeStyle = k.fg; if (boxLines(x, k.ch, l, t, w, h, lw)) return;
+        x.fillStyle = k.fg; x.fillText(k.ch, l + w / 2, t + h * 0.54);
+      });
+    });
+    x.fillStyle = "rgba(0,0,0,.13)"; for (let y = 0; y < H; y += 3) x.fillRect(0, y + 2, W, 1);   // scanlines
+    const v = x.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.95);
+    v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, "rgba(0,0,0,.45)"); x.fillStyle = v; x.fillRect(0, 0, W, H);
   }
   function draw() {
-    const rows = frame();
-    pre.innerHTML = rows.map(r => {
-      const t = L(r.t, COLS).replace(/&/g, "&amp;").replace(/</g, "&lt;");
-      return r.inv ? `<span class="inv">${t}</span>` : r.sel ? `<span class="sel">${t}</span>` : t;
-    }).join("\n");
-    // in-world monitor mirror
-    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const cw = canvas.width / COLS, ch = canvas.height / ROWS;
-    ctx.font = `${ch * 1.05}px ${FONT}`; ctx.textBaseline = "top";
-    rows.forEach((r, i) => {
-      if (r.inv || r.sel) { ctx.fillStyle = r.inv ? C.bar : C.sel; ctx.fillRect(0, i * ch, canvas.width, ch); }
-      ctx.fillStyle = r.inv ? C.barFg : r.sel ? C.selFg : C.fg;
-      [...L(r.t, COLS)].forEach((c, k) => { if (c !== " ") ctx.fillText(c, k * cw, i * ch + ch * 0.05); });
-    });
-    const g = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, canvas.height * 0.3, canvas.width / 2, canvas.height / 2, canvas.height * 0.95);
-    g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,.5)"); ctx.fillStyle = g; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    api.onRedraw(canvas);
+    const g = frame();
+    const k = hover && g[hover.r]?.[hover.c];      // the mouse's cell, inverted (on the monitor too)
+    if (k && !k.px) { const sel = k.bg === P.sel; k.bg = sel ? P.bg : P.sel; k.fg = sel ? P.sel : P.bg; }
+    paint(canvas, g); api.onRedraw(canvas);
+    if (open) {
+      const dpr = Math.min(2, window.devicePixelRatio || 1), w = Math.round(view.clientWidth * dpr), h = Math.round(view.clientHeight * dpr);
+      if (w && (view.width !== w || view.height !== h)) { view.width = w; view.height = h; }
+      paint(view, g);
+    }
   }
-
-  // ---- console (pre-login) ----
-  let bootTimers = [];
-  function boot(first) {
-    mode = "boot"; scroll = []; input = ""; bootTimers.forEach(clearTimeout); bootTimers = [];
-    const lines = first
-      ? ["C:\\>telnet vbpos", "", "Trying 192.168.4.17...", "Connected to vbpos.", "Escape character is '^]'.", "",
-         "SCO UNIX System V/386 Release 3.2", "Copyright (C) 1976-1989 UNIX System Laboratories, Inc.", "Copyright (C) 1980-1989 Microsoft Corporation",
-         "Copyright (C) 1983-1992 The Santa Cruz Operation, Inc.", "All Rights Reserved", "", "vbpos", ""]
-      : ["C:\\>telnet vbpos", "", "Trying 192.168.4.17...", "Connected to vbpos.", "Escape character is '^]'.", ""];
-    lines.forEach((l, i) => bootTimers.push(setTimeout(() => { scroll.push(l); draw(); }, 90 * i + (i > 2 ? 350 : 0))));
-    bootTimers.push(setTimeout(() => {           // no typing a login: the clerk's badge is swiped at the reader
-      scroll.push("vbpos!login: ** BADGE READ: EMP 0042 **");
-      user = "EMP0042"; mode = "app"; stack.length = 0; screen = mainMenu; msg = `BADGE ACCEPTED. WELCOME BACK. LAST LOGIN: ${fmtD(new Date(TODAY - DAY))} 21:47 ON TTY01`;
-      draw();
-    }, 90 * lines.length + 450));
-    draw();
-  }
-  let booted = false;
+  let lastIdle = "";
+  setInterval(() => {                              // the cursor blinks while you're at it; the idle screen's clock and counts keep up
+    if (open) { blink = !blink; draw(); return; }
+    const k = `${mode}|${clock()}|${api.returnBin().length}|${api.alarm()}`; if (k !== lastIdle) { lastIdle = k; blink = true; draw(); }
+  }, 530);
 
   // ---- app screens ----
   function go(s) { if (screen) stack.push(screen); screen = s; input = ""; msg = ""; draw(); }
   function back() { input = ""; msg = ""; if (stack.length) { screen = stack.pop(); draw(); } else logoff(); }
   // a paged, numbered pick list
   function listScreen(title, head, items, row, onPick, empty = "NO RECORDS FOUND.") {
-    const per = ROWS - 9; let page = 0;
+    const per = BODY - 2; let page = 0;
     const pages = () => Math.max(1, Math.ceil(items.length / per));
     const scr = {
       title: `${title}  (${items.length} RECORD${items.length === 1 ? "" : "S"})`, pager: true, prompt: onPick ? "RECORD # OR N/P" : "N/P OR ESC",
-      lines: () => items.length ? [head, ...items.slice(page * per, page * per + per).map((it, i) => row(it, page * per + i + 1)),
+      lines: () => items.length ? [{ t: head, head: true }, ...items.slice(page * per, page * per + per).map((it, i) => row(it, page * per + i + 1)),
         ...Array(Math.max(0, per - (items.length - page * per))).fill(""), R(`PAGE ${page + 1} OF ${pages()} `, COLS - 1)] : ["", " " + empty],
       submit(v) {
         if (v === "N") { if (page < pages() - 1) page++; else msg = "LAST PAGE."; return draw(); }
@@ -220,7 +382,7 @@ window.createPOS = function createPOS(api) {
         ` CLASS....: ${p.cls}  ${p.nights}-NIGHT ${money(p.rate)}   LATE ${money(p.late)}/DAY`,
         ` STOCK....: ${cs.length} COPIES, ${copyIn(t)} IN / ${cs.length - copyIn(t)} OUT`,
         ...(api.requests?.(t) || []).map((r, i) => `${i ? "           " : " REQUEST..:"} HOLD FOR ${r.name}, IN ~${r.at}${r.alert ? "   *** ALERT: HOLD NEXT RETURN ***" : ""}`.slice(0, COLS)), "",
-        "  COPY  STATUS", ...cs.slice(0, 12).map((c, i) => `  ${String(i + 1).padStart(2, "0")}    ${copyStatus(c)}`),
+        { t: "  COPY  STATUS", head: true }, ...cs.slice(0, 12).map((c, i) => `  ${String(i + 1).padStart(2, "0")}    ${copyStatus(c)}`),
         ...(cs.length > 12 ? [`  ... ${cs.length - 12} MORE`] : []),
       ],
       submit(v) {
@@ -245,7 +407,7 @@ window.createPOS = function createPOS(api) {
         ` LOYALTY..: ${"*".repeat(Math.round(((c.loyalty || 0) + 100) / 40)).padEnd(5, ".")}  ${(c.loyalty || 0) >= 40 ? "REGULAR" : (c.loyalty || 0) <= -40 ? "UNHAPPY" : ""}${c.likes ? `      LIKES: ${up(c.likes)}` : ""}`,
         ` NOTES....: ${c.notes || "-"}`,
         ...(c.incidents || []).slice(-3).map((x, i) => ` ${i ? "         " : "INCIDENT."}: ${fmtD(new Date(x.at))} ${up(x.what)}`.slice(0, COLS)), "",
-        c.rentals.length ? `  #   ${L("OUT", 9)}${L("DUE", 9)}${L("TITLE", 38)}LATE FEE` : "  NO RENTALS OUT.",
+        c.rentals.length ? { t: `  #   ${L("OUT", 9)}${L("DUE", 9)}${L("TITLE", 38)}LATE FEE`, head: true } : "  NO RENTALS OUT.",
         ...c.rentals.slice(0, 9).map((r, i) => `  ${i + 1}   ${L(fmtD(r.out), 9)}${L(fmtD(r.due), 9)}${L(up(r.copy.title), 38)}${daysLate(r) ? money(lateFee(r)) : "-"}`),
       ],
       submit(v) { const r = c.rentals[parseInt(v, 10) - 1]; if (r) titleDetail(titleOf(r.copy)); else { msg = "INVALID SELECTION."; draw(); } },
@@ -255,6 +417,74 @@ window.createPOS = function createPOS(api) {
   const custHead = `       MEMBR  ${L("NAME", 26)} ${L("PHONE", 9)} OUT      FEES`;
   const findTitles = q => api.catalog.filter(t => up(t.title).includes(q));
   const findCusts = q => members().filter(c => String(c.num) === q || fullName(c).includes(q) || c.phone.endsWith(q));
+
+  // ---- the staff schedule: the week on one grid. Days across, hours down (9 AM, before
+  // opening, to midnight), a colored lane per employee in each day; arrows/space or click
+  // (and drag) to set hours, TAB or 1-4 for whose lane. Part time: 25 hours a week each ----
+  const CREW = [P.cyan, "#ff55ff", P.grn, "#ffaa00"];
+  function schedScreen() {
+    const info = api.schedInfo, X0 = 8, DW = 10;   // day d's cells: X0 + d*DW .. +DW-2, a bar between days
+    const st = { d: TODAY.getDay(), n: Math.max(0, Math.min(info.slots - 1, parseInt(clock(), 10) - info.h0)), e: 0, paint: null };
+    const crew = () => api.staffSched();
+    const lbl = n => { const h = info.h0 + n; return `${h % 12 || 12}${h < 12 ? "AM" : "PM"}`; };
+    const has = (w, d, n) => !!(w.sched[d] >> n & 1);
+    function set(d, n, e, on) { const w = crew()[e]; if (!w) return null; const want = on ?? !has(w, d, n); if (want !== has(w, d, n)) msg = api.setSched(w.id, d, n, want) || ""; return want; }
+    const laneW = () => Math.max(2, Math.floor(8 / Math.max(1, crew().length)));
+    function cellOf(h, top) {                    // a click -> { d, n, e } (or null)
+      const n = h.r - top - 1, rel = h.c - (X0 - 1), d = Math.floor(rel / DW), k = rel - d * DW - 2, e = Math.floor(k / laneW());
+      return n >= 0 && n < info.slots && d >= 0 && d < 7 && k >= 0 && e < crew().length ? { d, n, e } : null;
+    }
+    return {
+      title: "STAFF - WEEKLY SCHEDULE", prompt: "ARROWS MOVE, SPACE SETS, TAB SWITCHES EMPLOYEE",
+      lines: () => [],
+      render(g, top) {
+        const cw = crew();
+        if (!cw.length) { colorLine(g, top + 1, " NO STAFF ON THE PAYROLL YET."); colorLine(g, top + 2, " HIRE SOMEONE UNDER UPGRADES (U): HIRE AN EMPLOYEE."); return; }
+        st.e = Math.min(st.e, cw.length - 1);
+        const lw = laneW(), today = TODAY.getDay(), nowN = parseInt(clock(), 10) - info.h0;
+        tint(g, top, 1, COLS - 2, P.yel, P.deep); put(g, top, 2, "HOUR", P.cyan);
+        WD.forEach((d, i) => { const x = X0 + i * DW; put(g, top, x - 1, "│", P.dcyan); center(g, top, i === today ? `${d} ◄` : d, i === today ? P.yel : P.hi, null, x, x + DW - 2); });
+        for (let n = 0; n < info.slots; n++) {
+          const r = top + 1 + n;
+          put(g, r, 2, lbl(n).padStart(4), n === 0 ? P.gray : n === nowN ? P.yel : P.fg);
+          for (let d = 0; d < 7; d++) {
+            const x = X0 + d * DW; put(g, r, x - 1, "│", P.dcyan);
+            cw.forEach((w, e) => {
+              const c0 = x + 1 + e * lw, on = has(w, d, n), start = on && (n === 0 || !has(w, d, n - 1));
+              if (on) { tint(g, r, c0, c0 + lw - 1, P.blk, CREW[e]); if (start) put(g, r, c0, w.first[0], P.blk); }
+              else put(g, r, c0 + (lw >> 1) - (lw > 2 ? 1 : 0), "·", n === 0 ? P.shadow : P.deep);
+              if (d === st.d && n === st.n && e === st.e) { tint(g, r, c0, c0 + lw - 1, on ? P.hi : P.blk, on ? P.blk : P.hi); if (!on) put(g, r, c0, " ".repeat(lw), P.blk, P.hi); }
+            });
+          }
+        }
+        const lr = top + info.slots + 2; put(g, lr - 1, 1, "─".repeat(COLS - 2), P.dcyan);
+        let c = 2;
+        cw.forEach((w, e) => {
+          const t = `${w.first.toUpperCase().slice(0, 9)} ${w.hours}/${info.max}H`, x = c;
+          put(g, lr, x, e === st.e ? "►" : " ", P.yel); put(g, lr, x + 1, "  ", P.blk, CREW[e]); put(g, lr, x + 4, t, e === st.e ? P.hi : P.fg);
+          if (w.hours > info.max) tint(g, lr, x + 4, x + 3 + t.length, P.red);
+          hits.push({ r: lr, c0: x, c1: x + 3 + t.length, act: () => { st.e = e; draw(); } }); c += t.length + 7;
+        });
+        const open = Array.from({ length: 7 }, (_, d) => Array.from({ length: info.slots - 1 }, (_, k) => cw.some(w => has(w, d, k + 1))).filter(x => !x).length).reduce((a, b) => a + b, 0);
+        const pay = cw.reduce((a, w) => a + w.hours * w.rate, 0);
+        put(g, lr + 1, 2, "OPEN HOURS NOBODY'S ON:", P.cyan); put(g, lr + 1, 26, `${open}`, open ? P.yel : P.grn);
+        put(g, lr + 1, 34, "WEEKLY PAYROLL:", P.cyan); put(g, lr + 1, 50, money(pay), P.grn);
+        put(g, lr + 2, 2, "←↑↓→ MOVE · SPACE SET/CLEAR · SHIFT+ARROWS PAINT · TAB/1-4 WHO · X CLEAR DAY", P.gray);
+      },
+      keys(e) {
+        const n = crew().length; if (!n) return false;
+        const mv = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        if (mv) { st.d = (st.d + mv[0] + 7) % 7; st.n = Math.max(0, Math.min(info.slots - 1, st.n + mv[1])); if (e.shiftKey) set(st.d, st.n, st.e, true); else msg = ""; draw(); return true; }
+        if (e.key === " " || (e.key === "Enter" && !input.trim())) { input = ""; set(st.d, st.n, st.e); draw(); return true; }
+        if (e.key === "Tab") { st.e = (st.e + (e.shiftKey ? n - 1 : 1)) % n; draw(); return true; }
+        if (/^[1-4]$/.test(e.key) && +e.key <= n) { st.e = +e.key - 1; draw(); return true; }
+        if (e.key === "x" || e.key === "X") { for (let k = 0; k < info.slots; k++) set(st.d, k, st.e, false); msg = `CLEARED ${crew()[st.e].first.toUpperCase()}'S ${WD[st.d]}.`; draw(); return true; }
+        return e.key.length === 1;                  // (no typing on this screen)
+      },
+      click(h) { const k = cellOf(h, layout.top); if (!k) return false; Object.assign(st, k); st.paint = set(k.d, k.n, k.e); draw(); return true; },
+      drag(h) { const k = cellOf(h, layout.top); if (!k || st.paint === null || k.e !== st.e) return; if (k.d === st.d && k.n === st.n) return; st.d = k.d; st.n = k.n; set(k.d, k.n, k.e, st.paint); draw(); },
+    };
+  }
 
   const MENU = [
     ["1", "INVENTORY - TITLE SEARCH", () => go(prompt("INVENTORY - TITLE SEARCH", "TITLE (OR PART)", ["ENTER ANY PART OF A TITLE.  EXAMPLE: ALIEN"],
@@ -310,7 +540,7 @@ window.createPOS = function createPOS(api) {
       "   VER              VERSION                 LOGOFF / EXIT     END SESSION",
       "   SUPPLIES         ORDER SNACKS/DRINKS     UPGRADES          STORE IMPROVEMENTS",
       "   THEATER          TONIGHT'S FEATURE       REPLACE           ORDER LOST COPIES",
-      "   SYSRESET         WIPE THE SAVED STORE AND START FRESH", "",
+      "   SCHEDULE         THE STAFF'S WEEK        SYSRESET          WIPE THE SAVED STORE", "",
       " ESC GOES BACK ONE SCREEN. F10 LOGS OFF FROM ANYWHERE.", "",
       " SYSTEM PROBLEMS? CALL DENNIS (DISTRICT) - DO NOT REBOOT THE SERVER.",
     ], submit() { back(); } })],
@@ -376,6 +606,7 @@ window.createPOS = function createPOS(api) {
           } }),
         "NO SUPPLIES ON FILE."));
     }],
+    ["W", "STAFF - WEEKLY SCHEDULE", () => go(schedScreen()), () => !!api.staffSched],
     ["0", "LOG OFF", () => logoff()],
     // only listed while the entry gates are going off
     ["A", "*** SECURITY - SILENCE GATE ALARM ***", () => go({ title: "SECURITY GATE CONTROL", prompt: "Y TO SILENCE, ESC TO CANCEL", lines: () => [
@@ -385,12 +616,47 @@ window.createPOS = function createPOS(api) {
     }), () => api.alarm()],
   ];
   const menuItems = () => MENU.filter(m => !m[3] || m[3]());
+  // the main menu: two boxed columns of sections, the day's numbers underneath
+  const SHORT = { "1": "TITLE SEARCH", "2": "BROWSE BY SECTION", "7": "RETURNS BIN QUEUE", B: "REPLACEMENT COPIES", "3": "MEMBER LOOKUP", "4": "ALL ACCOUNTS",
+    "5": "OVERDUE / LATE FEES", "6": "RENTALS OUT", "8": "DAILY SUMMARY", O: "ORDER SUPPLIES", U: "STORE UPGRADES", T: "TONIGHT'S FEATURE", W: "STAFF SCHEDULE",
+    "9": "PREVIEW STATION", S: "GATE SYSTEM", A: "SILENCE GATE ALARM", H: "HELP / COMMANDS", "0": "LOG OFF" };
+  const COLUMNS = [[["INVENTORY", ["1", "2", "7", "B"]], ["MEMBERS", ["3", "4", "5"]], ["REPORTS", ["6", "8"]]],
+    [["STORE", ["O", "U", "T", "W", "9"]], ["SECURITY", ["A", "S"]], ["SYSTEM", ["H", "0"]]]];
+  let menuRects = [];
+  function menuOrder() {                           // visible items, column by column: [key, label, fn, col]
+    const vis = new Map(menuItems().map(m => [m[0], m]));
+    return COLUMNS.flatMap((col, ci) => col.flatMap(([, keys]) => keys.filter(k => vis.has(k)).map(k => { const m = vis.get(k); return [m[0], m[1], m[2], m[3], ci]; })));
+  }
   const mainMenu = {
     title: "MAIN MENU", prompt: "SELECTION OR COMMAND",
-    pick: { cur: 0, count: () => menuItems().length, value: i => menuItems()[i][0], line: i => i },
-    lines: () => [...menuItems().map(([k, label]) => `      ${k}.  ${label}`),   // (no spacer lines: 16 items and the status lines just fit)
-      `      ${members().length} MEMBERS.  ${rentals.filter(r => daysLate(r)).length} OVERDUE RENTALS.  RETURNS BIN: ${api.returnBin().length}.  BUDGET: ${money(budget)}.${api.gatesArmed() ? "" : "  GATES: DISARMED."}`,
-      api.reputation ? `      STORE RATING: ${"*".repeat(api.reputation().stars).padEnd(5, ".")}${api.feature?.() ? `   TONIGHT: ${up(api.feature().title).slice(0, 30)} (${api.feature().sold} SOLD)` : ""}` : ""],
+    pick: { cur: 0, count: () => menuOrder().length, value: i => menuOrder()[i][0], rect: i => menuRects[i],
+      side(i, dir) {                               // ←/→: across to the other column, about level
+        const o = menuOrder(), here = menuRects[i], want = o[i][4] + dir; if (!here) return i;
+        let best = i, bd = 1e9; o.forEach((m, j) => { if (m[4] === want && menuRects[j] && Math.abs(menuRects[j].r - here.r) < bd) { bd = Math.abs(menuRects[j].r - here.r); best = j; } });
+        return best;
+      } },
+    render(g, top) {
+      const vis = new Map(menuItems().map(m => [m[0], m])), order = menuOrder(); menuRects = [];
+      COLUMNS.forEach((col, ci) => {
+        const c0 = ci ? 41 : 2, c1 = ci ? 77 : 38; let r = top;
+        col.forEach(([name, keys], gi) => {
+          const ks = keys.filter(k => vis.has(k)); if (!ks.length) return;
+          if (gi === 0) put(g, r, c0, "┌" + "─".repeat(c1 - c0 - 1) + "┐", P.dcyan); else put(g, r, c0, "├" + "─".repeat(c1 - c0 - 1) + "┤", P.dcyan);
+          put(g, r, c0 + 2, ` ${name} `, P.yel); r++;
+          for (const k of ks) {
+            put(g, r, c0, "│", P.dcyan); put(g, r, c1, "│", P.dcyan);
+            const alarm = k === "A";
+            put(g, r, c0 + 2, k, alarm ? P.red : P.yel); put(g, r, c0 + 5, SHORT[k] || vis.get(k)[1], alarm ? (blink ? P.red : P.hi) : P.hi);
+            menuRects[order.findIndex(m => m[0] === k)] = { r, c0: c0 + 1, c1: c1 - 1 }; r++;
+          }
+        });
+        put(g, r, c0, "└" + "─".repeat(c1 - c0 - 1) + "┘", P.dcyan);
+      });
+      const late = rentals.filter(r => daysLate(r)).length, f = api.feature?.();
+      const facts = [[`${members().length}`, " MEMBERS"], [`${late}`, " OVERDUE", late ? P.red : P.hi], [`${api.returnBin().length}`, " IN RETURNS"],
+        ...(f ? [[up(f.title).slice(0, 22), ` TONIGHT (${f.sold} SOLD)`]] : []), ...(api.gatesArmed() ? [] : [["GATES", " DISARMED", P.red]])];
+      let c = 2; facts.forEach(([v, k, fg], i) => { if (i) { put(g, top + 15, c, "·", P.dcyan); c += 2; } put(g, top + 15, c, v, fg || P.hi); put(g, top + 15, c + v.length, k, P.cyan); c += v.length + k.length + 1; });
+    },
     submit(v) {
       const [cmd, ...rest] = v.split(/\s+/), arg = rest.join(" ");
       const m = menuItems().find(([k]) => k === v);
@@ -398,7 +664,7 @@ window.createPOS = function createPOS(api) {
       if ((cmd === "FIND" || cmd === "INV") && arg) return go(listScreen(`TITLE SEARCH: ${arg}`, titleHead, findTitles(arg), titleRow, titleDetail));
       if ((cmd === "MEMBER" || cmd === "CUST") && arg) return go(listScreen(`MEMBER SEARCH: ${arg}`, custHead, findCusts(arg), custRow, custDetail));
       const alias = { OVERDUE: "5", OUT: "6", RETURNS: "7", REPORT: "8", HELP: "H", "?": "H", LOGOFF: "0", EXIT: "0", LOGOUT: "0",
-        SUPPLIES: "O", ORDER: "O", UPGRADES: "U", UPGRADE: "U", THEATER: "T", FEATURE: "T", GATES: "S", REPLACE: "B" }[cmd];
+        SUPPLIES: "O", ORDER: "O", SCHEDULE: "W", STAFF: "W", UPGRADES: "U", UPGRADE: "U", THEATER: "T", FEATURE: "T", GATES: "S", REPLACE: "B" }[cmd];
       if (alias) return MENU.find(([k]) => k === alias)[2]();
       if (cmd === "SYSRESET") return go({ title: "SYSTEM RESET", prompt: "TYPE RESET TO CONFIRM, ESC TO CANCEL", lines: () => ["",
         " THIS WIPES THE SAVED STORE: INVENTORY, RETURNS, RENTALS, LIGHTS, WHERE YOU", " ARE STANDING, THE TAPE IN THE VCR. THE STORE RELOADS FRESH.", "",
@@ -410,49 +676,71 @@ window.createPOS = function createPOS(api) {
     back() { logoff(); },
   };
 
-  function logoff() {
-    mode = "boot"; screen = null; stack.length = 0; input = ""; msg = "";
-    scroll = ["", "Connection closed by foreign host.", "", "C:\\>"];
-    draw(); open = false; el.hidden = true; api.onClose();
+  function logoff() {                             // back to the login screen (it stays up on the monitor)
+    mode = "login"; screen = null; stack.length = 0; input = ""; msg = ""; user = ""; loginReset();
+    open = false; el.hidden = true; hover = null; draw(); api.onClose();
   }
 
   // ---- input ----
   function key(e) {
     e.preventDefault();
-    if (e.key === "F10") return mode === "app" ? logoff() : close();
-    if (e.key === "Escape") {
-      if (mode === "app") return screen === mainMenu && !stack.length ? logoff() : back();
-      return close();
+    if (mode === "login") {
+      if (e.key === "Escape" || e.key === "F10") return close();
+      if (e.key === "Enter" || e.key === " ") startLogin();
+      return;
     }
-    if (mode === "boot") return;
+    if (e.key === "F10") return logoff();
+    if (e.key === "Escape") return screen === mainMenu && !stack.length ? logoff() : back();
+    if (e.key === "F1") return MENU.find(([k]) => k === "H")[2]();
+    if (e.key === "F2") return MENU.find(([k]) => k === "1")[2]();
     if (e.key === "Backspace") { input = input.slice(0, -1); return draw(); }
-    const pk = mode === "app" && screen.pick;
+    if (screen.keys?.(e)) return;                  // a screen with its own keys (the schedule grid)
+    const pk = screen.pick;
     if (pk && (e.key === "ArrowUp" || e.key === "ArrowDown") && pk.count()) {
       pk.cur = Math.max(0, Math.min(pk.count() - 1, pk.cur + (e.key === "ArrowDown" ? 1 : -1)));
       pk.moved?.(pk.cur); return draw();
     }
+    if (pk?.side && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { pk.cur = pk.side(pk.cur, e.key === "ArrowRight" ? 1 : -1); return draw(); }
     if (pk && e.key === "Enter" && !input.trim() && pk.count()) { msg = ""; input = ""; return screen.submit(pk.value(pk.cur)); }
-    if (e.key === "Enter") {
-      const v = input.trim(); input = "";
-      if (mode === "app") { msg = ""; screen.submit(up(v)); }
-      return;
-    }
+    if (e.key === "Enter") { const v = input.trim(); input = ""; msg = ""; screen.submit(up(v)); return; }
     if (e.key.length === 1 && input.length < 40) { input += e.key; draw(); }
   }
 
-  function close() { bootTimers.forEach(clearTimeout); open = false; el.hidden = true; api.onClose(); }
+  // ---- mouse: the cell under the pointer lights up; click a menu or list row to highlight it,
+  // click it again to select it; the key caps along the bottom (and LOG IN) click too ----
+  function cellAt(e) {
+    const r = view.getBoundingClientRect(), cs = getComputedStyle(view);
+    const c = Math.floor((e.clientX - r.left - parseFloat(cs.borderLeftWidth)) / (view.clientWidth / COLS)), row = Math.floor((e.clientY - r.top - parseFloat(cs.borderTopWidth)) / (view.clientHeight / ROWS));
+    return c >= 0 && c < COLS && row >= 0 && row < ROWS ? { c, r: row } : null;
+  }
+  view.addEventListener("mousemove", e => {
+    const h = cellAt(e); if (h?.c !== hover?.c || h?.r !== hover?.r) { hover = h; if (h && e.buttons & 1 && mode === "app") screen.drag?.(h); draw(); }   // (a drag paints the schedule)
+  });
+  view.addEventListener("mouseleave", () => { if (hover) { hover = null; draw(); } });
+  view.addEventListener("mousedown", e => {
+    if (e.button !== 0 || !open) return;
+    const h = cellAt(e); if (!h) return;
+    e.preventDefault();
+    const hit = hits.find(x => x.r === h.r && h.c >= x.c0 && h.c <= x.c1); if (hit) return hit.act();
+    if (mode !== "app") return;
+    if (screen.click?.(h)) return;                 // a screen with its own clickable layout
+    const pk = screen.pick; if (!pk || !pk.count()) return;
+    for (let i = 0; i < pk.count(); i++) { const rc = pickRect(pk, i); if (rc && rc.r === h.r && h.c >= rc.c0 && h.c <= rc.c1) {
+      if (i === pk.cur) { msg = ""; input = ""; return screen.submit(pk.value(i)); }   // second click: select it
+      pk.cur = i; pk.moved?.(i); msg = ""; return draw();                               // first click: highlight it
+    } }
+  });
+  function close() { loginReset(); open = false; el.hidden = true; hover = null; draw(); api.onClose(); }
+  addEventListener("resize", () => { if (open) draw(); });
   document.fonts?.load("20px VT323").then(() => draw(), () => {});   // repaint the monitor once the web font arrives
   return {
     canvas, key, isOpen: () => open,
-    open() {
-      open = true; el.hidden = false;
-      if (mode === "app") return draw();       // came back mid-session (e.g. after a pause): pick up where you were
-      boot(!booted); booted = true;
-    },
+    open() { open = true; el.hidden = false; blink = true; draw(); },   // the login screen (or, mid-session, wherever you were)
     close,
     idle() { draw(); },                          // paint the monitor once at startup
     // for store.js's walk-in customers: every member is somebody who might come in
     members: customers,
+    rentMax: RENT_MAX,                           // tapes out at once, per member
     dueIn: r => Math.round((r.due - TODAY) / DAY),   // days until a rental's due (negative = late)
     checkOut(copy, cust) {                       // a walk-in rented this copy: on their account, and the money in the budget
       const p = priceOf(copy), out = new Date(TODAY), r = { copy, cust, out, due: new Date(+out + p.nights * DAY) };

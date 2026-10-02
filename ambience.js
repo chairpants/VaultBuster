@@ -274,6 +274,29 @@ window.VaultAmbience = (() => {
     hg.gain.setValueAtTime(0, t0 + 3); hg.gain.linearRampToValueAtTime(0.06, t0 + 3.6); hg.gain.setValueAtTime(0.06, t0 + 10); hg.gain.linearRampToValueAtTime(0, t0 + 12);   // the tank refilling
     hiss.connect(hp).connect(hg).connect(out); hiss.stop(t0 + 12.2);
   }
+  function bag(x, y, z) {                           // a full liner pulled out and tied off: plastic crinkle, the can rocking back
+    if (!ac || muted || fade === 0) return;
+    const t0 = ac.currentTime + 0.01, out = spot(x, y, z, 0.35);
+    for (let i = 0; i < 28; i++) burst(out, t0 + Math.random() * 0.75, { dur: 0.01 + Math.random() * 0.03, type: "highpass", f: 2500 + Math.random() * 4000, q: 0.7, amp: 0.2 + Math.random() * 0.5 });
+    burst(out, t0 + 0.8, { dur: 0.08, type: "lowpass", f: 500, amp: 0.5 });
+  }
+  function chute(x, y, z, bags) {                   // the hopper door tipping open, the bag(s) in and away down the duct, the door slapping shut
+    if (!ac || muted || fade === 0) return;
+    const t0 = ac.currentTime + 0.01, out = spot(x, y, z, 0.5);
+    const clank = (t, k) => { burst(out, t, { dur: 0.05, type: "bandpass", f: 1800, q: 1.2, amp: 0.6 * k }); modes(out, t, [[310, 0.45 * k, 0.05], [742, 0.3 * k, 0.04], [1660, 0.18 * k, 0.03], [3120, 0.08 * k, 0.02]]); };
+    clank(t0 + 0.28, 0.5);                          // open, on its stop
+    for (let i = 0; i < bags; i++) {
+      const tb = t0 + 0.38 + i * 0.22;
+      burst(out, tb, { dur: 0.12, type: "lowpass", f: 700, amp: 0.7 });          // onto the hopper's floor
+      const rush = loop(noise.brown), bp = ac.createBiquadFilter(), g = ac.createGain();   // sliding off down the duct, falling away
+      bp.type = "bandpass"; bp.Q.value = 1.2; bp.frequency.setValueAtTime(900, tb + 0.05); bp.frequency.exponentialRampToValueAtTime(110, tb + 1.8);
+      g.gain.setValueAtTime(0, tb + 0.05); g.gain.linearRampToValueAtTime(0.9, tb + 0.2); g.gain.exponentialRampToValueAtTime(0.001, tb + 2.0);
+      rush.connect(bp).connect(g).connect(out); rush.stop(tb + 2.2);
+      for (let j = 0; j < 5; j++) modes(out, tb + 0.25 + j * 0.28 + Math.random() * 0.1, [[180 - j * 15, 0.25 * (1 - j / 6), 0.06], [410 - j * 30, 0.12 * (1 - j / 6), 0.04]]);   // knocking the duct on the way down
+      modes(out, tb + 2.1, [[55, 0.25, 0.08], [90, 0.15, 0.06]]);   // into the dumpster, far below
+    }
+    clank(t0 + 1.3, 1);                             // shut
+  }
   const taps = new Map();
   function water(key, x, y, z, on) {                // a running tap
     if (!ac) return;
@@ -289,5 +312,5 @@ window.VaultAmbience = (() => {
   }
   function setMuted(b) { muted = b; try { localStorage.setItem("vaultbuster-ambience", b ? "off" : "on"); } catch {} if (master) master.gain.setTargetAtTime(b ? 0 : fade * 0.9 * vol, ac.currentTime, 0.2); }
   function setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(muted ? 0 : fade * 0.9 * vol, ac.currentTime, 0.1); }
-  return { start, tick, chime, step, door, swing, compressor, flush, water, setMuted, setVolume, muted: () => muted };
+  return { start, tick, chime, step, door, swing, compressor, flush, water, bag, chute, setMuted, setVolume, muted: () => muted };
 })();
