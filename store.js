@@ -4461,7 +4461,7 @@ function showTick() {
   const h = shift.h, goers = () => custs.filter(k => k.moviegoer);
   if (!show.status && h >= SHOW.at - 0.25) { show.status = "arriving"; logAct(show.sold ? `Ticket holders arriving for ${show.title.title} (${show.sold})` : `No tickets sold for ${show.title.title} tonight`); if (!show.sold) { show.status = "done"; return; } }
   if (show.status === "arriving" && show.spawned < show.sold && h >= SHOW.at - 0.25 + show.spawned * 0.02) {   // they trickle in
-    const m = custPickMember(); if (m) { const k = custSpawn(m); k.moviegoer = true; k.returning = []; k.thief = false; show.spawned++; }
+    const m = custPickMember(true); if (m) { const k = custSpawn(m); k.moviegoer = true; k.returning = []; k.thief = false; show.spawned++; }
   }
   if (show.status === "arriving" && h >= SHOW.at) {
     if (filmOn()) { show.status = "on"; logAct(`Showtime: ${show.title.title} is playing`, "good"); }
@@ -5186,24 +5186,29 @@ const custWaiting = () => custLine[0] && ["wait", "impatient", "angry"].includes
 // number is their seed, so the same member always looks and acts the same.
 // About half the time it's someone with tapes out, bringing them back — most
 // likely whoever's due today or late
-function custPickMember() {
+function custPickMember(anyone = false) {      // anyone: skip the visiting rhythm (ticket holders for the show)
   const ms = posTerm.members.filter(m => m.active && m !== custArrivals.lastMember && !custs.some(k => k.member === m) && posTerm.canVisit(m) && (m.loyalty || 0) > -60);   // not someone who's already in here, banned, or fed up with the place
   const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
-  const due = ms.filter(m => m.rentals.length && soonest(m) <= 1);
+  const now = shift.day + shift.h / 24, since = m => now - (m.lastVisit ?? -9);   // game days since they were last in
+  const due = ms.filter(m => m.rentals.length && soonest(m) <= 1 && since(m) > 0.25);   // bringing tapes back (just not twice in a few hours)
   if (due.length && Math.random() < 0.5) {
     const w = due.map(m => soonest(m) <= 0 ? 3 : 1);
     let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < due.length - 1 && (r -= w[i]) > 0) i++;
     return due[i];
   }
-  const w = ms.map(m => Math.max(0.2, 1 + (m.loyalty || 0) / 40));   // regulars come in more often
-  let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < ms.length - 1 && (r -= w[i]) > 0) i++;
-  return ms[i];
+  // everyone else has their own rhythm: most come in every couple of days or so, regulars more, the fed-up less.
+  // Whoever's picked might not be due yet; then nobody comes this time (a small base can't fill a busy night)
+  const cadence = m => 2.5 / Math.max(0.4, 1 + (m.loyalty || 0) / 50);
+  const ok = anyone ? ms : ms.filter(m => since(m) >= 0.4); if (!ok.length) return null;
+  const w = ok.map(m => Math.max(0.2, 1 + (m.loyalty || 0) / 40));   // regulars come in more often
+  let r = Math.random() * w.reduce((a, b) => a + b, 0), i = 0; while (i < ok.length - 1 && (r -= w[i]) > 0) i++;
+  return anyone || Math.random() < Math.min(1, since(ok[i]) / cadence(ok[i])) ** 2 ? ok[i] : null;   // (seen yesterday: unlikely today)
 }
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
-function custSpawn(member = custPickMember()) {
+function custSpawn(member = custPickMember(true)) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
-  custArrivals.lastMember = member; shift.stats.visitors++;
+  custArrivals.lastMember = member; member.lastVisit = shift.day + shift.h / 24; shift.stats.visitors++;
   window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false));   // the entry chime
   const loyal = member.loyalty || 0;
   who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
@@ -5590,7 +5595,7 @@ function snackProxy(u) {
 function custTick(dt) {
   if (custs.length < custMax() && !frontLock.locked && shiftOpen() && (custArrivals.t -= dt) <= 0) {   // locked: whoever's inside finishes up; nobody new
     if (custs.some(k => Math.hypot(k.c.group.position.x - CUST_DOOR.x, k.c.group.position.z - CUST_DOOR.z) < 1.2)) custArrivals.t = 1;   // someone's in the doorway: give them a sec
-    else { custSpawn(); custArrivals.t = (6 + Math.random() * 20) / rushLevel(); }
+    else { const m = custPickMember(); if (m) custSpawn(m); custArrivals.t = (6 + Math.random() * 20) / rushLevel(); }   // (nobody due in: a quiet spell)
   }
   if (growth.prospects > 0 && !frontLock.locked && shiftOpen() && custs.length < custMax() + 1 && (growth.pT -= dt) <= 0) {   // somebody new, here to sign up
     growth.pT = (40 + Math.random() * 80) / rushLevel();
@@ -8419,7 +8424,7 @@ let gateLastZ = player.z;
 
 const posTerm = window.createPOS({
   catalog, rented: rentedCopies, budget: SAVE?.budget ?? (SIM ? 300 : 10000),
-  activeMembers: SAVE?.members, startMembers: SIM && !SAVE?.members ? 25 : null,   // simulation: a small base to start
+  activeMembers: SAVE?.members, startMembers: SIM && !SAVE?.members ? 40 : null,   // simulation: a small base to start
   savedOwed: SAVE?.owed, savedRecords: SAVE?.records,
   today: +shiftDate(), clock: () => { const m = Math.floor(shift.h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; },   // the shift's date and clock on the screen
   savedRental: c => SAVE?.rentals?.[copyKey(c)],
