@@ -7478,11 +7478,17 @@ const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null };   // 
 const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by, alert }
 const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === titleOfCopy(copy));   // a POS alert on a promised hold: the next return of it goes on the holds shelf
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
-let ringAc = null;
+let ringAc = null, ringOut = null;
+function ringHeard() {                           // how loud the phone is where you are: the sales floor, falling off with distance; faint from the hall, not at all past it
+  const d = Math.hypot(player.x - PHONE_AT.x, player.z - PHONE_AT.z);
+  if (player.z < STORE.z) return Math.max(0.15, 1 / (1 + (d / 8) ** 2));
+  if (player.z < BOH.hallZ && player.x > BOH.x0 && player.x < STORE.x) return 0.06;   // (through the open doorway)
+  return 0;
+}
 function ringBurst() {                            // a desk-set ringer: a clapper buzzing between two small gongs ~20 times a second for 2 s
   try {                                           // (lowpassed and not too loud: a real bell, but across the room and not in your ear)
-    const ac = ringAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ac.createGain(), lp = ac.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.value = 3200; out.gain.value = 0.09; out.connect(lp).connect(ac.destination);
+    const ac = ringAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ringOut = ac.createGain(), lp = ac.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 3200; out.gain.value = 0.09 * ringHeard(); out.connect(lp).connect(ac.destination);
     [[1180, 0], [1390, 0.025]].forEach(([f, off]) => {   // the two gongs, struck alternately
       for (const [r, a] of [[1, 1], [2.32, 0.35], [4.1, 0.12]]) {
         const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f * r; o.connect(g).connect(out);
@@ -7511,6 +7517,7 @@ function phoneTick(dt) {                          // (runs with the clock)
   const r = phone.ring; if (!r) { phoneCallTick(dt); return; }
   r.t += dt;
   if (r.t >= r.rang) { r.rang += 6; ringBurst(); }   // US cadence: 2 s on, 4 s off
+  if (ringOut) ringOut.gain.setTargetAtTime(0.09 * ringHeard(), ringAc.currentTime, 0.1);   // walk away mid-ring and it fades
   const taker = r.t > 6 && staff.find(e => e.c && e.state === "post" && co?.emp !== e && e.t <= 0 && withEmp(e, danaBestJob) === "phone");
   if (taker) return withEmp(taker, danaCall);   // top of someone's list right now: they get it
   if (r.t > 20) {                                 // rang out
