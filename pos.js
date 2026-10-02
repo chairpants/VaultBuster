@@ -326,8 +326,43 @@ window.createPOS = function createPOS(api) {
     const v = x.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.95);
     v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, "rgba(0,0,0,.45)"); x.fillStyle = v; x.fillRect(0, 0, W, H);
   }
+  // ---- the register: a sale window over whatever's on screen while someone's being rung up.
+  // store.js hands it the sale (see ring() below); the member's account comes from here ----
+  let sale = null;
+  function saleWindow(g) {
+    const s = sale, m = s.member, r0 = 1, r1 = ROWS - 3, c0 = 1, c1 = COLS - 2, W = c1 - c0 - 3;
+    for (let r = r0; r <= r1; r++) tint(g, r, c0, c1, P.fg, P.deep), put(g, r, c0, " ".repeat(c1 - c0 + 1));
+    box(g, r0, c0, r1, c1, true, P.cyan); put(g, r0, c0 + 2, s.signup ? " NEW MEMBER " : " REGISTER · SALE ", P.yel);
+    if (s.clerk) put(g, r0, c1 - s.clerk.length - 9, ` CLERK: ${s.clerk} `, P.fg);
+    let r = r0 + 1; const line = (t, fg = P.fg) => { put(g, r, c0 + 2, L(t, W), fg); r++; };
+    const lr = (l, v, fg = P.fg, vfg = P.hi) => { put(g, r, c0 + 2, L(l, W), fg); put(g, r, c1 - 2 - v.length, v, vfg); r++; };
+    if (s.carded === null) { r++; line("  CASH SALE · NO MEMBER CARD", P.gray); r++; }
+    else if (!s.carded) { r++; line(blink ? `  ► ${s.signup ? "ENTER NEW MEMBER" : "TAP MEMBER CARD ON READER"}` : "", P.yel); r++; }
+    else {
+      const loy = m.loyalty || 0, fees = custFees(m), late = m.rentals.filter(daysLate).length;
+      lr(`#${m.num}  ${up(fullName(m))}`, `SINCE ${m.since}`, P.hi, P.cyan);
+      line(`LOYALTY ${"*".repeat(Math.round((loy + 100) / 40)).padEnd(5, ".")}  ${loy >= 40 ? "REGULAR" : loy <= -40 ? "UNHAPPY" : ""}${m.likes ? `   LIKES: ${up(m.likes)}` : ""}`, loy <= -40 ? P.red : P.fg);
+      const st = m.status === "banned" && m.until > +TODAY ? `*** BANNED UNTIL ${fmtD(new Date(m.until))} ***` : m.status === "cancelled" ? "*** MEMBERSHIP CANCELLED ***" : m.status === "arrested" ? "*** DO NOT RENT ***" : "";
+      line(st || `OUT: ${m.rentals.length}/${RENT_MAX} TAPES${late ? ` · ${late} LATE` : ""}${fees ? ` · FEES ${money(fees)}` : " · GOOD STANDING"}`, st || late || fees ? P.red : P.grn);
+      if (m.notes) line(`NOTES: ${m.notes}`, P.yel);
+      const inc = m.incidents?.at(-1); if (inc) line(`INCIDENT ${fmtD(new Date(inc.at))}: ${up(inc.what)}`, P.red);
+    }
+    rule(g, r++, c0, c1, "mid", P.cyan);
+    for (const [name, price] of s.items.slice(0, 7)) lr(`  ${up(name)}`, money(price));
+    if (s.items.length > 7) line(`  ... ${s.items.length - 7} MORE`);
+    if (s.feesCharged) lr("  LATE FEES", money(s.feesCharged), P.red, P.red);
+    if (s.feesWaived) lr("  LATE FEES WAIVED", `-${money(s.feesWaived)}`, P.gray, P.gray);
+    r = Math.max(r, r1 - 6); rule(g, r++, c0, c1, "mid", P.cyan);
+    if (!s.signup) {
+      lr("TOTAL DUE", money(s.total), P.yel, P.yel);
+      if (s.cashIn != null) lr("CASH TENDERED", money(s.cashIn), P.fg, P.grn);
+      if (s.cashIn != null) lr("CHANGE DUE", s.change ? money(s.change) : "EXACT", P.fg, s.change && blink ? P.yel : P.hi);
+    }
+    if (s.next) { r = r1 - 1; line(`► ${up(s.next)}`, P.cyan); }
+  }
   function draw() {
     const g = frame();
+    if (sale && (!open || mode === "login")) saleWindow(g);   // (at the keyboard, logged in, the screen's yours: the sale waits)
     const k = hover && g[hover.r]?.[hover.c];      // the mouse's cell, inverted (on the monitor too)
     if (k && !k.px) { const sel = k.bg === P.sel; k.bg = sel ? P.bg : P.sel; k.fg = sel ? P.sel : P.bg; }
     paint(canvas, g); api.onRedraw(canvas);
@@ -339,7 +374,7 @@ window.createPOS = function createPOS(api) {
   }
   let lastIdle = "";
   setInterval(() => {                              // the cursor blinks while you're at it; the idle screen's clock and counts keep up
-    if (open) { blink = !blink; draw(); return; }
+    if (open || sale) { blink = !blink; draw(); return; }   // (a sale on the register blinks too)
     const k = `${mode}|${clock()}|${api.returnBin().length}|${api.alarm()}`; if (k !== lastIdle) { lastIdle = k; blink = true; draw(); }
   }, 530);
 
@@ -771,6 +806,7 @@ window.createPOS = function createPOS(api) {
     setDate(d) { TODAY = new Date(d); TODAY.setHours(12, 0, 0, 0); if (open && mode === "app") draw(); },   // a new shift: late fees and due dates move on
     rentPrice: copy => priceOf(copy).rate,     // what a copy rents for, for the counter's running total
     sale(amount) { budget += amount; if (open && mode === "app") draw(); },   // snacks and drinks at the counter
+    ring(s) { sale = s; draw(); },               // the sale on the register: { member, carded, signup, clerk, items: [[name, price]], feesCharged, feesWaived, total, cashIn, change, next } or null
     rentalOf: c => c.rental && [c.rental.cust.num, +c.rental.out],
     cancel(copy) {                               // void a rental outright (no fees): the store never had it to rent
       const r = copy.rental; if (!r) return;

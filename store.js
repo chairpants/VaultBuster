@@ -6573,7 +6573,7 @@ function coFees(charge) {                        // late fees on their account: 
   const feeBy = co.by === "player" ? "you" : co.emp;
   posTerm.loyal(m, charge ? (has(feeBy, "cha", 5) ? 0 : -Math.max(0, 3 - Math.floor((lv(feeBy, "cha") - 1) / 3))) : 6); gainXp(feeBy, "cha", charge ? 3 : 2);   // (charm takes the sting out of a fee)
   if (charge) { co.fees += amt; co.feesIn = true; coRebill(); shift.stats.feesCollected += amt; co.cust.c.setMood("meh"); co.pts += 20; logAct(`${co.by === "dana" ? `${co.emp?.first} charged` : "Charged"} ${memberName(m)} their late fees`, "good", amt); }
-  else { shift.stats.feesWaived += amt; co.cust.c.setMood("love"); logAct(`Waived ${memberName(m)}'s ${money(amt)} in late fees`); }
+  else { co.feesWaived = amt; shift.stats.feesWaived += amt; co.cust.c.setMood("love"); logAct(`Waived ${memberName(m)}'s ${money(amt)} in late fees`); }
 }
 const upsellSpot = () => snackSpots().filter(s => s.units.some(u => u.visible && u !== heldSnack))   // the nearest rack with anything left
   .sort((a, b) => Math.hypot(a.x - CUST_COUNTER.x, a.z - CUST_COUNTER.z) - Math.hypot(b.x - CUST_COUNTER.x, b.z - CUST_COUNTER.z))[0];
@@ -6700,8 +6700,22 @@ function coAct(at) {                              // do the current step if it h
   coHud();
   return true;
 }
+function coRing() {                              // what the register's screen shows for this sale (see posTerm.ring)
+  if (!co) return null;
+  const steps = coSteps(), at = id => steps.findIndex(s => s.id === id), k = co.cust, s = coStep();
+  const signup = co.kind === "signup";
+  return {
+    member: k.member, signup, clerk: co.by === "dana" ? co.emp?.first?.toUpperCase() : null,
+    carded: signup ? co.i > at("enroll") : k.tapes.length ? co.i > at("tap") : null,   // (null: snacks only, no card)
+    items: signup ? [["NEW MEMBERSHIP", 0]] : [...k.tapes.map(t => [t.title, posTerm.rentPrice(t)]), ...k.snacks.map(u => [u.userData.snack.name, snackPrice(u.userData.snack)]),
+      ...(k.tickets ? [[`SHOW TICKET x${k.tickets}`, k.tickets * SHOW.ticket]] : [])],
+    feesCharged: co.feesIn ? co.fees : 0, feesWaived: co.feesWaived || 0,
+    total: co.total, cashIn: co.cashIn ?? null, change: co.change,
+    next: co.by === "player" && s ? (co.away ? "customer is grabbing a snack" : s.tip()) : "",
+  };
+}
 function coHud() {
-  coHandShow();
+  coHandShow(); posTerm.ring(coRing());
   const el = $("checkoutTag");
   if (!co) { el.style.display = "none"; return; }
   const s = coStep(), who = co.by === "dana" ? `${co.emp?.first} is ringing up` : "Ringing up";
