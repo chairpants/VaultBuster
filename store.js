@@ -4281,8 +4281,8 @@ function upgVisuals() {                          // what you can see of what you
   }
   if (upg.sign && !upgVisuals.sign) {
     upgVisuals.sign = true;
-    const t = textPlane("SHOPLIFTERS WILL BE PROSECUTED", 0.9, 0.16, "#fff", "#8c1c1c", "Arial Black", 60);
-    t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(-1.9, 2.3, 0.22); scene.add(t);
+    const t = textPlane("SHOPLIFTERS WILL BE PROSECUTED", 1.5, 0.11, "#fff", "#8c1c1c", "Arial Black", 48);
+    t.material = new THREE.MeshLambertMaterial({ map: t.material.map }); t.position.set(0, 2.66, 0.28); scene.add(t);   // a placard on the door header, under BE KIND, REWIND
   }
 }
 // ---- tonight's feature: pick a film on the register; customers buy tickets at
