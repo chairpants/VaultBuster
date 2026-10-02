@@ -4416,7 +4416,9 @@ function upgBuy(id) {                            // -> null if bought, else why 
   }
   if (u.lib) {                                   // the distributor stocks the shelves overnight
     if (libTier() !== u.lib - 1 || deliveries.some(d => d.lib)) return libTier() >= u.lib || deliveries.some(d => d.lib === u.lib) ? "ALREADY ORDERED." : `LIBRARY UPGRADE ${u.lib - 1} FIRST.`;
-    deliveries.push({ lib: u.lib }); upg[id] = true;
+    upg[id] = true;
+    if (!SIM) { logAct(`${u.name[0] + u.name.slice(1).toLowerCase()}: ${libUnlock(u.lib)} tapes on the shelves`, "good"); return null; }   // sandbox: straight onto the shelves
+    deliveries.push({ lib: u.lib });
     logAct(`Ordered ${u.name.toLowerCase()}: the tapes arrive tomorrow morning`, "good"); return null;
   }
   if (id === "ad") {                             // simulation: new sign-ups tomorrow (and a little reputation); sandbox: reputation
