@@ -27,7 +27,9 @@ const WALL_SHIFT = WALL_L + STORE.x;       // how far the movie-side wall (and e
 // (locked, for now) door at the hall's far end onto the space behind the lounge
 const BOH = { x0: 2, z1: 33, hallZ: 29.8, splitX: 8.3, h: 2.7 };   // west wall, rear wall, hall/rooms wall, breakroom|restroom wall, ceiling height
 const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the store's blue wall stripe
-const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9 };
+const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
+const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
+const CLOSET = { x1: 12.6, doorW: 0.8 };                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
 const trashBins = {};                            // the bins, registered as they're built (see "trash" further down)
 const chute = { door: null, t: 0, at: [0, 0, 0], stand: null };   // the break room's trash chute (likewise)
 const bath = { water: null, waterY: 0, stream: null, toiletAt: null, sinkAt: null, flushT: 0, tap: false, seat: null };   // the restroom's working parts (built with it; see bathTick)   // opening centers along their walls
@@ -95,7 +97,7 @@ const TVU = {
   uTvRoom: { value: new THREE.Vector4() },   // room x0, x1, ceiling, screen-plane z (front wall is z 0)
   // room lighting (see ROOM_FRAG): switchable zones, daylight through the glass, and the outdoors
   uZone: { value: new THREE.Vector4(1, 1, 1, 1) },   // front, aisles, lounge switches (0..1, flicker-aware), daylight 0..1
-  uBoh: { value: new THREE.Vector4(1, 1, 1, 0) },    // hall, break room, restroom switches
+  uBoh: { value: new THREE.Vector4(1, 1, 1, 0) },    // hall, break room, restroom switches, the closet bulb
   uFloorBox: { value: new THREE.Vector4() },         // sales floor: x0, x1, z1 (back wall), ceiling
   uBohBox: { value: new THREE.Vector4() },           // back of house: x0, x1, hall|rooms z, z1
   uBohSplit: { value: new THREE.Vector2() },         // break room | restroom x, ceiling
@@ -129,8 +131,9 @@ const ROOM_FRAG = `
     rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
   } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
-    float lvl = P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
-    rl = (0.03 + 0.97 * lvl) * fl;
+    bool closet = P.x > uFloorBox.y && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
+    float lvl = closet ? 0.8 * uBoh.w : P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
+    rl = (0.03 + 0.97 * lvl) * fl * (closet ? vec3(1.12, 0.95, 0.74) : vec3(1.0));
   } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uLobbyBox.z && P.z < uLobbyBox.w && P.y < uBohSplit.y + 0.05) {
     rl = (0.04 + 0.96 * uThLight.x) * fl * vec3(1.08, 0.93, 0.80);
   } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uFloorBox.w + 0.1) {
@@ -583,13 +586,13 @@ function thSeatTick(dt) {
 }
 
 // the light switch zones: three along the sales floor, then the back of house rooms
-const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater"];
-const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom", lobby: "theater lobby", theater: "auditorium" };
-const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS", lobby: "LOBBY", theater: "HOUSE" };
+const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater", "closet"];
+const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom", lobby: "theater lobby", theater: "auditorium", closet: "closet" };
+const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS", lobby: "LOBBY", theater: "HOUSE", closet: "LIGHT" };
 function lightZoneAt(x, z) {
   if (z >= BOH.z1) return "theater";
   if (z > STORE.z && x < BOH.x0) return "lobby";
-  if (z > STORE.z) return z < BOH.hallZ ? "hall" : x < BOH.splitX ? "breakroom" : "restroom";
+  if (z > STORE.z) return z < BOH.hallZ ? (x > STORE.x ? "closet" : "hall") : x < BOH.splitX ? "breakroom" : "restroom";
   return z < 10 ? "front" : z < 19 ? "aisles" : "lounge";
 }
 const allLights = [];                      // every light that lights-out kills (base intensity in userData.on)
@@ -658,8 +661,8 @@ const doorGold = new THREE.MeshPhongMaterial({ color: 0xc9a227, specular: 0xffe2
 const doorGlass = new THREE.MeshLambertMaterial({ color: 0x8a9aae, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
 const PORT = { y: 1.6, r: 0.17 };
 const theaterDoorMat = new THREE.MeshLambertMaterial({ color: 0x5a1020 });   // maroon
-function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [], push = false, porthole = false }) {
-  const W = DOOR_W, base = alongX ? 0 : -Math.PI / 2;   // leaf is built along local x; local +z is world +z (alongX) or world -x
+function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [], push = false, porthole = false, w = DOOR_W }) {
+  const W = w, base = alongX ? 0 : -Math.PI / 2;   // leaf is built along local x; local +z is world +z (alongX) or world -x
   const toLocal = side => alongX ? side : -side;
   const pivot = new THREE.Group();
   if (alongX) pivot.position.set(c + hinge * W / 2, 0, at); else pivot.position.set(at, 0, c + hinge * W / 2);
@@ -802,10 +805,13 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   const BX0 = BOH.x0, BZ0 = Z, BZ1 = BOH.z1, BH = BOH.h, HZ = BOH.hallZ, SX = BOH.splitX;
   wall(HZ, BZ1 + T / 2, BX0, false, BH, mat.wall);                          // west, rooms part
   wall(BZ0, HZ, BX0, false, BH, mat.wall, [BOH_DOORS.future]);              // west, hall part: the future door
-  wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall);                          // east
+  wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall, [{ c: BOH_DOORS.closet, w: CLOSET.doorW }]);      // east: the janitor's closet door
   wall(BX0, XR, BZ1, true, BH, mat.wall);                                   // rear
   wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.breakroom, BOH_DOORS.restroom]);   // hall | rooms
   wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // breakroom | restroom
+  wall(XR, CLOSET.x1 + T / 2, BZ0, true, BH, mat.wall);                    // janitor's closet: its sides (in line with the store's back wall and the hall's)...
+  wall(XR, CLOSET.x1 + T / 2, HZ, true, BH, mat.wall);
+  wall(BZ0, HZ, CLOSET.x1, false, BH, mat.wall);                            // ...and its back
   const vctTex = makeTexture((ctx, W, H) => {   // speckled vinyl composition tile, 8 x 8 30 cm squares per repeat
     const n = 8, s = W / n, cols = ["#d8d2c3", "#cec7b5", "#e1dccf", "#c9c3b4"];
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = cols[Math.floor(Math.random() * cols.length)]; ctx.fillRect(x * s, y * s, s, s); }
@@ -845,6 +851,79 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     signs: [{ text: "RESTROOM", side: -1 }] });
   makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, leafMat: theaterDoorMat, push: true, porthole: true,
     signs: [{ text: "THEATER", side: 1 }] });
+  makeDoor({ at: XR, c: BOH_DOORS.closet, alongX: false, hinge: 1, swing: -1, w: CLOSET.doorW, leafMat: painted,   // narrow; hinged on the restroom side, swings out into the hall
+    signs: [{ text: "JANITOR", side: -1 }] });
+
+  // ---- janitor's closet (interior x XR+0.1..CLOSET.x1-0.1, z BZ0+0.1..HZ-0.1). Its narrow door swings out into the hall;
+  // from the door (facing +x): mop + bucket in the back right corner, the carpet sweeper against the back
+  // wall, a folded step ladder (for the ceiling lights) on the right, a shelf of cleaning stuff up on the back wall ----
+  {
+    const x0 = XR + WALL_T / 2, x1 = CLOSET.x1 - WALL_T / 2, z0 = BZ0 + WALL_T / 2, z1 = HZ - WALL_T / 2;
+    floorPatch(vctTex, 2.4, XR, CLOSET.x1, BZ0, HZ);
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(CLOSET.x1 - XR, HZ - BZ0), new THREE.MeshLambertMaterial({ color: 0xe6e3dc }));   // plain painted drywall
+    ceil.rotation.x = Math.PI / 2; ceil.position.set((XR + CLOSET.x1) / 2, BH, (BZ0 + HZ) / 2); scene.add(ceil);
+    const put = (geo, m, x, y, z, par = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); return o; };
+    const bx = (w, h, d, m, x, y, z, par) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z, par);
+    const cyl = (r, h, m, x, y, z, par) => put(new THREE.CylinderGeometry(r, r, h, 12), m, x, y, z, par);
+    const lam = c => new THREE.MeshLambertMaterial({ color: c });
+    const yellow = lam(0xf2c200), grey = lam(0x6b6f74), dark = lam(0x222222), wood = lam(0xb08a5a), alu = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 80 });
+    const stick = (a, b, r, m) => {                  // a pole from point a to point b
+      const d = new THREE.Vector3().subVectors(b, a), o = cyl(r, d.length(), m, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+      o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); return o;
+    };
+    // one bare bulb on a cord from the middle of the ceiling (its own light zone: E on it, or its chain, flips it)
+    {
+      const bx0 = (x0 + x1) / 2, bz0 = (z0 + z1) / 2, porcelain = lam(0xf1ede2), parts = [];
+      parts.push(put(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 16), porcelain, bx0, BH - 0.01, bz0));          // ceiling canopy
+      parts.push(cyl(0.004, 0.32, dark, bx0, BH - 0.17, bz0));                                                      // the cord
+      parts.push(put(new THREE.CylinderGeometry(0.022, 0.026, 0.06, 12), porcelain, bx0, BH - 0.36, bz0));           // socket
+      closetBulb.mat = new THREE.MeshBasicMaterial({ color: 0x3a3833 });
+      const glass = glow(put(new THREE.SphereGeometry(0.032, 16, 12), closetBulb.mat, bx0, BH - 0.415, bz0)); glass.scale.y = 1.25; parts.push(glass);
+      parts.push(cyl(0.0025, 0.3, alu, bx0 + 0.02, BH - 0.52, bz0), put(new THREE.SphereGeometry(0.008, 8, 6), alu, bx0 + 0.02, BH - 0.675, bz0));   // pull chain + its bead
+      for (const o of parts) { o.userData.lightZone = "closet"; aimables.push(o); }
+    }
+    // mop bucket: yellow tub on casters, the wringer on one end, grey water, the mop stood in it
+    const mbx = x1 - 0.26, mbz = z1 - 0.3;
+    bx(0.32, 0.3, 0.44, yellow, mbx, 0.2, mbz);
+    bx(0.28, 0.005, 0.4, lam(0x7d7a62), mbx, 0.33, mbz + 0.02);                          // dirty water
+    bx(0.34, 0.2, 0.14, grey, mbx, 0.42, mbz - 0.14);                                     // wringer
+    bx(0.4, 0.03, 0.03, grey, mbx, 0.55, mbz - 0.19);                                     // its lever
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) put(new THREE.SphereGeometry(0.03, 8, 6), dark, mbx + sx * 0.12, 0.03, mbz + sz * 0.18);
+    put(new THREE.CylinderGeometry(0.06, 0.09, 0.14, 10), lam(0xe8e2cf), mbx, 0.32, mbz + 0.08);   // the mop head, poking up out of the water
+    stick(new THREE.Vector3(mbx, 0.35, mbz + 0.08), new THREE.Vector3(x1 - 0.03, 1.55, mbz + 0.02), 0.013, wood);
+    colliders.push({ x0: mbx - 0.18, x1, z0: mbz - 0.24, z1: mbz + 0.24, y1: 0.6 });
+    // carpet sweeper: low housing with a rubber bumper, the handle back against the wall
+    const swx = x1 - 0.3, swz = z0 + 0.75;
+    bx(0.22, 0.08, 0.34, lam(0x8c1c1c), swx, 0.06, swz);
+    bx(0.24, 0.025, 0.36, dark, swx, 0.035, swz);                                          // bumper
+    for (const sz of [-1, 1]) cyl(0.022, 0.02, dark, swx, 0.022, swz + sz * 0.15).rotation.x = Math.PI / 2;
+    bx(0.03, 0.04, 0.03, alu, swx, 0.115, swz);                                            // the yoke
+    stick(new THREE.Vector3(swx, 0.12, swz), new THREE.Vector3(x1 - 0.03, 1.25, swz), 0.011, alu);
+    put(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), dark, x1 - 0.04, 1.25, swz).rotation.x = Math.PI / 2;   // grip
+    colliders.push({ x0: swx - 0.13, x1, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
+    // step ladder, folded and leaned against the right-hand wall, just inside the door
+    {
+      const g = new THREE.Group(); g.position.set(x0 + 0.35, 0, z1 - 0.07); g.rotation.x = 0.09; scene.add(g);   // leaning into the wall (+z)
+      for (const sx of [-1, 1]) for (const sz of [0, -0.045]) bx(0.04, 1.05, 0.025, alu, sx * 0.2, 0.525, sz, g);   // front + back rails, folded flat together
+      for (let i = 0; i < 3; i++) bx(0.36, 0.025, 0.07, alu, 0, 0.27 + i * 0.25, -0.03, g);                       // steps
+      bx(0.44, 0.05, 0.1, lam(0x2a5fb0), 0, 1.07, -0.022, g);                                                      // the top cap
+      for (const sx of [-1, 1]) bx(0.05, 0.03, 0.08, dark, sx * 0.2, 0.015, -0.022, g);                            // feet
+      colliders.push({ x0: g.position.x - 0.25, x1: g.position.x + 0.25, z0: z1 - 0.2, z1, y1: 1.1 });
+    }
+    // shelf on the back wall, up out of the way: carpet shampoo, floor cleaner, a gallon of bleach, glass cleaner
+    const sy = 1.5, sz0 = z0 + 0.35, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
+    bx(sd, 0.025, sz1 - sz0, wood, sx, sy, (sz0 + sz1) / 2);
+    for (const z of [sz0 + 0.1, sz1 - 0.1]) bx(0.02, 0.18, 0.02, grey, x1 - 0.02, sy - 0.1, z);   // brackets
+    const top = sy + 0.0125, label = (w, h, c, y, z, d) => bx(0.004, h, w, lam(c), sx - d, y, z);
+    const items = [
+      z => { bx(0.09, 0.26, 0.11, lam(0x6aa84f), sx, top + 0.13, z); cyl(0.02, 0.03, dark, sx, top + 0.275, z); label(0.09, 0.09, 0xf6f6f2, top + 0.12, z, 0.047); },   // carpet shampoo
+      z => { bx(0.08, 0.22, 0.1, yellow, sx, top + 0.11, z); cyl(0.018, 0.03, lam(0xd21f26), sx, top + 0.235, z); label(0.08, 0.08, 0xd21f26, top + 0.1, z, 0.042); },   // floor cleaner
+      z => { bx(0.12, 0.24, 0.15, lam(0xf6f6f2), sx, top + 0.12, z); cyl(0.022, 0.03, lam(0x2a5fb0), sx, top + 0.255, z + 0.04); label(0.11, 0.1, 0x2a5fb0, top + 0.11, z, 0.062); },   // bleach jug
+      z => { cyl(0.04, 0.2, lam(0x2f8fe8), sx, top + 0.1, z); bx(0.06, 0.06, 0.03, lam(0xf2f2f2), sx - 0.01, top + 0.23, z); bx(0.012, 0.04, 0.012, lam(0xf2f2f2), sx - 0.05, top + 0.19, z); },   // glass cleaner: spray head + trigger
+    ];
+    items.forEach((f, i) => f(sz0 + 0.12 + i * (sz1 - sz0 - 0.24) / (items.length - 1)));
+  }
+
   const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over the store-side doorway, above the stripe
   rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
   rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y = Math.PI; scene.add(rr);
@@ -1497,7 +1576,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   TVU.uInSky.value.copy(lin(0xdfe8ff, 1.15)); TVU.uInGround.value.copy(lin(0x223355, 1.15));
   TVU.uInAmb.value.copy(lin(0xffffff, 0.32)); TVU.uInDirC.value.copy(lin(0xffffff, 0.55)); TVU.uInDir.value.set(3, 10, -6).normalize();
   TVU.uFloorBox.value.set(XL - 0.05, XR + 0.05, Z, H + 0.05);
-  TVU.uBohBox.value.set(BOH.x0, XR + 0.05, BOH.hallZ, BOH.z1 + 0.05); TVU.uBohSplit.value.set(BOH.splitX, BOH.h);
+  TVU.uBohBox.value.set(BOH.x0, CLOSET.x1 + 0.05, BOH.hallZ, BOH.z1 + 0.05); TVU.uBohSplit.value.set(BOH.splitX, BOH.h);
   const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0.9, 2.4, 3.15);   // under the entry troffer, low enough not to burn a hot spot into the tiles
   lobby.userData.on = lobby.intensity; lobby.userData.zone = "front"; allLights.push(lobby); scene.add(lobby);
 }
@@ -4125,8 +4204,8 @@ function flickerLit(schedule, t) { return schedule.some(([on, off]) => t >= on &
 // lightsOut = "the store's dark": every sales-floor zone off and no daylight
 // to speak of — the TV glow, marquee posters, bloom and lamp pools key off it
 let lightsOut = false;
-const zoneOn = Object.fromEntries(LIGHT_ZONES.map(z => [z, true]));
-const zoneLvl = Object.fromEntries(LIGHT_ZONES.map(z => [z, 1]));   // what the shader gets: 0..1, flickering while warming up
+const zoneOn = Object.fromEntries(LIGHT_ZONES.map(z => [z, z !== "closet"]));   // (the closet bulb starts off)
+const zoneLvl = Object.fromEntries(LIGHT_ZONES.map(z => [z, +zoneOn[z]]));   // what the shader gets: 0..1, flickering while warming up
 const zoneWarm = {};                              // zone -> { t, duration, mats, schedules } while its panels restrike
 function setZone(zone, on) {
   zoneOn[zone] = on;
@@ -4155,7 +4234,8 @@ function lightingTick(dt) {                       // fluorescents restriking, zo
 function applyLighting() {
   const Z = TVU.uZone.value, B = TVU.uBoh.value;
   Z.set(zoneLvl.front, zoneLvl.aisles, zoneLvl.lounge, tod.level);
-  B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, 0);
+  B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, zoneLvl.closet);
+  closetBulb.mat?.color.set(zoneOn.closet ? 0xfff2c4 : 0x3a3833);
   TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater);
   for (const l of allLights) l.intensity = l.userData.on * (zoneLvl[l.userData.zone] ?? 1);
   const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;
@@ -4401,7 +4481,7 @@ function shiftHud() {
 // the light switches: a plate of toggles on the wall, one per zone. Built in
 // the world section below (lightSwitches), toggled with E
 const switchToggles = [];                         // { mesh, zone } — the rocker flips with its zone
-const switchPlate = {};                           // zone -> every zone on its plate, in order
+const switchPlate = { closet: ["closet"] };        // zone -> every zone on its plate, in order (the closet: just its bulb)
 let switchAc = null;
 function flipSwitch(zone) { setZone(zone, !zoneOn[zone]); switchSnap(zoneOn[zone]); }
 // hold E on a plate: the whole row goes the opposite of its first switch
@@ -8369,7 +8449,7 @@ function loadState(S) {
   if (S?.v !== SAVE_V) return;
   try {
     if (S.player) Object.assign(player, S.player);
-    if (S.lights) for (const z of LIGHT_ZONES) { if (S.lights[z] === false) setZone(z, false); }
+    if (S.lights) for (const z of LIGHT_ZONES) { if (S.lights[z] === false) setZone(z, false); else if (S.lights[z] && !zoneOn[z]) setZone(z, true); }
     else if (S.lightsOut) for (const z of ["front", "aisles", "lounge"]) setZone(z, false);   // an older save: lights out = the sales floor dark...
     if (S.gatesArmed === false) armGates(false);
     if (S.frontLocked) setFrontLock(true);
@@ -8682,6 +8762,6 @@ window.__t = {
   flapOpen: () => flapOpen, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staff, you, gainXp, lv, xpToNext, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
