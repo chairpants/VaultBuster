@@ -1,6 +1,6 @@
 // Look at the game from anywhere: a fresh store, the player put at x,z facing yaw (radians; 0 looks at the
 // front door, PI toward the back) with pitch, then a screenshot. Optionally run some setup first (any JS, with
-// the window.__t test hooks), or time the frames instead.
+// the window.__t test hooks; its value is printed), or time the frames instead.
 //   node tests/shot.mjs out.png 7.5,28.9,-1.57,0
 //   node tests/shot.mjs out.png 10.3,29.1,-1.7,0.1 --setup "__t.setZone('closet', true)"
 //   node tests/shot.mjs - 3,12,3.14,0 --mode simulation --gpu --fps   (frame times on the real GPU, no picture)
@@ -16,7 +16,7 @@ await page.goto(URL, { timeout: 300000 }); await ready();
 await page.evaluate(m => { localStorage.clear(); localStorage.setItem("vaultbuster-save", JSON.stringify({ v: 3, mode: m, fresh: true })); }, flag("--mode") ? opt("--mode") : "sandbox");
 await page.reload({ timeout: 300000 }); await ready();
 await page.click("#mmContinue"); await page.waitForTimeout(2500);
-if (flag("--setup")) await page.evaluate(opt("--setup"));
+if (flag("--setup")) { const r = await page.evaluate(opt("--setup")); if (r !== undefined) console.log(r); }   // (whatever it comes to, printed)
 await page.evaluate(([x, z, yaw, pitch]) => Object.assign(__t.player, { x, z, yaw, pitch }), [x, z, yaw, pitch]);
 await page.waitForTimeout(2000);
 if (flag("--fps")) {
