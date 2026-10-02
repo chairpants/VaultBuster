@@ -4282,7 +4282,7 @@ function applyLighting() {
   const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;
   if (dark === lightsOut && applyLighting.done) return;
   applyLighting.done = true; lightsOut = dark;
-  for (const m of posterMats) m.emissiveIntensity = dark ? 0.22 : 0;   // marquees and screens glow on their own
+  for (const m of posterMats) m.emissiveIntensity = dark ? 0.5 : 0;   // marquees and screens glow on their own (the posters lit by their bulbs, readable in the dark)
   haloMat.opacity = dark ? 0.4 : 0.22;        // the marquee spill shows more with the lights down
   bloomPass.strength = dark ? 0.55 : 0.28;    // barely-there with the lights on; a bit more presence in the dark
   // threshold raised from .2/.4 — screen whites (menus, bright scenes) were blooming
