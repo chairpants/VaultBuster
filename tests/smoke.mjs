@@ -93,6 +93,11 @@ check("the schedule: 25 hours max, and off the clock they head out the door", aw
   const full = __t.setSched(e.id, 6, 3, true);
   e.state = "post"; e.t = 0; __t.empTick(0.05);
   return !err0 && /25 HOURS/.test(full || "") && e.leaving && e.state === "toExit"; }));
+check("a gap in the schedule: out the door, back in, and not still heading home", await ev(() => {
+  const e = __t.staff[0], d = __t.weekday(), h0 = __t.shift.h; e.sched = Array(7).fill(0); e.sched[d] = (0b11 << 3) | (0b111 << 6);   // 12-2, 3-6
+  const run = (h, n) => { __t.shift.h = h; for (let i = 0; i < n; i++) __t.empTick(0.05); };
+  run(12.2, 400); const on = !!e.c; run(14.2, 3000); const gone = !e.c; run(15.2, 400); const back = !!e.c && !e.leaving;
+  __t.shift.h = h0; return on && gone && back; }));
 check("skills level up with XP (you and staff)", await ev(() => { const e = __t.staff[0], l0 = __t.lv(e, "dex"); __t.gainXp(e, "dex", (__t.xpToNext(l0) + 1) / __t.SKILLS.dex.rate); __t.gainXp("you", "str", (__t.xpToNext(1) + 1) / __t.SKILLS.str.rate);   /* (each stat earns at its own rate) */ return __t.lv(e, "dex") === l0 + 1 && __t.lv("you", "str") >= 2; }));
 
 console.log("\nsimulation: unlocks, upgrades, staff, the closet, the register");
