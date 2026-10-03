@@ -6052,21 +6052,27 @@ function empSpawn(arrive = false) {              // into the store in the unifor
   c.parts.forEach(m => { m.userData.employee = emp; aimables.push(m); });
   c.glows.forEach(glow); scene.add(c.group); colliders.push(emp.box);
   c.group.position.set(emp.home.x, 0, emp.home.z); emp.ry = emp.face = emp.home.ry;
-  c.setMood("neutral"); emp.state = "post";
+  c.setMood("neutral"); emp.state = "post"; emp.leaving = false;
   if (arrive) { c.group.position.set(CUST_DOOR.x, 0, CUST_DOOR.z); emp.ry = Math.PI; empGo("toPost", emp.home); }
 }
 function empDespawn() {                          // out the door: gone for the day
   const c = emp.c; if (!c) return;
+  empLeaveStool(); empFetchDrop(); danaRestockAbort();   // let go of whatever they had going: the stool, a fetch, the stock in hand
+  if (emp.carry.length) { returnBin.push(...emp.carry); emp.carry = []; refreshReturnsBin(); }   // returns in hand: back in the tote
+  if (emp.trash) {                                // a trash run: free the bin for whoever's next, and the bag's left where they stood
+    if (emp.trash.t.claim === emp) emp.trash.t.claim = null;
+    if (emp.trash.bag) { const p = c.group.position; bagPlace(emp.trash.bag.bin, emp.trash.bag.n, p.x, p.z); }
+  }
   c.holdItem(null); c.parts.forEach(m => { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); });
   c.group.removeFromParent(); c.dispose?.();
   const ci = colliders.indexOf(emp.box); if (ci >= 0) colliders.splice(ci, 1);
   if (stool.by === emp) stool.by = null;
-  Object.assign(emp, empState(), { sentHome: emp.sentHome });
+  Object.assign(emp, empState(), { sentHome: emp.sentHome, leaving: false, paused: false, mess: null, restock: null, fetch: null, trash: null, stray: null, seat: null });   // (empState doesn't list these: clear them, or the next shift starts out already heading home)
 }
 const weekday = () => shiftDate().getDay();
 function onDuty(e) {                             // should they be in the store right now?
   if (e.sentHome) return false;
-  if (shift.h >= SHIFT.close) return !!e.c;      // after close: whoever's still here, till you send them home
+  if (shift.h >= SHIFT.close) return !!e.c && !!(e.sched[weekday()] >> (SCHED_SLOTS - 1) & 1);   // after close: whoever worked till close stays till you send them home (not someone just finishing up a late sale)
   const n = Math.floor(shift.h) - SCHED_H0;
   return n >= 0 && n < SCHED_SLOTS && !!(e.sched[weekday()] >> n & 1);
 }
@@ -6446,7 +6452,8 @@ function empTickOne(dt) {
     const arrive = clockT > 3; empSpawn(arrive); if (arrive) logAct(`${emp.first} clocked in`);
   }
   if (!emp.leaving && !onDuty(emp)) emp.leaving = true;   // their shift's over (or you sent them home): they finish up, then go
-  if (emp.leaving && emp.state === "post" && co?.emp !== emp && !emp.paused && emp.task === "register" && !emp.trash && !emp.mess && !emp.restock && !emp.fetch && emp.t <= 0) {
+  else if (emp.leaving && onDuty(emp)) { emp.leaving = false; if (emp.state === "toExit") empGo("toPost", emp.home); }   // on again before they got out the door (a gap in the schedule, or it changed): they stay
+  if (emp.leaving && (emp.state === "post" || STOOL_STATES.includes(emp.state)) && co?.emp !== emp && !emp.paused && emp.task === "register" && !emp.trash && !emp.mess && !emp.restock && !emp.fetch && emp.t <= 0) {
     empGo("toExit", CUST_DOOR); emp.state = "toExit"; emp.c.setMood("happy");
     if (!emp.sentHome) logAct(`${emp.first} clocked out`);
   }
