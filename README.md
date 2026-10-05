@@ -1,61 +1,81 @@
 # VaultBuster
 
-**Clock in for a shift at a 90s video store.**
+**It's 7:25 on a Friday night, there's a line at the counter, somebody by the door has a tape under their jacket, and the store is yours.**
 
-**▶ [Play it in your browser](https://chairpants.github.io/VaultBuster/)**
+**▶ [Clock in: play it free in your browser](https://chairpants.github.io/VaultBuster/)**
 
-![Walking into VaultBuster](screenshots/entrance.jpg)
+![Ringing up a regular at the counter while the next customer waits](screenshots/checkout.jpg)
 
-It's a Friday night and the store is yours. Work the counter, run the register, keep the shelves straight, and deal with whatever the night throws at you. It's a first-person sim of life behind the counter at a neighborhood rental store, down to the rewinder and the security gates.
+VaultBuster is a first-person shift at a neighborhood video store in the 90s. You're the one behind the counter. You work the register, keep the place running, and turn a half-empty storefront into the store everybody in town goes to on a Friday night.
 
 ---
 
-## Screenshots
+## Your first few minutes
+
+It's 9 AM and the doors are still locked. You have an hour.
+
+**Walk** the floor and **flip on** the lights zone by zone. **Empty** the returns slot, **rewind** what came back, and **shelve** it where it goes. **Stock** the candy rack from the cupboard behind the counter. Then **unlock** the front doors.
+
+The chime goes and the first customer wanders in. They browse, they pick something out, they **come up to the counter**. You **swipe** their card, **ring it up**, **desensitize** the tape so it doesn't set off the gates, **charge** (or waive) their three dollars in late fees, **pitch** them a box of candy, **tear off** the receipt and **hand it over**. Speed matters, and so does getting every step right.
+
+Then the phone rings. Someone wants to know if you have a particular movie in. Say you'll hold it, and it had better be on the holds shelf when they show up.
+
+Then a customer with darting eyes heads for the door.
 
 | | |
 |---|---|
-| ![The checkout counter](screenshots/counter.jpg) | ![Behind the counter: register, rewinder and receipt printer](screenshots/behind-counter.jpg) |
-| ![The POS terminal's main menu](screenshots/pos.jpg) | ![The POS after a tape sets off the security gates](screenshots/alarm.jpg) |
-| ![The MonsterVision section and its Dracula standee](screenshots/monstervision.jpg) | ![A New Releases wall](screenshots/aisle.jpg) |
+| ![A shoplifter with shifty eyes heading for the security gates](screenshots/shoplifter.jpg) | ![Caught: ban them, cancel their card, call the police, or let them off](screenshots/caught.jpg) |
+| *Darting eyes and a hand on the jacket: they're heading for the gates.* | *Catch them first, then decide: ban, cancel, call the police, or a warning. It all goes on their record.* |
 
-| Lights on | Lights out |
+---
+
+## Then it becomes your store
+
+You can't do it all yourself for long, and you're not supposed to.
+
+**Hire.** Post a job opening from the register and three applicants come in to interview, each good at something different. Pick the one you want on your team.
+
+**Schedule.** Lay out their week hour by hour on the register's DOS-style schedule screen. They come in the front door when their shift starts and leave when it ends.
+
+**Delegate.** The job board behind the counter works like a priority grid: register, phones, floor, returns, restock, cleanup. Put your best talker on the register, keep someone strong on restocking, and set the rest to sweep up.
+
+| | |
 |---|---|
-| ![The lounge](screenshots/lounge.jpg) | ![The lounge after dark](screenshots/lounge-night.jpg) |
-| ![Looking out the front doors by day](screenshots/outside-day.jpg) | ![The lot at night under the sodium lights](screenshots/outside-night.jpg) |
+| ![Three applicants, each with their own stats](screenshots/hiring.jpg) | ![The job board: who does what, first to last](screenshots/job-board.jpg) |
+| ![The staff's week on the register's schedule screen](screenshots/schedule.jpg) | ![The character sheet: DEX, INT, CHA, STR, CON, WIS](screenshots/skills.jpg) |
+
+**Level up.** Everyone has six stats, each one tied to part of the job: **DEX** for register work and rewinding, **INT** for shelving and finding the exact tape someone asked for, **CHA** for upsells and the phone, **STR** for hauling deliveries, **CON** for cleaning and miles walked, **WIS** for spotting shoplifters. The work earns XP, and milestones unlock perks like *Quick Thread*, *Smooth Talker* and *Sixth Sense*. Your clumsy new hire turns into your best clerk.
+
+**Grow.** Every shift ends with a printed slip and a grade. A good night raises your star rating and gets people talking, so more members sign up. Each day comes with goals to hit. Spend what the store earns on upgrades: security cameras, anti-theft signs, a second rewinder, high-speed rewinders shaped like little sports cars, a better cooler, staff training, an ad in the paper, and a theater with an 8 PM feature.
+
+**Keep it clean.** Soda gets spilled, popcorn ends up in the carpet, bins overflow, ceiling lights burn out. Grab the mop, the carpet sweeper, or the step ladder from the janitor's closet. Whatever's left at midnight counts against you on the closing check.
+
+| | | |
+|---|---|---|
+| ![A burnt-out ceiling panel and the step ladder set up beneath it](screenshots/ladder.jpg) | ![The register's main menu](screenshots/register.jpg) | ![The end-of-shift slip](screenshots/shift-slip.jpg) |
 
 ---
 
-## Features
+## The feel of the place
 
-- **A real store to run:** 1,600+ tapes on the shelves, a counter, a back room, and a parking lot out front.
-- **A working register:** a 90s DOS-style point-of-sale system with inventory, members, reports, ordering and staff scheduling. A pixel-art VAULTBUSTER header, color-coded fields, and a main menu boxed into sections. Its login screen stays up on the monitor (with the returns bin, overdue count and tonight's feature at a glance); log in with Enter or a click. Works with the keyboard (F1 help, F2 find, ESC back, F10 log off) or the mouse.
-- **Counter gear that works:** rewind tapes, desensitize them at checkout, ring the bell, and work the returns slot.
-- **Security gates** that do exactly what you'd expect when a tagged tape walks out the door.
-- **Almost everything is interactive.** Pick things up, carry them around, restock, eat the snacks. Most of it is yours to find.
-- **MonsterVision:** Joe Bob Briggs' late-night movies get a section of their own, with a guest who's happy to be moved around.
-- **Real light switches:** the store is wired in zones, and the back rooms have their own. Daylight comes in through the front windows.
-- **Two ways to play:** *Simulation* starts you in a bare-bones store (no staff, the theater chained shut, no popcorn machine, part of the library off the shelves) and you build it up out of what it earns: hire staff, open the theater, and buy Library Upgrades 1–3. It starts with a small member base: new people come in to sign up at the counter (take their form, enter them on the register, hand them a card), drawn by word of mouth from good shifts, newspaper ads and what you've built. *Sandbox* starts with no upgrades but $10,000 in the budget and Dana on staff, so you can buy what you like and get playing. The main menu has three save slots (continue one, load another, or start a new store in any of them) and settings for store-sound and TV volume, mouse sensitivity, invert Y, smooth edges (antialiasing) and shift length.
-- **Work the counter well:** checkouts score points for speed and getting every step right. Late fees owed get charged or waived at the register, a snack can be upsold, and the receipt printer prints a slip you tear off and hand over. Watch for shoplifters: a customer with darting eyes heading for the door has something under their jacket. A friendly hello (or an obvious eye on them) can change their mind. Stop one before the gates and decide what happens: a ban, a cancelled membership, the police, or a warning, all of which go on their account. One who gets away is only named if you'd seen who they were.
-- **Skills that level up:** six RPG stats, translated to the job. **DEX** (register work, rewinding, desensitizing), **INT** (shelving, finding the exact title someone asked for, holds), **CHA** (upsells, recommendations, fees, the phone, sign-ups), **STR** (restocking, unpacking deliveries), **CON** (cleaning up, miles walked) and **WIS** (spotting shoplifters). Doing the work earns XP in its stat, and each level takes longer than the last (max 20). Levels pay off: quicker hands at the register and rewinders, more boxes carried, a faster walk, better odds on a pitch; at INT 3 a request tells you whether it's on the shelf, and at WIS 3 you get a heads-up about someone sneaking out. **K** opens the character sheet for you and every employee.
-- **Hiring:** buy *Hire an Employee* on the register and three applicants come in, each with their own name, look (build, height, head) and stats. Every applicant's stats add up to the same total, so each is good at something different. Pick one (or pass and get a refund). You can hire up to four; each hire costs more than the last, and wages rise with an employee's level. Staff level up the same way you do, so a clumsy new hire becomes a fast one. *Staff Training* makes them learn 50% faster. Sandbox starts you with Dana.
-- **The schedule:** each employee is part time, up to 25 hours a week, set hour by hour on the register's STAFF SCHEDULE screen: the whole week on one grid, days across, hours down, a colored lane per employee (arrows and space, or click and drag). They come in the front door when their shift starts and leave the same way when it ends. Whoever's still in at midnight stays until you send them home (E on them after close). Wages are paid by the scheduled hour.
-- **The job board:** a cork board behind the counter is a grid, RimWorld style: jobs across the top (register, phones, floor help, returns, restock, cleanup), employees down the side. Each cell is a 1 (first) to 4, or X for never. Each employee works their highest-priority job that has work, and customer-facing jobs pull them off background work when they outrank it. Arrow keys move around the grid; 1–4, X or Space set a cell.
-- **The phone:** every couple of hours a member calls to ask if you have something in. Say you'll hold it and a copy had better be on the holds shelf when they come in for it. Customers in the store come first: a call missed while you're busy costs nothing, but picking up with someone waiting at the counter does. Staff take calls when the store's quiet.
-- **Customers who want something:** some come to the counter asking for a title, others for "something scary". Find it, bring it, hand it over (E with the tape in hand), or tell them it's all out (Q). Leave them waiting and an employee goes to find it. How members are treated builds their loyalty: regulars visit more and wait longer, and the unhappy ones stop coming. The day has a rhythm too: slow mornings, the after-school wave, a big Friday night.
-- **Keep the place in shape:** snacks and drinks don't refill themselves. The stock cupboards behind the counter hand you what the racks are missing, and you put it out. Order more on the register; it arrives next morning as boxes by the front door. Customers shove tapes back in the wrong place and drop litter; straighten up, or let the staff do it. The trash fills up too: the lobby bin with the customers (the busier the store, the faster), the break room can and the restroom wastebasket more slowly. A full bin spills onto the floor. E on a bin ties off the bag; carry up to two to the trash chute in the janitor's closet (right-click sets them down). The closet has the tools for the rest: spilled soda wants the mop, popcorn on the carpet wants the carpet sweeper, and when a ceiling light burns out, carry the step ladder over to swap the tube. Staff take the trash out under CLEANUP. Whatever's left undone at close costs you on the closing check.
-- **Run the business:** a star rating that rises and falls with each night's shift and brings in more (or fewer) customers. Each day comes with two goals (ring up so many customers, nobody walks out, a clean closing check...) shown under the clock, worth $20 each at close. Pick tonight's feature on the register; customers buy tickets at checkout and show up at 7:45, and the film had better be in the VCR by 8. Spend the budget on upgrades: security cameras, anti-theft signs, a second rewinder and then high-speed ones (shaped like little sports cars), a better cooler compressor, staff training, or an ad in the paper.
-- **A shift on the clock:** you're in at 9 AM with the doors still locked (an hour to get things ready), the store's open 10 AM to midnight, about 21 minutes of play, and the sky outside slides from morning through golden hour and sunset into night. At midnight the clock slows to real time, and the day ends only when you lock up and walk out the front doors. Each shift ends with a printed slip and a grade.
-- **The store remembers.** Clock out, come back, and everything is where you left it.
+Buzzing fluorescent tubes, blue carpet, a confetti-print kids' corner, posters ringed with marquee bulbs, and a DOS terminal on the counter that wants an F-key for everything. A customer's TV-set head smiles when you get their order right and scowls when you leave them waiting.
+
+All the sound is generated live instead of recorded: ballast hum, room tone, traffic outside the glass, the door chime, the cooler's compressor kicking on. The day goes by outside the front windows, from morning light to golden hour to sodium lamps over an empty lot. After close it's just you, the lounge lamps and whatever you left undone.
+
+| | |
+|---|---|
+| ![The preview lounge after dark](screenshots/lounge-night.jpg) | ![The parking lot at night](screenshots/outside-night.jpg) |
 
 ---
 
-## Running it
+## Clock in
 
-You need an internet connection, because three.js loads from a CDN.
+**▶ [Play VaultBuster in your browser](https://chairpants.github.io/VaultBuster/)** — no install, no account. It runs in your browser with keyboard and mouse, and you can play it on a touchscreen too.
 
-**Easiest:** play the hosted version at **https://chairpants.github.io/VaultBuster/**.
+- **Simulation** starts you in a bare-bones store: no staff, the theater chained shut, a small member list. Build it up from what it earns.
+- **Sandbox** gives you $10,000 and Dana on staff from the start. Buy what you like and get playing.
 
-**Locally:** open `index.html` in a browser. It works from `file://` with no server needed.
+Three save slots, and the store remembers where you left everything. If you like it, **star the repo** and tell someone who used to work behind a counter.
 
 ---
 
@@ -86,6 +106,9 @@ You need an internet connection, because three.js loads from a CDN.
 ---
 
 ## How it's put together
+
+To run it locally, open `index.html` in a browser. It works straight from `file://` with no server; you just need an internet connection, because three.js loads from a CDN.
+
 
 Everything runs as plain `<script>` files loaded in order. There are no ES modules, so the page works from `file://`. The one exception is a small inline module in `index.html` that imports three.js and its post-processing add-ons from the CDN, puts them on `window`, and then loads `store.js`.
 
