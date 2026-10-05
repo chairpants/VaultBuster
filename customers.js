@@ -24,6 +24,7 @@
 //     setPantsDown(bool), for sitting on the toilet: bare legs, pants round the ankles
 //     holdItem(obj|null), something real in the other hand (a snack off the rack), sized to the world; null empties it
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
+//     reachAlso(point|null, arm),  the other hand too, arm only (both hands on a mop handle); null lets go
 //     talk(bool),         conversational head motion
 //     tick(dt, speed),    animate; speed = m/s along the ground (0 = standing)
 //     walkLean,           true: tip forward into the walk (the player's own body turns it off)
@@ -374,7 +375,7 @@ window.VaultCustomers = (() => {
     const face = { mood: "off", color: o.phosphor, since: 0, blink: false, next: 0, drawnAt: -1 };
     const UPPER = 0.29, FORE = 0.32;                   // shoulder->elbow, elbow->hand (body-space, before the height/build scale)
     let talking = false;
-    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
+    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, reach2 = { target: new THREE.Vector3(), on: false, w: 0, arm: 0 }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
     let t = 0, phase = 0, pose = "idle", look = null, sitAt = {};   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
@@ -404,6 +405,7 @@ window.VaultCustomers = (() => {
       // rewinder...) — eased in and out. arm: 1 = the tape hand (default), 0 = the other, "auto" = nearer
       // opts.lean: false = arm only (counter work: no bowing; out-of-reach just points the arm)
       reachTo(point, arm = 1, opts = {}) { if (point) { reach.target.copy(point); reach.on = true; reach.arm = arm; reach.lean = opts.lean !== false; } else reach.on = false; },
+      reachAlso(point, arm = 0) { if (point) { reach2.target.copy(point); reach2.on = true; reach2.arm = arm; } else reach2.on = false; },
       talk(on) { talking = on; },                    // chatting across the counter: small nods and tilts
       tick(dt, speed = 0) {
         t += dt;
@@ -419,6 +421,7 @@ window.VaultCustomers = (() => {
         const ease = (k, v, rate = r) => { st[k] += (v - st[k]) * rate; return st[k]; };   // eased pose channels (kept apart from the rig, so reaching can layer on top)
         const squat = ease("squat", pose === "crouch" ? 1 : 0, Math.min(1, dt * 10));   // a deep knees-bent crouch: hips drop ~0.6 toward the heels
         reach.w += ((reach.on ? 1 : 0) - reach.w) * Math.min(1, dt * 5);
+        reach2.w += ((reach2.on ? 1 : 0) - reach2.w) * Math.min(1, dt * 5);
         const w = reach.w < 0.002 ? 0 : reach.w;
         // where the target sits relative to an unbent shoulder decides how much to bend at the waist / crouch / step in
         let ik = null;
@@ -461,17 +464,19 @@ window.VaultCustomers = (() => {
         const ar = walking ? soft : r;                    // arms carry some momentum while walking; poses (reach, hold) still settle promptly
         const pose2 = [[ease("ax0", lx, ar), ease("ae0", le, ar)], [ease("ax1", rx, ar), ease("ae1", re, ar)]];
         arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0], 0, i ? -0.06 : 0.06); el.rotation.x = pose2[i][1]; });
-        if (ik) {                                        // two-bone IK: elbow from the law of cosines, shoulder swung to aim the chain
-          const { sh, el } = arms[ik.armI];
+        const armIK = (armI, target, w) => {             // two-bone IK: elbow from the law of cosines, shoulder swung to aim the chain
+          const { sh, el } = arms[armI];
           upper.updateMatrixWorld(true);
-          const d = upper.worldToLocal(tmp.copy(reach.target)).sub(sh.position), D = Math.max(0.12, Math.min(UPPER + FORE - 0.01, d.length()));
+          const d = upper.worldToLocal(tmp.copy(target)).sub(sh.position), D = Math.max(0.12, Math.min(UPPER + FORE - 0.01, d.length()));
           const inner = Math.acos(Math.max(-1, Math.min(1, (UPPER * UPPER + FORE * FORE - D * D) / (2 * UPPER * FORE))));
           const e = -(Math.PI - inner);                          // negative = forearm folds forward
           const hand0 = tmp2.set(0, -UPPER - FORE * Math.cos(e), -FORE * Math.sin(e)).normalize();
           qIK.setFromUnitVectors(hand0, d.normalize());
           sh.quaternion.slerp(qIK, w);
           el.rotation.x += (e - el.rotation.x) * w;
-        }
+        };
+        if (ik) armIK(ik.armI, reach.target, w);
+        if (reach2.w > 0.002 && !(ik && ik.armI === reach2.arm)) armIK(reach2.arm, reach2.target, reach2.w);
         // head: browsing scans, impatience tilts, otherwise a slow idle drift
         const yaw = look != null ? look : face.mood === "browse" ? Math.sin(t * 1.3) * 0.25 : face.mood === "shifty" ? Math.sin(t * 2.3) * 0.55 : Math.sin(t * 0.4) * 0.05;   // shifty: checking over both shoulders
         lerp(head.rotation, "y", yaw + (talking ? Math.sin(t * 0.9) * 0.06 : 0), r * 0.6);
