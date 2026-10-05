@@ -30,13 +30,40 @@ const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the 
 const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };
-// the closet's tools, taken out with E and put back the same way, one at a time (see toolTake). hand: how it's
-// carried, camera-local [position, rotation]; the closet build fills in g (the tool), home (its spot), col (its collider)
+// the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
+// (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
+// reaches), hand = the top grip [right, up, forward]; see toolTick).
+// The closet build fills in g (the tool), home (its spot), col (its collider)
 const TOOLS = {
-  mop: { label: "mop", hand: [[0.3, -0.85, -1.35], [0.8, 0, 0]] },
-  sweeper: { label: "carpet sweeper", hand: [[0.1, -0.9, -1.4], [0.75, 0, 0]] },
-  ladder: { label: "step ladder", hand: [[0.6, -0.72, -0.2], [-Math.PI / 2, 0, 0]] },
+  mop: { label: "mop", hold: { foot: 0.14, hand: [0.1, 1.12, 0.32] } },
+  sweeper: { label: "carpet sweeper", hold: { foot: 0.12, hand: [0.18, 1.02, 0.38] } },
 };
+// the step ladder: carried about like the stool (opened out, red where it won't fit), set down on any clear bit of
+// floor, climbed (stand on the top step and the ceiling lights are in reach), and leaned back against the closet
+// wall, folded, when you're done. state: "stored" (in the closet) | "carried" | "placed" (at x, z, facing ry: its
+// steps toward +z). last: where it stood before you picked it up (a save mid-carry puts it back there)
+const LADDER = { aF: 0.26, aR: 0.21, TOP: 1.62, STEP: 1.32, CARRY_D: 1.15, REACH: 1.75 };   // front / rear spread (rad), cap and top-step heights, carry distance, how far up you can work
+const ladder = { g: null, state: "stored", x: 0, z: 0, ry: 0, box: { y1: 1.7 }, spot: null, last: null, home: null, stow: null,
+  on: false, lift: 0, from: null, fix: null, open: null, mats: [], stowBox: null };
+function ladderFit(x, z, ry, b) {               // floor box round the four feet, at any angle
+  const c = Math.cos(ry), sn = Math.sin(ry), xs = [], zs = [];
+  for (const [lx, lz] of [[-0.3, -0.38], [0.3, -0.38], [-0.3, 0.47], [0.3, 0.47]]) { xs.push(x + lx * c + lz * sn); zs.push(z - lx * sn + lz * c); }
+  return Object.assign(b, { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) });
+}
+// pose a mop or sweeper (built round its business end: g at the floor, a "toolHead" that turns flat on the floor and a
+// "toolPole" pivoting off it): the head at world F, the handle aimed up at world A. Returns where along the handle the
+// hands go: { P (its bottom), dir, len (to A, capped at the handle's length) }
+const toolPoseV = { P: new THREE.Vector3(), dir: new THREE.Vector3(), len: 0 };
+function toolPose(g, F, A) {
+  const head = g.getObjectByName("toolHead"), pole = g.getObjectByName("toolPole");
+  g.position.copy(F);
+  const dx = A.x - F.x, dz = A.z - F.z, dy = A.y - F.y - pole.position.y, hd = Math.hypot(dx, dz);
+  head.rotation.set(0, Math.atan2(dx, dz), 0);      // the head's +z: back toward your hands (all three set: a decomposed
+  pole.rotation.set(Math.atan2(hd, dy), 0, 0);       // matrix can leave a yaw past 90° as (PI, y, PI)); the handle leans that way
+  const v = toolPoseV; v.P.set(F.x, F.y + pole.position.y, F.z); v.dir.set(dx, dy, dz).normalize();
+  v.len = Math.min(Math.hypot(hd, dy), pole.userData.L - 0.04);
+  return v;
+}
 const TROFFERS = [];                              // the sales floor's ceiling lights: { x, z, y } (a burnt-out one gets a dark cover, see lightDie)                      // janitor's closet: off the hall's east end, out past the building line to x1 (its back wall)
 let wallStripe = null;                           // the blue band on the side walls: { inL: its face off the west wall, y0: its bottom } (the pass-through leaf stops against it)
 const trashBins = {};                            // the bins, registered as they're built (see "trash" further down)
@@ -939,45 +966,157 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       colliders.push({ x0: cx - 0.33, x1: cx + 0.33, z0, z1: z0 + 0.16, y1: 1.7 });
     }
 
-    // mop bucket: yellow tub on casters, the wringer on one end, grey water, the mop stood in it
-    const mbx = x1 - 0.26, mbz = z1 - 0.3;
-    bx(0.32, 0.3, 0.44, yellow, mbx, 0.2, mbz);
-    bx(0.28, 0.005, 0.4, lam(0x7d7a62), mbx, 0.33, mbz + 0.02);                          // dirty water
-    bx(0.34, 0.2, 0.14, grey, mbx, 0.42, mbz - 0.14);                                     // wringer
-    bx(0.4, 0.03, 0.03, grey, mbx, 0.55, mbz - 0.19);                                     // its lever
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) put(new THREE.SphereGeometry(0.03, 8, 6), dark, mbx + sx * 0.12, 0.03, mbz + sz * 0.18);
+    // mop bucket: a commercial 26-quart one. Tapered yellow tub with a rolled rim on a dolly with swivel casters,
+    // the side-press wringer clamped over the back end (its lever up by the wall), grey water in it
+    const mbx = x1 - 0.24, mbz = z1 - 0.3;
+    {
+      const tubM = new THREE.MeshPhongMaterial({ color: 0xf2c200, specular: 0x554400, shininess: 30, side: THREE.DoubleSide });
+      const wringM = new THREE.MeshPhongMaterial({ color: 0x55595f, specular: 0x333333, shininess: 25 }), chromeM = alu;
+      const tub = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.2, 0.34, 4, 1, true), tubM);   // a 4-sided taper: the tub's walls
+      tub.rotation.y = Math.PI / 4; tub.scale.set(0.82, 1, 1.12); tub.position.set(mbx, 0.25, mbz); scene.add(tub);
+      bx(0.26, 0.012, 0.36, tubM, mbx, 0.085, mbz);                                        // its floor
+      for (const [w, d, ox, oz] of [[0.31, 0.03, 0, -0.19], [0.31, 0.03, 0, 0.19], [0.03, 0.38, -0.143, 0], [0.03, 0.38, 0.143, 0]])
+        bx(w, 0.022, d, tubM, mbx + ox, 0.42, mbz + oz);                                    // the rolled rim
+      bx(0.07, 0.02, 0.05, tubM, mbx, 0.415, mbz + 0.215);                                 // pour spout, front end
+      bx(0.25, 0.004, 0.33, new THREE.MeshPhongMaterial({ color: 0x6e6b55, specular: 0x666655, shininess: 60 }), mbx, 0.3, mbz + 0.01);   // the dirty water
+      // the dolly underneath: a dark frame, a caster at each corner
+      bx(0.3, 0.025, 0.4, dark, mbx, 0.07, mbz);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        bx(0.025, 0.035, 0.03, grey, mbx + sx * 0.13, 0.045, mbz + sz * 0.18);              // swivel fork
+        cyl(0.025, 0.018, dark, mbx + sx * 0.13, 0.026, mbz + sz * 0.18).rotation.z = Math.PI / 2;
+      }
+      // the wringer, over the back third: side plates, the fixed and the moving press plates, the lever with its grip
+      const wz = mbz - 0.13;
+      for (const sx of [-1, 1]) bx(0.012, 0.2, 0.15, wringM, mbx + sx * 0.14, 0.5, wz);
+      bx(0.26, 0.16, 0.012, wringM, mbx, 0.5, wz - 0.07);                                  // the back plate
+      bx(0.25, 0.14, 0.02, wringM, mbx, 0.5, wz + 0.025);                                  // the press plate
+      for (let i = 0; i < 5; i++) bx(0.24, 0.008, 0.008, dark, mbx, 0.445 + i * 0.028, wz + 0.037);   // its ribs
+      bx(0.3, 0.03, 0.04, wringM, mbx, 0.41, wz);                                          // the clamp onto the rim
+      stick(new THREE.Vector3(mbx + 0.15, 0.56, wz + 0.02), new THREE.Vector3(mbx + 0.15, 1.02, wz - 0.07), 0.011, chromeM);   // the lever: up and back
+      stick(new THREE.Vector3(mbx + 0.15, 0.98, wz - 0.06), new THREE.Vector3(mbx + 0.15, 1.08, wz - 0.08), 0.018, dark);    // its grip
+      const warn = textPlane("CAUTION", 0.12, 0.035, "#1a1a1a", "#f2c200", "Arial Black", 40);
+      warn.material = new THREE.MeshLambertMaterial({ map: warn.material.map }); warn.rotation.y = -Math.PI / 2; warn.position.set(mbx - 0.152, 0.3, mbz + 0.05); scene.add(warn);
+    }
     colliders.push({ x0: mbx - 0.18, x1, z0: mbz - 0.24, z1: mbz + 0.24, y1: 0.6 });
     const tool = (id, g, home, col = null) => {      // one of the TOOLS: aimable, with an (invisible) spot to put it back on
       const h = put(new THREE.BoxGeometry(...home[0]), new THREE.MeshBasicMaterial({ visible: false }), ...home[1]); h.userData.toolHome = id;
       g.traverse(o => { if (o.isMesh) { o.userData.tool = id; aimables.push(o); } });
       Object.assign(TOOLS[id], { g, home: h, col }); if (col) colliders.push(col);
     };
-    {                                                // the mop, stood in the bucket (its head poking up out of the water)
-      const g = new THREE.Group(); g.position.set(mbx, 0.32, mbz + 0.08); scene.add(g);
-      put(new THREE.CylinderGeometry(0.06, 0.09, 0.14, 10), lam(0xe8e2cf), 0, 0, 0, g);
-      stick(new THREE.Vector3(0, 0.03, 0), new THREE.Vector3(x1 - 0.03 - mbx, 1.23, -0.06), 0.013, wood, g);
+    const toolRig = (L, h) => {                      // the pieces toolPose turns: a head flat on the floor, a pole of length L pivoting h up
+      const g = new THREE.Group(), head = new THREE.Group(), pole = new THREE.Group();
+      head.name = "toolHead"; pole.name = "toolPole"; pole.position.y = h; pole.userData.L = L;
+      g.add(head); head.add(pole); return { g, head, pole };
+    };
+    // the mop: a cotton wet mop. A lacquered wood handle with a red hang-up cap, the grey quick-change jaw clamped
+    // across a green headband, and the strands, flopped out round it (on the floor; bunched up standing in the bucket)
+    {
+      const { g, head, pole } = toolRig(1.42, 0.05);
+      const strandMs = [0xece6d4, 0xdcd5bf, 0xcfc6ac, 0xe4dcc6].map(c => lam(c));
+      const mop = new THREE.Group(); mop.name = "mopStrands"; head.add(mop);
+      for (let i = 0; i < 46; i++) {                 // splayed every which way, longer out to the sides (they hang off the band's ends)
+        const a = i * 2.39996 + Math.random() * 0.4, side = Math.abs(Math.sin(a)), len = 0.13 + 0.09 * side + Math.random() * 0.06;
+        const ox = (Math.random() - 0.5) * 0.12, tipX = ox + Math.sin(a) * len, tipZ = Math.cos(a) * len * 0.75;
+        stick(new THREE.Vector3(ox, 0.04, 0), new THREE.Vector3(tipX, 0.007 + Math.random() * 0.01, tipZ), 0.0085, strandMs[i % 4], mop);
+      }
+      const lump = put(new THREE.SphereGeometry(0.07, 14, 10), strandMs[0], 0, 0.03, 0, mop); lump.scale.set(1.5, 0.55, 0.9);   // the bunch under the band
+      bx(0.17, 0.022, 0.06, lam(0x2f8f4e), 0, 0.058, 0, mop);                             // the headband
+      bx(0.15, 0.03, 0.045, lam(0x8a8f96), 0, 0.004, 0, pole);                            // the jaw, clamped over it
+      cyl(0.016, 0.012, alu, 0.06, 0.004, 0.026, pole).rotation.x = Math.PI / 2;          // its wing nut
+      cyl(0.016, 0.06, alu, 0, 0.045, 0, pole);                                           // the ferrule the handle screws into
+      cyl(0.0135, 1.32, new THREE.MeshPhongMaterial({ color: 0xc69a62, specular: 0x553311, shininess: 40 }), 0, 0.06 + 0.66, 0, pole);   // the handle
+      cyl(0.017, 0.07, lam(0xc0262c), 0, 1.4 - 0.035, 0, pole);                           // hang-up cap
+      put(new THREE.TorusGeometry(0.014, 0.004, 6, 14), lam(0xc0262c), 0, 1.42 + 0.01, 0, pole);   // its hanging loop
+      g.position.set(mbx, 0.09, mbz + 0.08); scene.add(g);
+      mop.scale.set(0.5, 1, 0.45);                    // stood in the bucket: the strands bunched up in the water
+      toolPose(g, g.position.clone(), new THREE.Vector3(x1 - 0.33, 1.6, z1 - 0.02));       // leaned on the side wall (clear of the shelf)
       tool("mop", g, [[0.25, 1.3, 0.25], [mbx + 0.1, 0.95, mbz + 0.05]]);
     }
-    // carpet sweeper: low housing with a rubber bumper, the handle back against the wall
-    const swx = x1 - 0.3, swz = z0 + 0.75;
+    // carpet sweeper: the push kind, no cord. A red enamelled hood over a black base with a rubber bumper all round,
+    // a chrome trim strip, a dump pedal, rubber wheels and corner brushes underneath; a chrome bail off pivots at
+    // each end up to the handle, which has a foam grip and a loop to hang it by. Parked with the handle against the wall
+    const swx = x1 - 0.32, swz = z0 + 0.75;
     {
-      const g = new THREE.Group(); g.position.set(swx, 0, swz); scene.add(g);
-      bx(0.22, 0.08, 0.34, lam(0x8c1c1c), 0, 0.06, 0, g);
-      bx(0.24, 0.025, 0.36, dark, 0, 0.035, 0, g);                                          // bumper
-      for (const sz of [-1, 1]) cyl(0.022, 0.02, dark, 0, 0.022, sz * 0.15, g).rotation.x = Math.PI / 2;
-      bx(0.03, 0.04, 0.03, alu, 0, 0.115, 0, g);                                            // the yoke
-      stick(new THREE.Vector3(0, 0.12, 0), new THREE.Vector3(x1 - 0.03 - swx, 1.25, 0), 0.011, alu, g);
-      put(new THREE.CylinderGeometry(0.016, 0.016, 0.12, 8), dark, x1 - 0.04 - swx, 1.25, 0, g).rotation.x = Math.PI / 2;   // grip
+      const { g, head, pole } = toolRig(1.2, 0.055);
+      const enamel = new THREE.MeshPhongMaterial({ color: 0x9c1b1f, specular: 0xffffff, shininess: 70 });
+      bx(0.3, 0.045, 0.19, dark, 0, 0.045, 0, head);                                       // the base
+      const hood = cyl(0.095, 0.3, enamel, 0, 0.068, 0, head); hood.rotation.z = Math.PI / 2; hood.scale.set(0.45, 1, 1);   // rounded hood over it
+      bx(0.318, 0.022, 0.21, lam(0x151515), 0, 0.034, 0, head);                            // rubber bumper
+      bx(0.28, 0.008, 0.025, alu, 0, 0.11, 0, head);                                       // chrome trim along the top
+      bx(0.05, 0.012, 0.03, dark, 0.11, 0.1, 0.07, head);                                  // the dump pedal
+      const badge = textPlane("SWEEP-MATIC", 0.09, 0.02, "#f1ede2", "#9c1b1f", "Arial Black", 40);
+      badge.material = new THREE.MeshLambertMaterial({ map: badge.material.map }); badge.rotation.x = -0.5; badge.position.set(0, 0.085, 0.088); head.add(badge);   // on the back slope of the hood, facing you
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const w = cyl(0.017, 0.014, dark, sx * 0.12, 0.017, sz * 0.06, head); w.rotation.z = Math.PI / 2; w.name = "sweeperWheel";
+      }
+      for (const sx of [-1, 1]) cyl(0.03, 0.012, lam(0x3a3128), sx * 0.13, 0.01, -0.085, head);   // corner brushes, front
+      for (const sx of [-1, 1]) {                    // the bail: pivots at the ends of the hood, up to the yoke
+        cyl(0.012, 0.012, alu, sx * 0.158, 0, 0, pole).rotation.z = Math.PI / 2;
+        stick(new THREE.Vector3(sx * 0.158, 0, 0), new THREE.Vector3(sx * 0.02, 0.17, 0), 0.006, alu, pole);
+      }
+      bx(0.05, 0.035, 0.025, dark, 0, 0.18, 0, pole);                                      // the yoke
+      cyl(0.011, 0.86, alu, 0, 0.19 + 0.43, 0, pole);                                      // the handle
+      cyl(0.018, 0.16, lam(0x1c1c1c), 0, 1.2 - 0.09, 0, pole);                              // foam grip
+      put(new THREE.TorusGeometry(0.016, 0.004, 6, 14), dark, 0, 1.2 + 0.01, 0, pole);     // hang loop
+      scene.add(g);
+      toolPose(g, new THREE.Vector3(swx, 0, swz), new THREE.Vector3(x1 - 0.03, 1.3, swz));
       tool("sweeper", g, [[0.36, 1.3, 0.42], [swx + 0.1, 0.65, swz]], { x0: swx - 0.13, x1, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
     }
-    // step ladder, folded and leaned against the right-hand wall, just inside the door
+    // the step ladder: a 5-foot aluminium A-frame. Two sections hinge off the blue top cap: the front one carries the
+    // ribbed treads, the rear one just braces; folding spreaders lock them apart. ladder.open(k) swings them from
+    // folded flat (0) to spread (1). It lives folded against the right-hand wall, just inside the door
     {
-      const g = new THREE.Group(); g.position.set(x0 + 0.35, 0, z1 - 0.07); g.rotation.x = 0.09; scene.add(g);   // leaning into the wall (+z)
-      for (const sx of [-1, 1]) for (const sz of [0, -0.045]) bx(0.04, 1.05, 0.025, alu, sx * 0.2, 0.525, sz, g);   // front + back rails, folded flat together
-      for (let i = 0; i < 3; i++) bx(0.36, 0.025, 0.07, alu, 0, 0.27 + i * 0.25, -0.03, g);                       // steps
-      bx(0.44, 0.05, 0.1, lam(0x2a5fb0), 0, 1.07, -0.022, g);                                                      // the top cap
-      for (const sx of [-1, 1]) bx(0.05, 0.03, 0.08, dark, sx * 0.2, 0.015, -0.022, g);                            // feet
-      tool("ladder", g, [[0.5, 1.15, 0.18], [g.position.x, 0.57, z1 - 0.09]], { x0: g.position.x - 0.25, x1: g.position.x + 0.25, z0: z1 - 0.2, z1, y1: 1.1 });
+      const { aF, aR, TOP } = LADDER, Lf = TOP / Math.cos(aF), Lr = TOP / Math.cos(aR);
+      const g = new THREE.Group(); scene.add(g); ladder.g = g;
+      const m = c => { const o = new THREE.MeshPhongMaterial({ color: c, specular: 0x666666, shininess: 50 }); ladder.mats.push(o); return o; };
+      const aluL = m(0xc9cdd2), treadM = m(0xa9aeb5), capM = m(0x2a5fb0), rubber = m(0x1a1a1a);
+      const bar = (a, b, w, d, mt, par) => {         // a flat bar from a to b (its width along x)
+        const v = new THREE.Vector3().subVectors(b, a), o = put(new THREE.BoxGeometry(w, v.length(), d), mt, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, par);
+        o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v.normalize()); return o;
+      };
+      const V = (x, y, z) => new THREE.Vector3(x, y, z);
+      const top = new THREE.Group(), front = new THREE.Group(), rear = new THREE.Group(); g.add(top); top.add(front, rear); rear.position.z = -0.035;
+      // the top cap: a moulded tray, a paint-can slot, and the sticker everyone ignores
+      bx(0.5, 0.06, 0.25, capM, 0, 0.03, -0.015, top);
+      bx(0.38, 0.012, 0.15, rubber, 0, 0.056, -0.015, top);                               // the tray
+      bx(0.06, 0.012, 0.06, aluL, 0.2, 0.057, -0.015, top);                               // a hook for the bucket
+      const warn = textPlane("NOT A STEP", 0.2, 0.04, "#ffffff", "#c0262c", "Arial Black", 48);
+      const wm = m(0xffffff); wm.map = warn.material.map; warn.material = wm;
+      warn.position.set(0, 0.03, 0.111); top.add(warn);
+      // front section: rails flaring out to the feet, four treads (level once it's spread), rubber shoes
+      for (const sx of [-1, 1]) {
+        bar(V(sx * 0.215, 0, 0), V(sx * 0.265, -Lf, 0), 0.022, 0.065, aluL, front);
+        const f = bx(0.05, 0.035, 0.085, rubber, sx * 0.265, -Lf + 0.0175, 0, front); f.rotation.x = aF;
+      }
+      for (let i = 1; i <= 4; i++) {
+        const h = i * LADDER.STEP / 4, sd = (TOP - h) / Math.cos(aF), w = 0.43 + 0.05 * sd / Lf;
+        const t = bx(w, 0.028, 0.09, treadM, 0, -sd, 0.012, front); t.rotation.x = aF;
+        for (const rz of [-0.025, 0, 0.025]) bx(w - 0.02, 0.004, 0.006, rubber, 0, 0.016, rz, t);   // its ribs
+        bar(V(-w / 2, -sd - 0.02, -0.03), V(w / 2, -sd - 0.06, -0.03), 0.012, 0.012, aluL, front).visible = i < 4;   // a brace under it
+      }
+      // rear section: plain rails, two cross braces, a diagonal
+      for (const sx of [-1, 1]) {
+        bar(V(sx * 0.2, 0, 0), V(sx * 0.255, -Lr, 0), 0.022, 0.045, aluL, rear);
+        const f = bx(0.05, 0.035, 0.07, rubber, sx * 0.255, -Lr + 0.0175, 0, rear); f.rotation.x = -aR;
+      }
+      for (const sd of [0.45, 1.05]) bx(0.42 + 0.05 * sd / Lr, 0.03, 0.012, aluL, 0, -sd, 0, rear);
+      bar(V(-0.2, -0.45, 0.004), V(0.22, -1.05, 0.004), 0.016, 0.006, aluL, rear);
+      // spreaders: hinged bars between the sections, a little below halfway (only there when it's spread)
+      const spread = [];
+      for (const sx of [-1, 1]) {
+        const y = 0.72, d = TOP - y;
+        spread.push(bar(V(sx * 0.25, y, d * Math.tan(aF)), V(sx * 0.245, y, -0.035 - d * Math.tan(aR)), 0.008, 0.02, aluL, g));
+      }
+      g.traverse(o => { if (o.isMesh) { o.userData.ladder = true; aimables.push(o); } });
+      ladder.open = k => {
+        front.rotation.x = -aF * k; rear.rotation.x = aR * k; top.position.y = Lf * Math.cos(aF * k);
+        for (const b of spread) b.visible = k > 0.9;
+      };
+      // stowed: folded flat and leaned back against the wall (its own spot to put it back on, too)
+      ladder.stow = { x: x0 + 0.35, z: z1 - 0.12, lean: 0.07 };
+      const h = put(new THREE.BoxGeometry(0.55, 1.6, 0.25), new THREE.MeshBasicMaterial({ visible: false }), ladder.stow.x, 0.8, z1 - 0.12); ladder.home = h;
+      ladder.stowBox = { x0: ladder.stow.x - 0.27, x1: ladder.stow.x + 0.27, z0: z1 - 0.22, z1, y1: 1.7 }; colliders.push(ladder.stowBox);
+      ladderPose();
     }
     // shelf on the back wall, up out of the way: carpet shampoo, floor cleaner, a gallon of bleach, glass cleaner
     const sy = 1.5, sz0 = z0 + 0.35, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
@@ -4691,6 +4830,10 @@ function meTick(dt) {
   } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
     g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = seatAt.ry || 0;
     me.setPose("sit", seatAt.hipY ? { hipY: seatAt.hipY } : undefined);
+  } else if (ladder.on) {                    // up on the top step, facing the ladder
+    const k = ladder.lift, e = k * k * (3 - 2 * k);
+    g.position.set(player.x, floorHeightAt(player.x, player.z) + LADDER.STEP * e + 0.015, player.z); g.rotation.y = ladder.ry + Math.PI;
+    me.setPose("idle");
   } else {
     speed = Math.hypot(player.x - meLast.x, player.z - meLast.z) / Math.max(dt, 1e-4);
     g.position.set(player.x + Math.sin(player.yaw) * 0.21, floorHeightAt(player.x, player.z), player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
@@ -4817,7 +4960,7 @@ function dizzyTick(dt) {
 const keys = new Set();
 const HOLD_MS = 450;                       // hold E on the standee to lift it
 let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
-let eHoldStool = false;                    // E went down on the stool: a tap sits on release, a hold picks it up
+let eHoldStool = false, eHoldLadder = false;   // (the ladder the same: tap climbs, hold picks it up)                    // E went down on the stool: a tap sits on release, a hold picks it up
 let eHoldSwitch = null;                    // E went down on a multi-switch plate: a tap flips this one on release, a hold flips the plate
 addEventListener("keydown", e => {
   if (relockOnInput && e.code !== "Escape" && !posTerm?.isOpen() && !shift.report && !hiring.open) { relockOnInput = false; canvas.requestPointerLock()?.catch?.(() => {}); }
@@ -4836,6 +4979,7 @@ addEventListener("keydown", e => {
   else if (e.code === "KeyE" && !e.repeat) {
     if (aimMove && !seated && !onStool && !cutout.carried && !stool.carried && !boxCarry.length) { eHoldMove = aimMove; eHoldTimer = setTimeout(() => { eHoldTimer = null; const it = eHoldMove; eHoldMove = null; if (it) moveStart(it); }, HOLD_MS); }   // a tap does its usual thing (on release); a hold picks it up
     else if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
+    else if (aimLadder && ladder.state === "placed") { eHoldLadder = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldLadder = false; ladderPickUp(); }, HOLD_MS); }
     else if (aimStool && !stool.by) { eHoldStool = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldStool = false; stoolPickUp(); }, HOLD_MS); }
     else if (aimSwitch && switchPlate[aimSwitch].length > 1 && !seated && !aimCouch && !cutout.carried && !stool.carried && !aimCustomer) {
       eHoldSwitch = aimSwitch;
@@ -4863,6 +5007,7 @@ addEventListener("keyup", e => {
     clearTimeout(eHoldTimer); eHoldTimer = null;   // let go before it's lifted: nothing happens
     if (eHoldSwitch) { flipSwitch(eHoldSwitch); eHoldSwitch = null; }   // a tap on the plate: just the one switch
     if (eHoldStool) { eHoldStool = false; stoolSit(); }                  // a tap on the stool: sit
+    if (eHoldLadder) { eHoldLadder = false; ladderClimb(); }             // a tap on the ladder: up you go
     if (eHoldMove) { eHoldMove = null; onE(); }                         // a tap on a rewinder / the pad / the printer: its usual thing
   }
 });
@@ -4908,7 +5053,11 @@ function move(dt) {
     if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) stoolStand();
     return;
   }
-  if (seated || inspecting) return;         // stand up with E first
+  if (ladder.on) {                          // a move key gets you down (not mid-swap)
+    if (!ladder.fix && ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) ladderDown();
+    return;
+  }
+  if (seated || inspecting || scrub) return;   // stand up with E first; (scrubbing: you stay put till it's done)
   if (keys.has("KeyW") || keys.has("ArrowUp")) iz += 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) iz -= 1;
   if (keys.has("KeyD") || keys.has("ArrowRight")) ix += 1;
@@ -4941,7 +5090,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
-let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
+let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null, aimLadder = false, aimLadderHome = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
 // Returns, not taken yet: right-click puts it right back where it came from.
@@ -7060,7 +7209,7 @@ window.VaultAim = {
   center() { aimNDC.x = aimNDC.y = 0; pickHover(); },
 };
 function pickHover() {
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null;
+  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
@@ -7079,6 +7228,22 @@ function pickHover() {
     return;
   }
   raycaster.setFromCamera(aimNDC, camera);
+  if (ladder.on) {                           // up the ladder: the lights are all there is
+    highlight.visible = false;
+    const a = raycaster.intersectObjects(aimables, false).find(h => h.object.userData.deadLight);
+    aimDead = a && a.distance < LADDER.REACH ? a.object.userData.deadLight : null;
+    const tip = $("hoverTip"); tip.style.display = "block";
+    tip.innerHTML = ladder.fix ? "Swapping the tube…" : aimDead ? "E — swap the tube" : a && a.distance < 6 ? "Out of reach from here<div class=\"cat\">E — climb down and move the ladder under it</div>" : "On the step ladder<div class=\"cat\">E or a move key — climb down</div>";
+    return;
+  }
+  if (ladder.state === "carried") {          // arms full of ladder: set it down, or back against the closet wall
+    highlight.visible = false;
+    const a = raycaster.intersectObject(ladder.home, false)[0];
+    aimLadderHome = !!a && a.distance < 2.6;
+    const tip = $("hoverTip"); tip.style.display = "block";
+    tip.innerHTML = aimLadderHome ? "E — fold it up and lean it against the wall" : ladder.spot ? "E — set the step ladder up here" : "No room for the step ladder here";
+    return;
+  }
   if (boxCarry.length) {                     // arms full of boxes: a stock cupboard (to unpack) or another box
     highlight.visible = false;
     const a = raycaster.intersectObjects(aimables, false).find(h => h.distance < 2.4 && (h.object.userData.stock || h.object.userData.box));
@@ -7150,6 +7315,7 @@ function pickHover() {
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
     else if (aim?.object.userData.tool && aim.distance < 2.4) aimTool = aim.object.userData.tool;
     else if (aim?.object.userData.toolHome && aim.distance < 2.4 && toolHeld === aim.object.userData.toolHome) aimTool = toolHeld;
+    else if (aim?.object.userData.ladder && aim.distance < 2.4) aimLadder = true;
     else if (aim?.object.userData.deadLight && aim.distance < 3.8) aimDead = aim.object.userData.deadLight;
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
@@ -7222,7 +7388,8 @@ function pickHover() {
     else if (aimMess) { const need = MESS_TOOL[aimMess.kind];
       tip.innerHTML = need && toolHeld !== need ? `The ${MESS[aimMess.kind].label}<div class="cat">needs the ${TOOLS[need].label} · janitor's closet</div>` : `E — clean up the ${MESS[aimMess.kind].label}${need ? ` with the ${TOOLS[need].label}` : ""}`; }
     else if (aimTool) tip.innerHTML = toolHeld === aimTool ? `E — put the ${TOOLS[aimTool].label} back` : toolHeld ? `Put the ${TOOLS[toolHeld].label} back first` : `E — take the ${TOOLS[aimTool].label}`;
-    else if (aimDead) tip.innerHTML = toolHeld === "ladder" ? "E — set up the ladder and swap the tube" : `A burnt-out light<div class="cat">the step ladder's in the janitor's closet</div>`;
+    else if (aimLadder) tip.innerHTML = ladder.state === "stored" ? "E — take the step ladder" : eHoldTimer ? "Lifting…" : "E — climb the ladder<br>Hold E — pick it up";
+    else if (aimDead) tip.innerHTML = `A burnt-out light<div class="cat">${ladder.state === "placed" ? "set the step ladder up under it and climb up" : "the step ladder's in the janitor's closet"}</div>`;
     else if (aimPrinter) tip.innerHTML = co?.by === "player" && coStep()?.id === "tear" ? (printer.job?.done ? "E — tear off the receipt" : "Printing…") : "Receipt printer";
     else if (aimCutout) tip.innerHTML = eHoldTimer ? "Lifting…" : "Hold E — pick up the standee";
     else if (aimDesens) { const p = padTarget(); tip.innerHTML = p?.tape ? `E — desensitize ${p.tape.title}${p.of}` : `Desensitizer<div class="cat">${p ? "everything in hand is desensitized" : "bring a tape over to desensitize it"}</div>`; }
@@ -7789,7 +7956,8 @@ function strayTake(s) {                          // off the shelf and into a han
 // theater. E cleans one up; Dana does too when things are quiet. A messy store
 // puts customers off
 const messes = [];                               // { kind, mesh, x, y, z }
-const MESS_TOOL = { spill: "mop", popcorn: "sweeper" };   // messes that want a tool from the janitor's closet (staff just see to it)
+const MESS_TOOL = { spill: "mop", popcorn: "sweeper" };
+const messCan = o => !MESS_TOOL[o.kind] || MESS_TOOL[o.kind] === toolHeld;   // do you have what it takes, in hand?   // messes that want a tool from the janitor's closet (staff just see to it)
 const MESS = {
   spill: { label: "spilled soda", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0x4a2410, transparent: true, opacity: 0.85, depthWrite: false });
     for (let i = 0; i < 4; i++) { const d = new THREE.Mesh(new THREE.CircleGeometry(0.07 + Math.random() * 0.1, 18), m); d.rotation.x = -Math.PI / 2; d.position.set((Math.random() - 0.5) * 0.25, 0.002 + i * 0.0005, (Math.random() - 0.5) * 0.25); g.add(d); }
@@ -7808,14 +7976,149 @@ function toolTake(id) {
   const t = TOOLS[id]; toolHeld = id;
   t.g.visible = false; aimOn(t.g, false); aimOn(t.home, true);
   if (t.col) colliders.splice(colliders.indexOf(t.col), 1);
+  const c = t.g.clone(); c.visible = true;
+  if (t.hold) {                                   // the mop / sweeper: out in the world, its head on the floor in front of you (toolTick)
+    c.getObjectByName("mopStrands")?.scale.setScalar(1);   // (out of the bucket: the strands flop out)
+    scene.add(c); t.held = c; toolSnap = true; return;
+  }
   if (!toolHand.parent) camera.add(toolHand);
-  toolHand.clear(); const c = t.g.clone(); c.visible = true; c.position.set(...t.hand[0]); c.rotation.set(...t.hand[1]); toolHand.add(c);
+  toolHand.clear(); c.position.set(...t.hand[0]); c.rotation.set(...t.hand[1]); toolHand.add(c);
 }
 function toolReturn() {
-  const t = TOOLS[toolHeld]; toolHeld = null;
+  const t = TOOLS[toolHeld]; toolHeld = null; scrub = null;
   t.g.visible = true; aimOn(t.g, true); aimOn(t.home, false);
   if (t.col) colliders.push(t.col);
-  toolHand.clear();
+  toolHand.clear(); if (t.held) { t.held.removeFromParent(); t.held = null; me.reachTo(null); me.reachAlso(null); }
+}
+// the mop or sweeper in your hands: its business end on the floor out in front of you, a bit to the right, the
+// handle back up to your hands (the mop: left hand on top, right hand lower down; the sweeper: one hand on the grip).
+// E on a mess with it walks you up to it and works it over: the mop side to side, the sweeper up and back in passes
+let scrub = null, toolSnap = false;              // scrub: { m (the mess), t, dur }
+const toolF = new THREE.Vector3(), toolA = new THREE.Vector3(), toolLast = new THREE.Vector3(), toolV = new THREE.Vector3(), toolSh = new THREE.Vector3();
+function scrubStart(m) {
+  scrub = { m, t: 0, dur: toolHeld === "mop" ? 2.4 : 2.1, n: m.mesh.children.length };
+}
+function scrubEnd() {
+  const m = scrub.m; scrub = null;
+  if (!messes.includes(m)) return;               // somebody beat you to it
+  messClean(m);
+  if (has("you", "con", 10)) for (const o of messes.filter(o => messCan(o) && Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
+}
+function toolTick(dt) {
+  const t = toolHeld && TOOLS[toolHeld], g = t?.held;
+  if (!g) return;
+  const away = seated || onStool;                // sat down: it waits, out of sight, till you're up again
+  g.visible = !away;
+  if (away) { me.reachTo(null); me.reachAlso(null); toolSnap = true; return; }
+  const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw), rx = -fz, rz = fx;   // your forward, your right
+  const bx = player.x - fx * 0.21, bz = player.z - fz * 0.21, y0 = floorHeightAt(player.x, player.z);   // your body (it stands behind the eye)
+  const { foot: fr, hand: [hr, hy0, hf] } = t.hold, pole = g.getObjectByName("toolPole");
+  const hy = hy0 - (keys.has("KeyC") ? 0.5 : 0), rise = hy - pole.position.y, run = (pole.userData.L - 0.06) ** 2 - rise * rise;
+  const ff = hf + Math.sqrt(Math.max(0.04, run));   // the head out just as far as puts the top of the handle in your hand
+  let cr = fr, cf = ff, ar = hr, af = hf;        // the head and the top hand, in your frame (right, forward)
+  if (scrub) {
+    const s = scrub, m = s.m;
+    if (!messes.includes(m)) scrub = null;
+    else {
+      s.t += dt;
+      let dx = m.x - bx, dz = m.z - bz, d = Math.hypot(dx, dz);
+      if (d - ff > 0.03) {                       // too far to reach: step up to it
+        const k = Math.min(d - ff, dt * 2.2) / d, nx = player.x + dx * k, nz = player.z + dz * k;
+        if (!blocked(nx, nz)) { player.x = nx; player.z = nz; }
+      }
+      const w = Math.min(1, s.t / 0.3, Math.max(0, s.dur - s.t) / 0.3);   // eased into the work and out of it
+      let u, v;
+      if (toolHeld === "mop") { const a = s.t * Math.PI * 2 / 0.8; u = Math.sin(a) * 0.26; v = Math.sin(2 * a) * 0.05; }   // side to side, a lazy figure eight
+      else { const a = s.t * Math.PI * 2 / 0.7; u = Math.sin(a * 0.3) * 0.1; v = Math.sin(a) * 0.3; }                       // up and back, edging across a row each pass
+      const mr = dx * rx + dz * rz, mf = dx * fx + dz * fz;
+      cr += (mr + u * w - cr) * w; cf += (mf + v * w - cf) * w;
+      ar += u * 0.35 * w; af += v * 0.4 * w;     // the hands go with it, a little
+      const k = Math.min(1, s.t / (s.dur * 0.85));   // and the mess goes as it's worked over
+      if (m.kind === "popcorn") m.mesh.children.forEach((o, i) => { o.visible = (i + 1) / (s.n + 1) > k; });
+      else m.mesh.scale.set(1 - 0.9 * k, 1, 1 - 0.9 * k);
+      if (s.t >= s.dur) scrubEnd();
+    }
+  }
+  toolV.set(bx + rx * cr + fx * cf, 0, bz + rz * cr + fz * cf); toolV.y = floorHeightAt(toolV.x, toolV.z);
+  if (toolSnap) { toolF.copy(toolV); toolLast.copy(toolV); toolSnap = false; }
+  else toolF.lerp(toolV, Math.min(1, dt * (scrub ? 20 : 12)));   // walking, it trails a touch behind you
+  toolA.set(bx + rx * ar + fx * af, y0 + hy, bz + rz * ar + fz * af);
+  const p = toolPose(g, toolF, toolA);
+  const top = toolV.copy(p.P).addScaledVector(p.dir, p.len);
+  if (toolHeld === "mop") {                      // left hand on top, the right lower down: wherever on the handle it's nearest the shoulder
+    me.reachAlso(top, 1);
+    me.rig.arms[0].sh.getWorldPosition(toolSh).sub(p.P);
+    const along = Math.max(p.len * 0.45, Math.min(p.len * 0.85, toolSh.dot(p.dir)));
+    me.reachTo(toolSh.copy(p.P).addScaledVector(p.dir, along), 0);
+  } else me.reachTo(top, 0);
+  // the sweeper's wheels roll with it
+  const moved = toolLast.distanceTo(toolF), dir = (toolF.x - toolLast.x) * Math.sin(g.getObjectByName("toolHead").rotation.y) + (toolF.z - toolLast.z) * Math.cos(g.getObjectByName("toolHead").rotation.y);
+  if (moved > 1e-5) g.traverse(o => { if (o.name === "sweeperWheel") o.rotation.x += Math.sign(dir) * moved / 0.017; });
+  toolLast.copy(toolF);
+}
+// ---- the step ladder at work (see `ladder`) ----
+function ladderPose() {                          // where it is for its state (carried: ladderTick moves it)
+  const L = ladder, g = L.g;
+  if (L.state === "stored") { L.open(0); g.position.set(L.stow.x, 0, L.stow.z); g.rotation.set(L.stow.lean, 0, 0); }
+  else if (L.state === "placed") { L.open(1); g.position.set(L.x, floorHeightAt(L.x, L.z), L.z); g.rotation.set(0, L.ry, 0); }
+}
+const ladderTint = new THREE.Color();
+function ladderTintTo(c) {
+  ladderTint.set(c);
+  for (const m of ladder.mats) { m.userData.baseColor ??= m.color.clone(); m.color.copy(m.userData.baseColor).multiply(ladderTint); }
+}
+const handsFull = () => toolHeld || boxCarry.length || bagCarry.length || cutout.carried || stool.carried || cmove.item;
+function ladderPickUp() {
+  if (handsFull()) { toast(toolHeld ? `Put the ${TOOLS[toolHeld].label} back first` : "Your hands are full"); return; }
+  const L = ladder;
+  if (L.state === "placed") { colliders.splice(colliders.indexOf(L.box), 1); L.last = { x: L.x, z: L.z, ry: L.ry }; }
+  else { colliders.splice(colliders.indexOf(L.stowBox), 1); L.last = null; }
+  L.state = "carried"; L.open(1);
+}
+function ladderPutDown() {
+  const L = ladder; if (!L.spot) return;
+  Object.assign(L, { x: L.spot.x, z: L.spot.z, ry: L.spot.ry, state: "placed", spot: null });
+  ladderTintTo(0xffffff); colliders.push(ladderFit(L.x, L.z, L.ry, L.box)); ladderPose();
+}
+function ladderStore() {                         // folded and leaned back against the closet wall
+  Object.assign(ladder, { state: "stored", spot: null, last: null }); ladderTintTo(0xffffff); colliders.push(ladder.stowBox); ladderPose();
+}
+function ladderStep() {                          // the top step, in the world: where you stand on it
+  const d = (LADDER.TOP - LADDER.STEP) * Math.tan(LADDER.aF) + 0.03;
+  return { x: ladder.x + Math.sin(ladder.ry) * d, z: ladder.z + Math.cos(ladder.ry) * d };
+}
+function ladderClimb() {
+  if (handsFull()) { toast(toolHeld ? `Put the ${TOOLS[toolHeld].label} back first: you'll want both hands` : "Your hands are full"); return; }
+  const L = ladder, p = ladderStep();
+  L.from = { x: player.x, z: player.z }; player.x = p.x; player.z = p.z; L.on = true; L.lift = 0;
+  player.yaw = L.ry + Math.PI; player.pitch = 0.5;   // facing the ladder, looking up
+}
+function ladderDown() {                          // step off the front, or off to a side, or back where you came from
+  const L = ladder; L.on = false; L.fix = null; me.reachTo(null); me.reachAlso(null);
+  for (const da of [0, 0.8, -0.8, 1.6, -1.6]) {
+    const a = L.ry + da, x = L.x + Math.sin(a) * 0.95, z = L.z + Math.cos(a) * 0.95;
+    if (!blocked(x, z)) { player.x = x; player.z = z; player.pitch = 0; return; }
+  }
+  player.x = L.from.x; player.z = L.from.z; player.pitch = 0;
+}
+const ladderV = new THREE.Vector3();
+function ladderTick(dt) {
+  const L = ladder;
+  if (L.state === "carried") {                   // out in front of you, steps toward you, just off the floor
+    const s = carrySpotAhead(LADDER.CARRY_D, (x, z, ry) => ladderFit(x, z, ry, {}));
+    L.spot = s.ok ? s : null;
+    L.g.position.set(s.x, floorHeightAt(s.x, s.z) + 0.06, s.z); L.g.rotation.set(0, s.ry, 0);
+    ladderTintTo(s.ok ? 0xffffff : 0xff5a5a);
+  }
+  if (!L.on) return;
+  L.lift = Math.min(1, L.lift + dt * 1.6);       // up the steps
+  if (L.fix) {                                   // both hands up on the panel: the old tube out, a new one in
+    const f = L.fix, tr = TROFFERS[f.d.i]; f.t += dt;
+    const sway = Math.sin(f.t * 6) * 0.04;
+    me.reachTo(ladderV.set(tr.x + 0.18 + sway, tr.y - 0.02, tr.z), 0, { lean: false });
+    me.reachAlso(ladderV.set(tr.x - 0.18 - sway, tr.y - 0.02, tr.z), 1);
+    if (f.t >= 1.8) { L.fix = null; me.reachTo(null); me.reachAlso(null); if (deadLights.includes(f.d)) lightFix(f.d); }
+  }
 }
 const deadLights = [];                            // { i (into TROFFERS), mesh, t (still flickering) }
 const deadMat = new THREE.MeshBasicMaterial({ color: 0x1d2026 });
@@ -8277,6 +8580,8 @@ function setLamp(l, on) {
   l.userData.pool.visible = on;
 }
 function onE() {
+  if (scrub || ladder.fix) return;               // busy mopping / sweeping / up at a light
+  if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
   if (aimStool && !stool.by) { stoolSit(); return; }
   if (seated) {                             // E always stands you up
@@ -8290,6 +8595,7 @@ function onE() {
   }
   if (cutout.carried) { cutoutPutDown(); return; }
   if (stool.carried) { stoolPutDown(); return; }
+  if (ladder.state === "carried") { if (aimLadderHome) ladderStore(); else ladderPutDown(); return; }
   if (boxCarry.length) { if (aimCupboard) boxUnpack(); else if (aimBox) boxPick(aimBox); return; }   // arms full of boxes
   if (bagCarry.length) { if (aimChute) chuteDrop(); else if (aimBin) binBag(aimBin); else if (aimBag) bagPickUp(aimBag); else if (aimDoor) toggleDoor(aimDoor); else if (aimSwitch) flipSwitch(aimSwitch); return; }   // hands full of trash
   if (aimBin) { binBag(aimBin); return; }
@@ -8300,14 +8606,16 @@ function onE() {
   if (aimCupboard) { stockTake(aimCupboard); return; }
   if (aimStockSlot) { stockPlace(aimStockSlot); return; }
   if (aimMess) {
-    const m = aimMess, need = MESS_TOOL[m.kind], can = o => !MESS_TOOL[o.kind] || MESS_TOOL[o.kind] === toolHeld;
-    if (!can(m)) { toast(`That needs the ${TOOLS[need].label}: it's in the janitor's closet`); return; }
+    const m = aimMess, need = MESS_TOOL[m.kind];
+    if (!messCan(m)) { toast(`That needs the ${TOOLS[need].label}: it's in the janitor's closet`); return; }
+    if (need) { scrubStart(m); return; }           // the mop / sweeper: worked over (toolTick), cleaned at the end
     messClean(m);
-    if (has("you", "con", 10)) for (const o of messes.filter(o => can(o) && Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
+    if (has("you", "con", 10)) for (const o of messes.filter(o => messCan(o) && Math.hypot(o.x - m.x, o.z - m.z) < 3)) messClean(o);   // Neat Freak: sweep up around it too
     return;
   }
   if (aimTool) { if (toolHeld === aimTool) toolReturn(); else if (toolHeld) toast(`Put the ${TOOLS[toolHeld].label} back first`); else toolTake(aimTool); return; }
-  if (aimDead) { if (toolHeld === "ladder") lightFix(aimDead); else toast("You'll need the step ladder: it's in the janitor's closet"); return; }
+  if (aimLadder) { if (ladder.state === "stored") ladderPickUp(); else ladderClimb(); return; }
+  if (aimDead) { toast(ladder.state === "placed" ? "Set the step ladder up under it and climb up" : "You'll need the step ladder: it's in the janitor's closet"); return; }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
   if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
@@ -8691,6 +8999,7 @@ function saveState() {
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
     stool: { x: stool.x, z: stool.z },                      // likewise
+    ladder: ladder.state === "placed" ? { x: ladder.x, z: ladder.z, ry: ladder.ry } : ladder.state === "carried" ? ladder.last : null,   // null: back in the closet
     wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
@@ -8708,6 +9017,7 @@ function loadState(S) {
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
     if (S.cutout) { Object.assign(cutout, S.cutout); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box); cutout.g?.position.set(cutout.x, 0, cutout.z); cutout.g?.rotation.set(0, cutout.ry, 0); }
+    if (S.ladder) { colliders.splice(colliders.indexOf(ladder.stowBox), 1); Object.assign(ladder, S.ladder, { state: "placed" }); colliders.push(ladderFit(ladder.x, ladder.z, ladder.ry, ladder.box)); ladderPose(); }
     if (S.stool) { Object.assign(stool, S.stool); stoolFit(stool.x, stool.z, stool.box); stool.g.position.set(stool.x, 0, stool.z); }
     payLedger.push(...(S.payLedger || []));
     for (const [k, pos] of Object.entries(S.wound || {})) { const c = copyByKey(k); if (c) c.tapePos = pos; }
@@ -8962,8 +9272,14 @@ renderer.setAnimationLoop(() => {
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
   stoolTick(dt);
   thSeatTick(dt);
+  toolTick(dt);
+  ladderTick(dt);
   meTick(dt);
   if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
+  else if (ladder.on) {                          // up the steps: the eye where it always is, 21 cm ahead of your body (toward the ladder)
+    const k = ladder.lift, e = k * k * (3 - 2 * k);
+    camera.position.set(player.x - Math.sin(ladder.ry) * 0.21, floorHeightAt(player.x, player.z) + 1.65 + LADDER.STEP * e, player.z - Math.cos(ladder.ry) * 0.21);
+  }
   else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(Math.sin(seatAt.ry || 0) * 0.06, 0.03, Math.cos(seatAt.ry || 0) * 0.06));   // eyes just above the collar, a touch forward
   else {
     eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
@@ -9021,6 +9337,6 @@ window.__t = {
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
