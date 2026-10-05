@@ -123,11 +123,28 @@ check("members come on their own rhythm (nobody who was just in)", await ev(() =
   ms.forEach(m => m.lastVisit = now); const none = [0, 1, 2, 3, 4].every(() => !__t.custPickMember());
   ms.forEach((m, i) => m.lastVisit = was[i]); return none && !!__t.custPickMember(true); }));
 check("day goals: two of them", await ev(() => __t.shift.goals?.length === 2));
-check("the closet: the ladder fixes a dead light, and goes back", await ev(() => {
+check("the closet: carry the ladder out, set it up under a dead light, climb, swap the tube, put it back", await ev(() => {
+  const L = __t.ladder, p = __t.player, tr = __t.TROFFERS[0];
   __t.lightDie(0, 0); const dead = __t.deadLights.length === 1;
-  __t.toolTake("ladder"); const held = __t.toolHeld() === "ladder" && !__t.TOOLS.ladder.g.visible;
-  __t.lightFix(__t.deadLights[0]); __t.toolReturn();
-  return dead && held && !__t.deadLights.length && !__t.toolHeld() && __t.TOOLS.ladder.g.visible; }));
+  __t.ladderPickUp(); const carried = L.state === "carried";
+  L.spot = { x: tr.x, z: tr.z + 0.2, ry: 0, ok: true }; __t.ladderPutDown();   // (as if set down right under it)
+  const placed = L.state === "placed" && __t.colliders.includes(L.box);
+  p.x = tr.x; p.z = tr.z + 1.4; __t.ladderClimb(); for (let i = 0; i < 40; i++) __t.ladderTick(0.05);
+  const up = L.on && L.lift === 1;
+  L.fix = { d: __t.deadLights[0], t: 0 }; for (let i = 0; i < 40; i++) __t.ladderTick(0.05);
+  const fixed = !__t.deadLights.length;
+  __t.ladderDown(); const down = !L.on && Math.hypot(p.x - L.x, p.z - L.z) > 0.6;
+  __t.ladderPickUp(); __t.ladderStore();
+  return dead && carried && placed && up && fixed && down && L.state === "stored" && !__t.colliders.includes(L.box) && __t.colliders.includes(L.stowBox); }));
+check("the closet: the mop goes to the floor, works a spill over and cleans it", await ev(() => {
+  __t.toolTake("mop"); const g = __t.TOOLS.mop.held, p = __t.player;
+  __t.toolTick(0.016); const onFloor = g.parent === __t.scene && Math.abs(g.position.y - 0) < 0.05;
+  __t.messAdd("spill", p.x - Math.sin(p.yaw) * 1.2, p.z - Math.cos(p.yaw) * 1.2); const m = __t.messes.at(-1);
+  __t.scrubStart(m); const xs = [];
+  for (let i = 0; i < 200 && __t.scrub(); i++) { __t.toolTick(0.02); xs.push(g.position.x + g.position.z); }
+  const swept = Math.max(...xs) - Math.min(...xs) > 0.2;   // it went back and forth over it
+  const cleaned = !__t.messes.includes(m); __t.toolReturn();
+  return onFloor && swept && cleaned && !__t.toolHeld() && !g.parent && __t.TOOLS.mop.g.visible; }));
 check("the register shows the sale once the card's tapped", await ev(() => {
   __t.setFrontLock(true); for (const e of __t.staff) e.state = "test"; for (const k of [...__t.custs]) __t.custGone(k);
   __t.custSpawn(); const k = __t.custs.at(-1), tape = __t.catalog.find(t => !t.offShelf && !t.lost && t.pos && !t.libLocked);
