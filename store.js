@@ -1938,7 +1938,21 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
       L: 4.2, W: 1.75, noseY: 0.62, hoodY: 0.82, cowlX: 0.6, wsTopX: -0.2, roofY: 1.24,
       rTopX: -0.8, rBotX: -1.5, rBotY: 0.9, rearY: 0.78, wheels: [-1.3, 1.3], chromeBumpers: true },
   ];
-  const PAINT = [0x8e1b1b, 0x2e7d7a, 0xd8c79a, 0x1f3a6b, 0xe9e6dc, 0x2b2b2e, 0x5f6e36, 0xb8bcc2, 0x6e2650, 0x9c6a2a, 0x3d5f8f, 0x0f4a3a, 0xc9b24a];
+  // mid-90s paint, weighted roughly like the lots of the day: white most of all, then that era's hunter
+  // green and teal, burgundy, silver, black, navy, champagne, with the odd red, plum or dark gray
+  const PAINT = [
+    0xeceae2, 0xeceae2, 0xeceae2, 0xf2efe6,          // white / off-white
+    0x1f4a36, 0x1f4a36, 0x16392b,                    // hunter / forest green
+    0x2e7d7a, 0x2a8a86,                              // teal / aqua green
+    0x6a1a26, 0x5a1520,                              // burgundy / maroon
+    0xb8bcc2, 0xa4a8ae,                              // silver
+    0x1c1c1f,                                        // black
+    0x1f2f5a, 0x2a4373,                              // navy / medium blue
+    0xcdb88e,                                        // champagne / light gold
+    0xa31d1d,                                        // red
+    0x4a2d55,                                        // plum
+    0x4a4d52,                                        // charcoal
+  ];
   // the lot: different every day (the same all day, reload or not): a few cars, more on a busy day, in any
   // stall but the ones the lamp poles stand in, mostly nosed in, now and then backed in, never quite straight
   let parked = [];
