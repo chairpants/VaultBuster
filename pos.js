@@ -39,7 +39,7 @@ window.createPOS = function createPOS(api) {
 
   // ---- formatting ----
   const DAY = 864e5;
-  let TODAY = (() => { const d = api.today ? new Date(api.today) : new Date(); d.setHours(12, 0, 0, 0); return d; })();   // the shift's date (store.js): starts from the real one — the shelves hold titles into the 2000s
+  let TODAY = (() => { const d = api.today ? new Date(api.today) : new Date(); d.setHours(12, 0, 0, 0); return d; })();   // the shift's date (store.js): day 1 is Mon Sept 30 1996
   const fmtD = d => `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`;
   const clock = () => { if (api.clock) return api.clock(); const n = new Date(); return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`; };
   const money = n => "$" + n.toFixed(2);
