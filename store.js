@@ -2540,26 +2540,27 @@ const GATE_Z = 4.0;                           // security gate line across the e
   scene.add(tag);
 }
 
-// ---------------- entry lane: barrier rail + security gates ----------------
-// The counters line the west side of the path in from the doors; a steel rail
-// mirrors them on the east side, and anti-theft gate pedestals (the "metal
+const corkCanvas = document.createElement("canvas"); corkCanvas.width = 1040; corkCanvas.height = 680;   // (drawn by corkDraw)
+const corkTex = new THREE.CanvasTexture(corkCanvas); corkTex.colorSpace = THREE.SRGBColorSpace;
+// ---------------- entry lane: half wall + security gates ----------------
+// The counters line the west side of the path in from the doors; a half wall
+// mirrors them on the east side (with the community corkboard standing on it), and anti-theft gate pedestals (the "metal
 // detector") span the lane past the RETURNS counter. Three pedestals make two ~1.2m lanes;
 // the gaps at the counter and at the rail (~0.45-0.5m) are narrower than the
 // player (0.64m), so walking in means walking through a gate.
 {
-  const steel = new THREE.MeshPhongMaterial({ color: 0xb9bec4, specular: 0xffffff, shininess: 80 });
-  const BX = 1.95, Z0 = 0.15, Z1 = 4.35;       // rail line: front wall -> level with the checkout's customer edge
-  const n = Math.round((Z1 - Z0) / 1.05);
-  for (let i = 0; i <= n; i++) {
-    const z = Z0 + i * (Z1 - Z0) / n;
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 1.0, 14), steel); post.position.set(BX, 0.5, z); scene.add(post);
-    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.025, 16), steel); foot.position.set(BX, 0.0125, z); scene.add(foot);
-  }
-  for (const y of [0.5, 0.99]) {
-    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, Z1 - Z0, 14).rotateX(Math.PI / 2), steel);
-    rail.position.set(BX, y, (Z0 + Z1) / 2); scene.add(rail);
-  }
-  colliders.push({ x0: BX - 0.05, x1: BX + 0.05, z0: Z0, z1: Z1 });
+  const BX = 1.95, Z0 = 0.15, Z1 = 4.35, HW = 1.05, T = 0.12;   // wall line: front wall -> level with the checkout's customer edge; height, thickness
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); scene.add(o); return o; };
+  const wood = new THREE.MeshLambertMaterial({ color: 0x7a5232 }), woodDk = new THREE.MeshLambertMaterial({ color: 0x5a3a22 });
+  add(new THREE.BoxGeometry(T, HW, Z1 - Z0), mat.wall, BX, HW / 2, (Z0 + Z1) / 2);                          // the wall
+  add(new THREE.BoxGeometry(T + 0.002, 0.1, Z1 - Z0 + 0.002), new THREE.MeshLambertMaterial({ color: 0x1d3f9e }), BX, 0.05, (Z0 + Z1) / 2);   // blue base, like the counters
+  add(new THREE.BoxGeometry(T + 0.06, 0.04, Z1 - Z0 + 0.04), wood, BX, HW + 0.02, (Z0 + Z1) / 2);            // wood cap
+  // the corkboard: on two legs screwed into the cap, facing the lane (-x)
+  const CZ = 2.3, CW = 1.3, CH = 0.85, CY = HW + 0.12 + CH / 2;
+  for (const dz of [-CW / 2 + 0.05, CW / 2 - 0.05]) add(new THREE.BoxGeometry(0.05, CY + CH / 2 - HW, 0.05), woodDk, BX, (HW + CY + CH / 2) / 2 + 0.02, CZ + dz);
+  add(new THREE.BoxGeometry(0.04, CH + 0.06, CW + 0.06), woodDk, BX, CY, CZ);                                 // frame (and the back)
+  const cork = add(new THREE.PlaneGeometry(CW, CH), new THREE.MeshLambertMaterial({ map: corkTex }), BX - 0.021, CY, CZ); cork.rotation.y = -Math.PI / 2;
+  colliders.push({ x0: BX - T / 2, x1: BX + T / 2, z0: Z0, z1: Z1 });
 
   const GZ = GATE_Z;                           // gate line: past the RETURNS counter, level with the checkout corner and the rail's far end
   const grey = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
@@ -7953,6 +7954,54 @@ function calendarDraw() {
 }
 calendarDraw();
 
+// ---------------- the community corkboard, on the entry half wall ----------------
+// What's going on around town, and in here: flyers that change week to week, whatever's coming up on the
+// calendar, tonight's feature, the employee of the month, and a Polaroid of everyone who's banned
+const FLYERS = [
+  ["#fff59a", ["LOST CAT!", "ORANGE TABBY", "\"MR. WHISKERS\"", "CALL 555-0142"]], ["#bfe3ff", ["BAND SEEKS", "DRUMMER", "NO POSERS", "ASK FOR TODD"]],
+  ["#ffd0e8", ["BABYSITTER", "CPR CERTIFIED", "$4/HR", "555-0199"]], ["#d6ffd0", ["GUITAR", "LESSONS", "ALL AGES", "555-0177"]],
+  ["#fff", ["GARAGE SALE", "SAT 8AM", "NINTENDO, LP'S", "412 ELM ST"]], ["#ffe0b8", ["LAWNS MOWED", "$10", "ASK FOR KEVIN"]],
+  ["#e0d4ff", ["KARATE", "SIGN-UPS", "REC CENTER"]], ["#fff", ["FREE PUPPIES", "TO GOOD HOME", "555-0123"]],
+];
+function corkDraw() {
+  const g = corkCanvas.getContext("2d"), W = 1040, H = 680, wk = Math.floor((shift.day - 1) / 7);
+  let seed = 9301 + wk * 49297; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;   // the same flyers all week
+  g.fillStyle = "#b58552"; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 2600; i++) { g.fillStyle = rnd() < 0.5 ? "#9c6c3e" : "#c99a64"; g.fillRect(rnd() * W, rnd() * H, 3, 3); }
+  const pin = (x, y) => { g.fillStyle = ["#d22", "#22a", "#1a1", "#eb0"][Math.floor(rnd() * 4)]; g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill(); };
+  const note = (x, y, w, h, bg, lines, size = 22) => {
+    g.save(); g.translate(x + w / 2, y + h / 2); g.rotate((rnd() - 0.5) * 0.12); g.fillStyle = "#0004"; g.fillRect(-w / 2 + 4, -h / 2 + 5, w, h);
+    g.fillStyle = bg; g.fillRect(-w / 2, -h / 2, w, h); g.fillStyle = "#222"; g.textAlign = "center";
+    lines.forEach((l, i) => { g.font = `bold ${i ? size - 4 : size}px Arial`; g.fillText(l, 0, -h / 2 + size + 8 + i * (size + 4), w - 12); });
+    pin(0, -h / 2 + 10); g.restore();
+  };
+  const polaroid = (x, y, name, tag, bg) => {     // a snapshot: a TV-head silhouette in the frame, a name in marker under it
+    g.save(); g.translate(x + 70, y + 85); g.rotate((rnd() - 0.5) * 0.16); g.fillStyle = "#0004"; g.fillRect(-66, -76, 140, 170);
+    g.fillStyle = "#f6f4ee"; g.fillRect(-70, -80, 140, 170); g.fillStyle = bg; g.fillRect(-60, -70, 120, 112);
+    g.fillStyle = "#222"; g.fillRect(-26, -48, 52, 40); g.fillStyle = "#6af"; g.fillRect(-20, -43, 40, 30); g.fillStyle = "#222"; g.fillRect(-36, -4, 72, 46);
+    g.fillStyle = "#c00"; g.font = "bold 16px Comic Sans MS, Arial"; g.textAlign = "center"; g.fillText(tag, 0, 62, 130);
+    g.fillStyle = "#111"; g.font = "bold 15px Comic Sans MS, Arial"; g.fillText(name, 0, 82, 130); pin(0, -72); g.restore();
+  };
+  // the employee of the month: whoever's furthest along
+  const best = [you, ...staff].reduce((a, e) => avgLevel(e) > avgLevel(a) ? e : a, you);
+  polaroid(24, 20, best === you ? "YOU!" : `${best.first} ${best.last[0]}.`.toUpperCase(), "EMPLOYEE OF THE MONTH", "#ffd400");
+  // the banned (most recent first)
+  const banned = posTerm.members.filter(m => m.status && !posTerm.canVisit(m)).slice(-4);
+  banned.forEach((m, i) => polaroid(W - 170 - i * 150, H - 200, `${m.first[0]}. ${m.last}`.toUpperCase(), "DO NOT RENT", "#ccc"));
+  // what's coming up on the calendar, and tonight's feature
+  const d = shiftDate(), soon = [...holidays(d.getFullYear()), ...holidays(d.getFullYear() + 1)].filter(h => h.at >= d && (h.at - d) / 864e5 <= 21).sort((a, b) => a.at - b.at)[0];
+  if (soon) note(196, 26, 250, 150, "#ff9b3d", soon.label === "HALLOWEEN" ? ["HORROR-THON!", "SCARY STUFF ALL", "OCTOBER LONG"] : soon.label === "CHRISTMAS" ? ["HOLIDAY", "FAVORITES", "ON THE ENDCAP"]
+    : [soon.label, soon.at.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase(), "PLAN AHEAD!"], 26);
+  if (show.title) note(470, 22, 290, 120, "#111", ["TONIGHT 8PM"], 28), g.fillStyle = "#ffd400", g.font = "bold 22px Arial", g.textAlign = "center", g.fillText(show.title.title.toUpperCase(), 615, 120, 270), g.textAlign = "left";
+  // the flyers: four of them this week
+  const fl = [...FLYERS].sort(() => rnd() - 0.5).slice(0, banned.length > 2 ? 3 : 4);
+  [[790, 24], [200, 210], [430, 190], [30, 250]].slice(0, fl.length).forEach(([x, y], i) => {
+    note(x, y, 210, 170, fl[i][0], fl[i][1]);
+    g.fillStyle = "#222"; for (let k = 0; k < 6; k++) { g.save(); g.translate(x + 20 + k * 32, y + 170); g.fillStyle = fl[i][0]; g.fillRect(0, 0, 24, 40); g.restore(); }   // tear-off tabs
+  });
+  corkTex.needsUpdate = true;
+}
+
 // ---------------- the restroom's working parts ----------------
 function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
   if (bath.flushT > 0 && bath.water) {
@@ -9002,7 +9051,7 @@ const posTerm = window.createPOS({
     canvas.requestPointerLock()?.catch?.(() => backToStore());
   },
 });
-posTerm.idle();
+posTerm.idle(); corkDraw();
 // right-click backs out of the register just like Escape (a screen back, or log off from the main menu);
 // being a click, closing it takes the mouse straight back instead of waiting for the next input
 $("posTerm").addEventListener("contextmenu", e => e.preventDefault());
@@ -9061,7 +9110,7 @@ function clockOut() {
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
-  posTerm.setDate(shiftDate()); calendarDraw();
+  posTerm.setDate(shiftDate()); calendarDraw(); corkDraw();
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   { const sn = season(); for (const h of sn.today) logAct(`It's circled on the calendar: ${h.label}. ${h.rush > 1 ? "Expect a crowd" : "Expect a quiet one"}`, h.rush > 1 ? "good" : "");
     if (sn.lean.length) logAct(`Seasonal: ${sn.lean.includes("Holiday") ? "the holiday shelf" : sn.lean.includes("Horror") ? "horror" : sn.lean.join(" and ").toLowerCase()} is renting more than usual`); }
@@ -9478,7 +9527,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { shiftDate, season, calendarDraw,
+window.__t = { shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
