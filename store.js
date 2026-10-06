@@ -5361,6 +5361,7 @@ function rushLevel() {
   let r = h < 12 ? 0.5 : h < 14 ? 0.9 : h < 15 ? 0.7 : h < 17.5 ? 1.2 : h < 18.5 ? 0.9 : h < 21.5 ? 1.5 : h < 23 ? 0.9 : 0.5;
   if (weekend && h >= 18) r *= 1.35;
   if (d === 2) r *= 1.15;                         // new release Tuesday
+  r *= season().rush;                             // a holiday (see the calendar)
   const members = SIM ? (rushLevel.n ??= posTerm.members.filter(m => m.active).length) : 150;   // (simulation: a small member base is a quiet store)
   const easeIn = SIM ? Math.min(1, 0.25 + 0.15 * shift.day) : 1;   // (simulation: a gentle first week, 40% busy on day 1 up to full on day 5)
   return r * repMult() * (0.45 + 0.55 * Math.min(1, members / 150)) * easeIn;
@@ -5369,8 +5370,9 @@ const custMax = () => Math.min(6, Math.round(2 + 2 * rushLevel()));
 const custs = [], custLine = [];
 const custArrivals = { t: 3, lastMember: null };
 const custLikes = (cust, spot) => {               // 0..1: how much of this shelf is their kind of thing
-  const cats = cust.who.persona.taste.cats; if (!cats.length) return 0.3;
-  return cats.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n;
+  const lean = season().lean, extra = lean.length ? 0.5 * lean.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n : 0;   // the season pulls everyone toward a section
+  const cats = cust.who.persona.taste.cats; if (!cats.length) return Math.min(1, 0.3 + extra);
+  return Math.min(1, cats.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n + extra);
 };
 const custWaiting = () => custLine[0] && ["wait", "impatient", "angry"].includes(custLine[0].state) ? custLine[0] : null;   // at the counter, waiting to be rung up
 // who comes in: every walk-in is one of the POS's members, and their member
@@ -7888,6 +7890,69 @@ function danaCall() {                            // Dana picks up: she checks, t
   emp.fetch = { copy, hold: h }; emp.c.setMood("happy"); empGo("fetchGo", shelfSpot(copy));
 }
 
+// ---------------- the calendar: holidays and street dates ----------------
+// The days that matter in a video store, every year: some busier (New Year's Eve), some dead (Super Bowl
+// Sunday), and some that pull people to one section for the weeks before (horror for Halloween, the holiday
+// shelf through December). On the wall behind the register: a promo calendar with them circled in red marker
+const nthDow = (y, m, dow, n) => { const d = new Date(y, m, 1, 12); d.setDate(1 + (dow - d.getDay() + 7) % 7 + 7 * (n - 1)); return d; };
+const lastDow = (y, m, dow) => { const d = new Date(y, m + 1, 0, 12); d.setDate(d.getDate() - (d.getDay() - dow + 7) % 7); return d; };
+const holidays = y => [
+  { at: new Date(y, 9, 31, 12), label: "HALLOWEEN", rush: 1.25, lean: ["Horror", "Horror & Anthology"], lead: 14 },
+  { at: new Date(+nthDow(y, 10, 4, 4) - 864e5), label: "LONG WKND", rush: 1.25 },
+  { at: nthDow(y, 10, 4, 4), label: "THANKSGIV.", rush: 0.6 },
+  { at: new Date(y, 11, 25, 12), label: "CHRISTMAS", rush: 0.5, lean: ["Holiday", "Family & Kids"], lead: 24 },
+  { at: new Date(y, 11, 31, 12), label: "NEW YEAR'S", rush: 1.4 },
+  { at: lastDow(y, 0, 0), label: "SUPER BOWL", rush: 0.6 },
+  { at: new Date(y, 1, 14, 12), label: "VALENTINE", rush: 1.2, lean: ["Drama", "Comedy"], lead: 3 },
+  ...NOT_YET.filter(f => +f[2].slice(0, 4) === y).map(([t, , st]) => ({ at: new Date(st + "T12:00"), label: `${t.split(":")[0].toUpperCase().slice(0, 10)} VHS`, rush: 1.1 })),
+];
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+function season() {                               // today: { today: [holidays], rush, lean: [categories] } (worked out once a day)
+  if (season.day === shift.day) return season.v;
+  const d = shiftDate(), hs = [...holidays(d.getFullYear() - 1), ...holidays(d.getFullYear())];
+  const today = hs.filter(h => sameDay(h.at, d));
+  season.day = shift.day;
+  return season.v = { today, rush: today.reduce((a, h) => a * h.rush, 1), lean: hs.filter(h => h.lean && d <= h.at && (h.at - d) / 864e5 <= h.lead).flatMap(h => h.lean) };
+}
+const calCanvas = document.createElement("canvas"); calCanvas.width = 512; calCanvas.height = 768;
+const calTex = new THREE.CanvasTexture(calCanvas); calTex.colorSpace = THREE.SRGBColorSpace;
+{
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.63), new THREE.MeshLambertMaterial({ map: calTex }));
+  m.position.set(WALL_L + 0.106, 1.5, 0.72); m.rotation.y = Math.PI / 2; scene.add(m);   // the west wall, by the front window, under the TV
+}
+function calendarDraw() {
+  const g = calCanvas.getContext("2d"), W = 512, d = shiftDate(), y = d.getFullYear(), mo = d.getMonth();
+  g.fillStyle = "#fbf8ef"; g.fillRect(0, 0, W, 768);
+  // the picture half: the store's own promo
+  const sky = g.createLinearGradient(0, 0, 0, 300); sky.addColorStop(0, "#0b1d5c"); sky.addColorStop(1, "#3a2a7a"); g.fillStyle = sky; g.fillRect(0, 0, W, 300);
+  g.fillStyle = "#ffd400"; g.font = "bold 44px Arial Black, Arial"; g.textAlign = "center"; g.fillText("VAULTBUSTER", W / 2, 70);
+  g.fillStyle = "#fff"; g.font = "bold 22px Arial"; g.fillText("VIDEO · BE KIND, REWIND", W / 2, 102);
+  g.fillStyle = "#111"; g.fillRect(126, 140, 260, 130); g.fillStyle = "#e8e8e8"; g.fillRect(166, 158, 180, 46);   // a tape, label and reels
+  g.fillStyle = "#333"; for (const x of [200, 312]) { g.beginPath(); g.arc(x, 236, 22, 0, 7); g.fill(); }
+  g.fillStyle = "#c00"; g.font = "bold 20px Arial"; g.fillText(`${y}`, W / 2, 188);
+  // the month
+  const MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+  g.fillStyle = "#111"; g.font = "bold 36px Arial"; g.fillText(`${MONTHS[mo]} ${y}`, W / 2, 346);
+  const x0 = 18, cw = (W - 36) / 7, y0 = 372, ch = 64, first = new Date(y, mo, 1).getDay(), days = new Date(y, mo + 1, 0).getDate();
+  g.font = "bold 16px Arial"; "SMTWTFS".split("").forEach((c, i) => { g.fillStyle = i ? "#333" : "#c00"; g.fillText(c, x0 + cw * (i + 0.5), y0 + 4); });
+  const hs = holidays(y).filter(h => h.at.getMonth() === mo);
+  for (let n = 1; n <= days; n++) {
+    const k = first + n - 1, cx = x0 + cw * (k % 7), cy = y0 + 12 + ch * Math.floor(k / 7);
+    g.strokeStyle = "#bbb"; g.lineWidth = 1; g.strokeRect(cx, cy, cw, ch);
+    g.fillStyle = k % 7 ? "#222" : "#c00"; g.font = "bold 20px Arial"; g.textAlign = "left"; g.fillText(n, cx + 5, cy + 21);
+    const h = hs.find(h => h.at.getDate() === n);
+    if (h) {                                      // circled in red marker, with a scrawl
+      g.strokeStyle = "#d01818"; g.lineWidth = 4; g.beginPath(); g.ellipse(cx + cw / 2, cy + ch / 2, cw / 2 - 3, ch / 2 - 4, -0.12, 0.3, 0.3 + Math.PI * 2.08); g.stroke();
+      g.fillStyle = "#d01818"; g.font = "bold 14px Comic Sans MS, Arial"; g.textAlign = "center"; g.fillText(h.label, cx + cw / 2, cy + ch - 9);
+    }
+    if (n < d.getDate()) {                        // crossed off
+      g.strokeStyle = "#222b"; g.lineWidth = 3; g.beginPath(); g.moveTo(cx + 8, cy + 8); g.lineTo(cx + cw - 8, cy + ch - 8); g.moveTo(cx + cw - 8, cy + 8); g.lineTo(cx + 8, cy + ch - 8); g.stroke();
+    } else if (n === d.getDate()) { g.strokeStyle = "#1a5cff"; g.lineWidth = 3; g.strokeRect(cx + 2, cy + 2, cw - 4, ch - 4); }
+  }
+  g.textAlign = "left"; calTex.needsUpdate = true;
+}
+calendarDraw();
+
 // ---------------- the restroom's working parts ----------------
 function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
   if (bath.flushT > 0 && bath.water) {
@@ -8996,8 +9061,10 @@ function clockOut() {
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
-  posTerm.setDate(shiftDate());
+  posTerm.setDate(shiftDate()); calendarDraw();
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
+  { const sn = season(); for (const h of sn.today) logAct(`It's circled on the calendar: ${h.label}. ${h.rush > 1 ? "Expect a crowd" : "Expect a quiet one"}`, h.rush > 1 ? "good" : "");
+    if (sn.lean.length) logAct(`Seasonal: ${sn.lean.includes("Holiday") ? "the holiday shelf" : sn.lean.includes("Horror") ? "horror" : sn.lean.join(" and ").toLowerCase()} is renting more than usual`); }
   boxDeliver();                                // yesterday's orders, by the front door
   for (const m of posTerm.members.filter(m => m.promise && (!posTerm.canVisit(m) || (m.loyalty || 0) <= -60))) {   // promised, but not welcome (or not coming in): the night drop
     const late = m.rentals.filter(r => posTerm.dueIn(r) < 0).map(r => r.copy); delete m.promise; if (!late.length) continue;
@@ -9411,7 +9478,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { shiftDate,
+window.__t = { shiftDate, season, calendarDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
