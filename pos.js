@@ -13,6 +13,9 @@
 //   savedOwed,          { member #: late fees owed } from last visit
 //   today, clock(),     the shift's date (ms) and its clock ("HH:MM") — store.js runs its own calendar
 //   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
+//   lose(copy),         a rental billed as lost: it's never coming back (off the rented list, on the lost one)
+//   promised(member),   an overdue member said on the phone they'll bring it in
+//   savedMessages,      the message center's notes from last visit: [{ at, text, read }]
 //   returnBin(), held(), playing(),   live store state, read on demand
 //   alarm(), silenceAlarm(),          security gate alarm: is it going off / shut it up
 //   gatesArmed(), armGates(on),       the gate system itself: armed or switched off entirely
@@ -20,7 +23,7 @@
 //   onClose(),          player logged off / backed out
 //   onRedraw(canvas),   the screen changed — mirror it onto the in-world monitor
 // }
-// -> { open(), close(), isOpen(), key(e), canvas, members, rentMax, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), join(n), prospect(skip), enroll(member), activeNums(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
+// -> { open(), close(), isOpen(), key(e), canvas, members, message(text), inbox(), messagesAll(), rentMax, dueIn(rental), checkIn(copy), checkOut(copy, member), sale(amount), budget(), owed(member), settle(member, paid), owedAll(), join(n), prospect(skip), enroll(member), activeNums(), incident(member, what), setStatus(member, status, days), canVisit(member), loyal(member, d), recordsAll(), setDate(date), rentalOf(copy) }
 window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 30;
   // DOS-app palette: blue screen, light grey text, bright white values, cyan
@@ -118,6 +121,63 @@ window.createPOS = function createPOS(api) {
     : api.playing()?.tape === c ? "IN LOUNGE VCR" : c.rental ? `OUT #${c.rental.cust.num} DUE ${fmtD(c.rental.due)}${daysLate(c.rental) ? ` LATE ${daysLate(c.rental)}D` : ""}`
     : c.offShelf ? "UNACCOUNTED" : "ON SHELF";
   const copyIn = t => copiesOf(t).filter(c => !c.offShelf).length;
+
+  // ---- the message center: the store's notes (missed calls and the like, left by store.js with message())
+  // and the calls somebody has to make: anyone with a tape CALL_DAYS late gets one until they've promised to
+  // bring it in. Call from here: they pick up and promise (m.promise: store.js sends them in), or it's the
+  // machine (try again tomorrow). Still nothing after two tries and LOST_DAYS: bill the tapes as lost ----
+  const CALL_DAYS = 5, LOST_DAYS = 14;
+  const notes = (api.savedMessages || []).slice(-40);
+  const lateOf = c => c.rentals.filter(r => daysLate(r) >= CALL_DAYS);
+  const toCall = () => customers.filter(c => lateOf(c).length && !(c.promise >= +TODAY - 2 * DAY))   // (a promise not kept in two days: back on the list)
+    .sort((a, b) => Math.max(...lateOf(b).map(daysLate)) - Math.max(...lateOf(a).map(daysLate)));
+  const inboxCount = () => toCall().filter(c => c.lastCall !== +TODAY).length + notes.filter(n => !n.read).length;
+  const EXCUSE_NOTE = ["SAYS IT'S IN THE CAR. WILL DROP IT OFF.", "THOUGHT THEY RETURNED IT. WILL LOOK.", "APOLOGIZED. BRINGING IT IN.", "KID HID IT IN THE TOY BOX. ON THE WAY."];
+  function callScreen(c) {
+    return { title: `OVERDUE CALL - ${up(fullName(c))} #${c.num}`, prompt: "C TO CALL, L TO BILL AS LOST, ESC", lines: () => {
+      const late = lateOf(c), worst = late.length ? Math.max(...late.map(daysLate)) : 0;
+      return ["", ` MEMBER...: ${up(fullName(c))}  #${c.num}`, ` PHONE....: ${c.phone}`, ` LOYALTY..: ${c.loyalty > 30 ? "REGULAR" : c.loyalty < -30 ? "UNHAPPY" : "OK"}`, "",
+        " OVERDUE:", ...late.map(r => `   ${L(up(r.copy.title), 44)} ${R(daysLate(r) + " DAYS", 8)}  ${R(money(lateFee(r)), 8)}`), "",
+        ` CALLS....: ${c.calls || 0}${c.lastCall ? `  (LAST ${fmtD(new Date(c.lastCall))})` : ""}`,
+        ...(c.promise ? [` PROMISED.: ${fmtD(new Date(c.promise))} - NOT IN YET`] : []), "",
+        worst >= LOST_DAYS && (c.calls || 0) >= 2 ? " L: BILL THE TAPES AS LOST (REPLACEMENT COST GOES ON THEIR ACCOUNT)" : ` (BILL AS LOST: AFTER ${LOST_DAYS} DAYS AND 2 CALLS)`];
+    }, submit(v) {
+      if (v === "C") {
+        if (c.lastCall === +TODAY) { msg = "ALREADY CALLED TODAY. TRY TOMORROW."; return draw(); }
+        c.calls = (c.calls || 0) + 1; c.lastCall = +TODAY;
+        if (Math.random() < 0.55 + (c.loyalty || 0) / 250) { c.promise = +TODAY; msg = `THEY PICKED UP. ${EXCUSE_NOTE[Math.floor(Math.random() * EXCUSE_NOTE.length)]}`; api.promised?.(c); }
+        else msg = "NO ANSWER. LEFT A MESSAGE ON THEIR MACHINE.";
+        return draw();
+      }
+      if (v === "L") {
+        const late = lateOf(c);
+        if (!late.length || Math.max(...late.map(daysLate)) < LOST_DAYS || (c.calls || 0) < 2) { msg = `NOT YET: ${LOST_DAYS} DAYS LATE AND 2 CALLS FIRST.`; return draw(); }
+        for (const r of late) {
+          c.owed = +((c.owed || 0) + replaceCost(r.copy) + lateFee(r)).toFixed(2);
+          c.rentals.splice(c.rentals.indexOf(r), 1); rentals.splice(rentals.indexOf(r), 1); r.copy.rental = null; r.copy.lost = true; api.lose?.(r.copy);
+        }
+        (c.incidents ||= []).push({ at: +TODAY, what: `BILLED FOR ${late.length} UNRETURNED TAPE${late.length > 1 ? "S" : ""}` });
+        delete c.promise; back(); msg = "BILLED AS LOST. REORDER FROM B - REPLACEMENT COPIES."; return draw();
+      }
+      msg = "C TO CALL, L TO BILL AS LOST."; draw();
+    } };
+  }
+  function messagesScreen() {
+    const items = [...toCall().map(c => ({ c })), ...[...notes].reverse()];
+    return listScreen("MESSAGE CENTER", `      ${L("WHAT", 6)}`, items,
+      (it, n) => {
+        if (!it.c) return ` ${R(n, 3)}  ${L(it.read ? "NOTE" : "NEW", 6)} ${L(`${fmtD(new Date(it.at))} ${it.text}`, 66)}`;
+        const late = lateOf(it.c), k = it.c.calls || 0;
+        return ` ${R(n, 3)}  ${L(it.c.lastCall === +TODAY ? "CALLED" : "CALL", 6)} ${L(`${up(fullName(it.c))} #${it.c.num} - ${late.length} TAPE${late.length > 1 ? "S" : ""} ${Math.max(...late.map(daysLate))}D LATE${k ? ` (${k} CALL${k > 1 ? "S" : ""})` : ""}`, 66)}`;
+      },
+      it => {
+        if (it.c) return go(callScreen(it.c));
+        it.read = true;
+        go({ title: "MESSAGE", prompt: "D TO DELETE, ESC TO RETURN", lines: () => ["", ` ${fmtD(new Date(it.at))}`, "", ` ${it.text}`],
+          submit(v) { if (v === "D") { notes.splice(notes.indexOf(it), 1); back(); back(); go(messagesScreen()); } else back(); } });
+      },
+      "NO MESSAGES. NOBODY TO CALL.");
+  }
 
   // ---- the screen: an 80x30 grid of cells, each { ch, fg, bg } (or px: [top, bottom], two
   // square "pixels" for the logo), painted onto a canvas: the in-world monitor's, and a big one
@@ -253,6 +313,7 @@ window.createPOS = function createPOS(api) {
     put(g, 23, 2, "MEMBERS....", P.cyan); put(g, 23, 14, R(members().length, 3), P.hi);
     put(g, 21, 24, "TONIGHT...", P.cyan); put(g, 21, 35, f ? `${up(f.title).slice(0, 26)} 8PM` : "NO FEATURE", f ? P.hi : P.gray);
     put(g, 22, 24, "GATES.....", P.cyan); put(g, 22, 35, api.alarm() ? "*** ALARM ***" : api.gatesArmed() ? "ARMED" : "DISARMED", api.alarm() ? P.red : api.gatesArmed() ? P.grn : P.red);
+    const nm = inboxCount(); put(g, 24, 2, "MESSAGES...", P.cyan); put(g, 24, 14, R(nm, 3), nm ? P.red : P.hi);
     put(g, 23, 24, "BUDGET....", P.cyan); put(g, 23, 35, money(budget), budget < 0 ? P.red : P.grn);
     const when = `${WD[TODAY.getDay()]} ${fmtD(TODAY)}`; put(g, 21, COLS - 3 - when.length, when, P.yel); put(g, 22, COLS - 3 - clock().length, clock(), P.yel);
     put(g, 23, COLS - 21, "SCO UNIX 3.2 · TTY01", P.gray);
@@ -566,6 +627,7 @@ window.createPOS = function createPOS(api) {
         "  MOST RENTED RIGHT NOW:", ...top.map((t, i) => `   ${i + 1}. ${L(up(t.title), 40)} ${copiesOf(t).length - copyIn(t)} OF ${copiesOf(t).length} OUT`),
       ], submit() { back(); } });
     }],
+    ["M", "MESSAGES - CALLS TO MAKE, MISSED CALLS", () => go(messagesScreen())],
     ["9", "LOUNGE - PREVIEW STATION STATUS", () => go({ title: "PREVIEW STATION", prompt: "ESC TO RETURN", lines: () => {
       const p = api.playing();
       return p ? ["", ` VCR......: PLAYING`, ` TAPE.....: ${up(p.tape.title)}`, ` SECTION..: ${up(p.tape.category)}`]
@@ -579,7 +641,8 @@ window.createPOS = function createPOS(api) {
       "   VER              VERSION                 LOGOFF / EXIT     END SESSION",
       "   SUPPLIES         ORDER SNACKS/DRINKS     UPGRADES          STORE IMPROVEMENTS",
       "   THEATER          TONIGHT'S FEATURE       REPLACE           ORDER LOST COPIES",
-      "   SCHEDULE         THE STAFF'S WEEK        SYSRESET          WIPE THE SAVED STORE", "",
+      "   SCHEDULE         THE STAFF'S WEEK        SYSRESET          WIPE THE SAVED STORE",
+      "   MESSAGES         CALLS TO MAKE, NOTES", "",
       " ESC GOES BACK ONE SCREEN. F10 LOGS OFF FROM ANYWHERE.", "",
       " SYSTEM PROBLEMS? CALL DENNIS (DISTRICT) - DO NOT REBOOT THE SERVER.",
     ], submit() { back(); } })],
@@ -657,9 +720,9 @@ window.createPOS = function createPOS(api) {
   const menuItems = () => MENU.filter(m => !m[3] || m[3]());
   // the main menu: two boxed columns of sections, the day's numbers underneath
   const SHORT = { "1": "TITLE SEARCH", "2": "BROWSE BY SECTION", "7": "RETURNS BIN QUEUE", B: "REPLACEMENT COPIES", "3": "MEMBER LOOKUP", "4": "ALL ACCOUNTS",
-    "5": "OVERDUE / LATE FEES", "6": "RENTALS OUT", "8": "DAILY SUMMARY", O: "ORDER SUPPLIES", U: "STORE UPGRADES", T: "TONIGHT'S FEATURE", W: "STAFF SCHEDULE",
+    "5": "OVERDUE / LATE FEES", "6": "RENTALS OUT", "8": "DAILY SUMMARY", M: "MESSAGES", O: "ORDER SUPPLIES", U: "STORE UPGRADES", T: "TONIGHT'S FEATURE", W: "STAFF SCHEDULE",
     "9": "PREVIEW STATION", S: "GATE SYSTEM", A: "SILENCE GATE ALARM", H: "HELP / COMMANDS", "0": "LOG OFF" };
-  const COLUMNS = [[["INVENTORY", ["1", "2", "7", "B"]], ["MEMBERS", ["3", "4", "5"]], ["REPORTS", ["6", "8"]]],
+  const COLUMNS = [[["INVENTORY", ["1", "2", "7", "B"]], ["MEMBERS", ["3", "4", "5"]], ["REPORTS", ["6", "8", "M"]]],
     [["STORE", ["O", "U", "T", "W", "9"]], ["SECURITY", ["A", "S"]], ["SYSTEM", ["H", "0"]]]];
   let menuRects = [];
   function menuOrder() {                           // visible items, column by column: [key, label, fn, col]
@@ -684,8 +747,8 @@ window.createPOS = function createPOS(api) {
           put(g, r, c0 + 2, ` ${name} `, P.yel); r++;
           for (const k of ks) {
             put(g, r, c0, "│", P.dcyan); put(g, r, c1, "│", P.dcyan);
-            const alarm = k === "A";
-            put(g, r, c0 + 2, k, alarm ? P.red : P.yel); put(g, r, c0 + 5, SHORT[k] || vis.get(k)[1], alarm ? (blink ? P.red : P.hi) : P.hi);
+            const alarm = k === "A", nm = k === "M" && inboxCount();
+            put(g, r, c0 + 2, k, alarm || nm ? P.red : P.yel); put(g, r, c0 + 5, nm ? `MESSAGES (${nm} NEW)` : SHORT[k] || vis.get(k)[1], alarm || nm ? (blink ? P.red : P.hi) : P.hi);
             menuRects[order.findIndex(m => m[0] === k)] = { r, c0: c0 + 1, c1: c1 - 1 }; r++;
           }
         });
@@ -703,7 +766,7 @@ window.createPOS = function createPOS(api) {
       if ((cmd === "FIND" || cmd === "INV") && arg) return go(listScreen(`TITLE SEARCH: ${arg}`, titleHead, findTitles(arg), titleRow, titleDetail));
       if ((cmd === "MEMBER" || cmd === "CUST") && arg) return go(listScreen(`MEMBER SEARCH: ${arg}`, custHead, findCusts(arg), custRow, custDetail));
       const alias = { OVERDUE: "5", OUT: "6", RETURNS: "7", REPORT: "8", HELP: "H", "?": "H", LOGOFF: "0", EXIT: "0", LOGOUT: "0",
-        SUPPLIES: "O", ORDER: "O", SCHEDULE: "W", STAFF: "W", UPGRADES: "U", UPGRADE: "U", THEATER: "T", FEATURE: "T", GATES: "S", REPLACE: "B" }[cmd];
+        SUPPLIES: "O", ORDER: "O", MESSAGES: "M", MSGS: "M", CALLS: "M", SCHEDULE: "W", STAFF: "W", UPGRADES: "U", UPGRADE: "U", THEATER: "T", FEATURE: "T", GATES: "S", REPLACE: "B" }[cmd];
       if (alias) return MENU.find(([k]) => k === alias)[2]();
       if (cmd === "SYSRESET") return go({ title: "SYSTEM RESET", prompt: "TYPE RESET TO CONFIRM, ESC TO CANCEL", lines: () => ["",
         " THIS WIPES THE SAVED STORE: INVENTORY, RETURNS, RENTALS, LIGHTS, WHERE YOU", " ARE STANDING, THE TAPE IN THE VCR. THE STORE RELOADS FRESH.", "",
@@ -793,7 +856,10 @@ window.createPOS = function createPOS(api) {
     setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
     loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
-    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit }])),
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null || c.calls || c.promise).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit, calls: c.calls, lastCall: c.lastCall, promise: c.promise }])),
+    message(text) { notes.push({ at: +TODAY, text: up(text), read: false }); if (notes.length > 40) notes.shift(); draw(); },   // a note in the message center
+    inbox: () => inboxCount(),                 // what's waiting there: calls not made today, unread notes
+    messagesAll: () => notes,
     join(n) {                                    // n new sign-ups (not anyone who's banned or been sent packing) -> who
       const pool = customers.filter(c => !c.active && !c.status), got = [];
       while (got.length < n && pool.length) { const c = pool.splice(Math.floor(rnd() * pool.length), 1)[0]; c.active = true; got.push(c); }

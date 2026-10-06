@@ -2484,7 +2484,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
       put(new THREE.TorusGeometry(0.03, 0.003, 8, 24).rotateX(Math.PI / 2), beigeP, x, -0.022, 0, handset);   // rolled rim
       put(new THREE.CylinderGeometry(0.027, 0.027, 0.002, 24), blackC, x, -0.0225, 0, handset);                // grille
     }
-    const lampOff = new THREE.MeshLambertMaterial({ color: 0xcfd6d8 }), lampLit = new THREE.MeshBasicMaterial({ color: 0xffb040 });
+    const lampOff = new THREE.MeshLambertMaterial({ color: 0xcfd6d8 }), lampLit = new THREE.MeshBasicMaterial({ color: 0xffb040 }), lampMsg = new THREE.MeshBasicMaterial({ color: 0xff3030 });
     const lamps = [];                                 // line buttons: clear plastic, lit from behind
     for (let i = 0; i < 6; i++) lamps.push(put(new THREE.BoxGeometry(0.024, 0.014, 0.008), lampOff, -0.075 + i * 0.03, 0.022, 0.122, ph));
     put(new THREE.BoxGeometry(0.2, 0.004, 0.006), blackC, 0, 0.034, 0.12, ph);                             // designation strip over them
@@ -2499,6 +2499,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
     phoneLook = now => {                              // handset off the hook while you're on a call; line 1 flashes while it rings
       handset.visible = !phone.call;
       lamps[0].material = phone.call || (phone.ring && now % 1000 < 500) ? lampLit : lampOff;
+      lamps[5].material = posTerm?.inbox() ? lampMsg : lampOff;   // message waiting: see the register (M)
     };
     ph.traverse(m => { if (m.isMesh) { m.userData.phone = true; aimables.push(m); } });
     // stack of brown paper bags
@@ -5380,6 +5381,8 @@ function custPickMember(anyone = false) {      // anyone: skip the visiting rhyt
   const ms = posTerm.members.filter(m => m.active && m !== custArrivals.lastMember && !custs.some(k => k.member === m) && posTerm.canVisit(m) && (m.loyalty || 0) > -60);   // not someone who's already in here, banned, or fed up with the place
   const soonest = m => Math.min(...m.rentals.map(r => posTerm.dueIn(r)));
   const now = shift.day + shift.h / 24, since = m => now - (m.lastVisit ?? -9);   // game days since they were last in
+  const promised = ms.find(m => m.promise && soonest(m) < 0 && since(m) > 0.25);   // called about an overdue tape: they said they'd bring it in
+  if (promised && Math.random() < 0.3) return promised;
   const due = ms.filter(m => m.rentals.length && soonest(m) <= 1 && since(m) > 0.25);   // bringing tapes back (just not twice in a few hours)
   if (due.length && Math.random() < 0.5) {
     const w = due.map(m => soonest(m) <= 0 ? 3 : 1);
@@ -5395,6 +5398,8 @@ function custPickMember(anyone = false) {      // anyone: skip the visiting rhyt
   return anyone || Math.random() < Math.min(1, since(ok[i]) / cadence(ok[i])) ** 2 ? ok[i] : null;   // (seen yesterday: unlikely today)
 }
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
+const SHEEPISH = ["I'm so sorry. It was under the couch the whole time.", "My brother-in-law had it. Don't ask.", "I swear I thought I returned this.",
+  "It got packed in a moving box.", "The dog... look, it still plays.", "Please don't make me look at the fee."];
 function custSpawn(member = custPickMember(true)) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
@@ -5889,6 +5894,7 @@ function custStep(cust, dt) {
         }
         shift.stats.returns += cust.returning.length;
         if (returnBin.length + cust.returning.length >= 15 && returnBin.length < 15) logAct(`Returns are piling up: ${returnBin.length + cust.returning.length} in the bin`, "bad");
+        if (cust.member.promise) { delete cust.member.promise; logAct(`${memberName(cust.member)} slinks in with the overdue tape${nBack > 1 ? "s" : ""}: "${SHEEPISH[Math.floor(Math.random() * SHEEPISH.length)]}"`); }
         { const fee = posTerm.owed(cust.member) - owedWas;
           logAct(`${memberName(cust.member)} returned ${nBack === 1 ? cust.returning[0].title : nBack + " tapes"}${fee > 0 ? `, late: ${money(fee)} fee on their account` : ""}`, fee > 0 ? "bad" : ""); }
         refreshReturnsBin(); cust.returning = []; c.holdTape(0); c.setPose("idle"); c.reachTo(null); c.setMood("happy");
@@ -7735,7 +7741,37 @@ function ringBurst() {                            // a desk-set ringer: a clappe
     });
   } catch {}
 }
-function phoneCaller() {                          // an active member, not in the store, asking after something in their taste
+// the other calls a video store gets. q: what they say; a: the two answers; right: which one's right (null: either's fine).
+// answer(c, key, Who) does the rest. Street dates are the movies' VHS releases (roughly): "is it out yet?" only once it's
+// been in theaters, and only until it's out
+const NOT_YET = [["Twister", "1996-05-10", "1996-10-01"], ["Mission: Impossible", "1996-05-22", "1996-11-12"], ["Independence Day", "1996-07-02", "1996-11-22"],
+  ["Jerry Maguire", "1996-12-13", "1997-08-26"], ["Men in Black", "1997-07-02", "1997-11-25"], ["Titanic", "1997-12-19", "1998-09-01"]];
+const PRANKS = ["Uh, yeah, do you have <b>Free Willy</b>?|Then you better go free him! <i>*click*</i>", "Is your refrigerator running?|Then you better go catch it! <i>*click*</i>",
+  "Do you have <b>Lethal Weapon</b>?|Freeze! FBI! <i>*giggling, click*</i>"];
+const roughDay = () => shift.stats.walkouts >= 2 || shift.stats.stolen > 0;
+const CALLS = {
+  hours: { q: () => "What time do you close tonight?", a: ["Midnight", "Ten o'clock"], right: 1 },
+  notyet: { q: c => `Is <b>${c.film[0]}</b> out on tape yet?`, a: c => [`Not till ${new Date(c.film[2] + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}: I'll put you on the list`, "Yep, come on down"], right: 1 },
+  prank: { q: c => c.prank.split("|")[0], a: ["Yes, we do", "Hang up"], right: null,
+    answer: (c, key, Who) => logAct(key === 1 ? `Prank call. ${c.prank.split("|")[1].replace(/<[^>]+>/g, "")}` : `${Who} hung up on a prank caller`) },
+  fee: { q: c => `About this ${money(posTerm.owed(c.member))} late fee: I dropped that tape off on time!`, a: ["I'll take it off this once", "Sorry, the fee stands"], right: null,
+    answer(c, key, Who) {
+      const name = memberName(c.member), owed = posTerm.owed(c.member);
+      if (key === 1) { shift.stats.feesWaived += owed; posTerm.settle(c.member, false); posTerm.loyal(c.member, 4); logAct(`${Who} waived ${name}'s ${money(owed)} late fee over the phone`); }
+      else { posTerm.loyal(c.member, -3); logAct(`${Who} told ${name} the ${money(owed)} late fee stands`); }
+    } },
+  dennis: { who: "DENNIS · DISTRICT", q: () => "Dennis, from district. Just checking in: how's today going over there?", a: ["Going great", "Bit of a rough one"], right: () => roughDay() ? 2 : 1 },
+};
+const callRight = c => { const r = CALLS[c.kind]?.right; return typeof r === "function" ? r(c) : r; };
+function phoneCaller() {                          // mostly a member asking after a title; now and then one of the CALLS
+  if (Math.random() < 0.35) {
+    const d = shiftDate(), film = NOT_YET.find(([, th, st]) => d >= new Date(th) && d < new Date(st)), owing = posTerm.members.filter(m => m.active && posTerm.owed(m) > 0);
+    const kinds = ["hours", "prank", ...(film ? ["notyet"] : []), ...(owing.length ? ["fee"] : []), ...(phone.dennis !== shift.day && shift.h > 15 ? ["dennis"] : [])];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)];
+    const pickM = ms => ms[Math.floor(Math.random() * ms.length)];
+    if (kind === "dennis") phone.dennis = shift.day;
+    return { kind, film, prank: pickM(PRANKS), member: kind === "fee" ? pickM(owing) : kind === "dennis" ? null : pickM(posTerm.members.filter(m => m.active)) };
+  }
   const ms = posTerm.members.filter(m => m.active !== false && posTerm.canVisit(m) && !custs.some(k => k.member === m) && !holds.some(h => h.member === m));
   const m = ms[Math.floor(Math.random() * ms.length)]; if (!m) return null;
   const cats = customerFor(Math.imul(m.num, 2654435761) >>> 0, m.female).persona.taste.cats;
@@ -7758,8 +7794,10 @@ function phoneTick(dt) {                          // (runs with the clock)
   if (taker) return withEmp(taker, danaCall);   // top of someone's list right now: they get it
   if (r.t > 20) {                                 // rang out
     phone.ring = null;
-    if (storeBusy()) { logAct(`Missed a call from ${memberName(r.member)} while you were with customers: they'll call back`); phone.next = shift.h + 0.4 + Math.random() * 0.4; }
-    else { shiftScore(-10); posTerm.loyal(r.member, -2); logAct(`Missed a call from ${memberName(r.member)}`, "bad", null, -10); }
+    const from = r.member ? memberName(r.member) : "Dennis at district";
+    posTerm.message(`${fmtClock(shift.h)} MISSED CALL - ${r.member ? `${from} #${r.member.num} (${r.member.phone})` : from}${r.kind === "fee" ? " RE: LATE FEE" : r.title ? ` RE: ${r.title.title}` : ""}`);
+    if (storeBusy()) { logAct(`Missed a call from ${from} while you were with customers: they'll call back`); phone.next = shift.h + 0.4 + Math.random() * 0.4; }
+    else { shiftScore(-10); if (r.member) posTerm.loyal(r.member, -2); logAct(`Missed a call from ${from}`, "bad", null, -10); }
   }
 }
 function phoneAnswer() {                          // E on the phone while it's ringing
@@ -7771,17 +7809,26 @@ function phoneAnswer() {                          // E on the phone while it's r
     for (const k of waiting) { k.t -= 10; posTerm.loyal(k.member, -2); k.c.setMood("impatient"); k.hi = 2; }
     logAct(`Picked up the phone with ${waiting.length === 1 ? "a customer" : waiting.length + " customers"} waiting at the counter`, "bad");
   }
-  phone.call = { member: r.member, title: r.title, t: 30 };
+  phone.call = { ...r, t: 30 };
   callHud();
 }
 function phoneCallTick(dt) {
   const c = phone.call; if (!c) return;
-  if ((c.t -= dt) <= 0) { phone.call = null; callHud(); shiftScore(-5); logAct(`${memberName(c.member)} got tired of waiting on the line and hung up`, "bad", null, -5); }
+  if ((c.t -= dt) <= 0) { phone.call = null; callHud(); shiftScore(-5); logAct(`${c.member ? memberName(c.member) : "Dennis"} got tired of waiting on the line and hung up`, "bad", null, -5); }
 }
 function callAnswer(key, by = "you") {            // 1: yes, I'll hold one · 2: sorry, all out
   const c = phone.call; if (!c) return;
   phone.call = null; callHud();
-  const name = memberName(c.member), inNow = !!onShelfCopy(c.title), Who = by === "dana" ? emp.first : "You";
+  const Who = by === "dana" ? emp.first : "You";
+  if (c.kind) {                                   // one of the CALLS
+    const K = CALLS[c.kind], right = callRight(c);
+    if (K.answer) return K.answer(c, key, Who);
+    const said = (typeof K.a === "function" ? K.a(c) : K.a)[key - 1], who = c.member ? memberName(c.member) : "Dennis";
+    if (key === right) { shiftScore(5, by); if (c.member) posTerm.loyal(c.member, 1); logAct(`${Who} told ${who}: "${said}"`, "", null, 5); }
+    else { shiftScore(-10, by); if (c.member) posTerm.loyal(c.member, -3); logAct(`${Who} told ${who}: "${said}". Not quite right`, "bad", null, -10); }
+    return;
+  }
+  const name = memberName(c.member), inNow = !!onShelfCopy(c.title);
   if (key === 1) {
     const at = Math.min(SHIFT.lastIn - 0.1, shift.h + 1 + Math.random() * 1.2);
     holds.push({ member: c.member, title: c.title, at, day: shift.day, copy: null, by });
@@ -7793,6 +7840,12 @@ function callAnswer(key, by = "you") {            // 1: yes, I'll hold one · 2:
 }
 function callHud() {
   const el = $("callPanel"), c = phone.call; if (!c) { el.style.display = "none"; return; }
+  if (c.kind) {
+    const K = CALLS[c.kind], a = typeof K.a === "function" ? K.a(c) : K.a;
+    el.innerHTML = `<div class="h">ON THE PHONE · ${K.who || (c.member ? `${memberName(c.member)} #${c.member.num}` : "UNKNOWN CALLER")}</div><div class="q">“${K.q(c)}”</div>` +
+      a.map((x, i) => `<span><b>${i + 1}</b> ${x}</span>`).join("");
+    el.style.display = "block"; return;
+  }
   el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${tapeName(c.title)}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
     `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
   el.style.display = "block";
@@ -7827,7 +7880,8 @@ function holdsTick() {                           // callers come in for their ho
   }
 }
 function danaCall() {                            // Dana picks up: she checks, tells the truth, and fetches it herself if it's in
-  const r = phone.ring; phone.ring = null; phone.call = { member: r.member, title: r.title, t: 30 };
+  const r = phone.ring; phone.ring = null; phone.call = { ...r, t: 30 };
+  if (r.kind) { callAnswer(callRight(phone.call) ?? 2, "dana"); return; }   // she knows the answers (and hangs up on pranks; the fee stands: not hers to waive)
   const copy = onShelfCopy(r.title);
   if (!copy) { callAnswer(2, "dana"); return; }
   const h = callAnswer(1, "dana");
@@ -8851,6 +8905,9 @@ const posTerm = window.createPOS({
   savedRental: c => SAVE?.rentals?.[copyKey(c)],
   unrent(c) { setOnShelf(c, true); const i = rentedCopies.indexOf(c); if (i >= 0) rentedCopies.splice(i, 1); },   // nobody had room for it: back on the shelf
   replace(c) { deliveries.push({ tape: copyKey(c) }); logAct(`Ordered a replacement ${c.title}: arrives tomorrow morning`); },
+  savedMessages: SAVE?.messages,
+  lose(c) { const k = rentedCopies.indexOf(c); if (k >= 0) rentedCopies.splice(k, 1); setOnShelf(c, false); logAct(`Billed ${c.title} as lost: reorder it on the register (B)`); },
+  promised: m => logAct(`Called ${memberName(m)} about their overdue tape${m.rentals.length > 1 ? "s" : ""}: they'll bring ${m.rentals.length > 1 ? "them" : "it"} in`),
   supplies: () => stockProducts().map(e => ({ name: e.name, drink: e.drink, spots: e.units.length, out: e.units.filter(u => u.visible).length, back: backstock[e.name] || 0,
     ordered: deliveries.filter(d => d.name === e.name).reduce((a, d) => a + d.qty, 0) + boxes.filter(b => b.name === e.name).reduce((a, b) => a + b.qty, 0), caseCost: caseCost(e), caseQty: CASE_QTY })),
   order: (name, cases) => stockOrder(name, cases),
@@ -8942,6 +8999,11 @@ function beginShift() {                        // first thing in the morning: 9:
   posTerm.setDate(shiftDate());
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   boxDeliver();                                // yesterday's orders, by the front door
+  for (const m of posTerm.members.filter(m => m.promise && (!posTerm.canVisit(m) || (m.loyalty || 0) <= -60))) {   // promised, but not welcome (or not coming in): the night drop
+    const late = m.rentals.filter(r => posTerm.dueIn(r) < 0).map(r => r.copy); delete m.promise; if (!late.length) continue;
+    for (const c of late) { posTerm.checkIn(c); const k = rentedCopies.indexOf(c); if (k >= 0) rentedCopies.splice(k, 1); returnBin.push(c); }
+    refreshReturnsBin(); logAct(`${memberName(m)}'s overdue tape${late.length > 1 ? "s were" : " was"} in the night drop this morning`);
+  }
   for (const h of holds) if (h.day < shift.day) { h.day = shift.day; h.at = 11 + Math.random() * 3; h.coming = false; }   // didn't make it in: they'll come today
   phone.next = null;
   if (SIM && growth.pending) {                 // word got around: people will be in today to sign up at the counter
@@ -9006,7 +9068,7 @@ function saveState() {
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats, goals: shift.goals }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
-    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), records: posTerm.recordsAll(),
+    lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), records: posTerm.recordsAll(), messages: posTerm.messagesAll(),
     stock: { back: backstock, deliveries, boxes: boxes.map(b => ({ name: b.name, qty: b.qty })), empty: snackUnits().map((u, i) => !u.visible && !stockCarry.has(u) && !inv.some(e => e.ref === u) ? i : -1).filter(i => i >= 0),
       carry: inv.map((e, i) => stockCarry.has(e.ref) ? i : -1).filter(i => i >= 0),
       air: +coolerThermo.temp.toFixed(1), warm: snackUnits().map((u, i) => isDrink(u.userData.snack) && drinkTemp(u) > 37 ? [i, +drinkTemp(u).toFixed(1)] : null).filter(Boolean) },
@@ -9349,7 +9411,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = {
+window.__t = { shiftDate,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
