@@ -108,7 +108,8 @@ const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 1
 camera.rotation.order = "YXZ";
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
-let parkLot = () => {}, passCar = () => {}, lotSpots = () => [];   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
+let parkLot = () => {}, passCar = () => {}, carNew = () => null, driveIn = () => null, driveOut = () => {};   // wired up with the exterior: the day's
+// parked cars / one driving by / a customer's own car ({ s: style, c: color }) / bringing theirs in to park, and away again   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
 let setExteriorDay;                        // (isDay) => ... — street lamps and lot lights on/off; wired up below, called from the time of day
 let setSky = () => {};                     // (color) => ... — sky + backdrop
 let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
@@ -1905,8 +1906,8 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     part(new THREE.BoxGeometry(0.02, 0.14, W * 0.42), carTrim, L / 2 + 0.075, noseY - 0.15, 0);                       // grille
     const tailY = (s.bedTop ?? rearY) - 0.14;
     for (const sz of [-1, 1]) {
-      part(new THREE.BoxGeometry(0.04, 0.11, 0.3), headLamp, L / 2 + 0.07, noseY - 0.1, sz * (W / 2 - 0.3));
-      part(new THREE.BoxGeometry(0.04, 0.12, 0.34), tailLamp, -L / 2 - 0.07, tailY, sz * (W / 2 - 0.26));
+      part(new THREE.BoxGeometry(0.04, 0.11, 0.3), headLamp, L / 2 + 0.07, noseY - 0.1, sz * (W / 2 - 0.3)).userData.lamp = "head";
+      part(new THREE.BoxGeometry(0.04, 0.12, 0.34), tailLamp, -L / 2 - 0.07, tailY, sz * (W / 2 - 0.26)).userData.lamp = "tail";
       part(new THREE.BoxGeometry(0.12, 0.08, 0.1), paint, cowlX - 0.12, hoodY + 0.1, sz * (W / 2 + 0.05));            // mirrors
       for (const wx of wheels) {
         const tire = part(new THREE.CylinderGeometry(TIRE, TIRE, 0.24, 18), carTire, wx, TIRE, sz * (W / 2 - 0.13));
@@ -1963,16 +1964,65 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     for (let n = 2 + Math.floor(rnd() * 4) + (busy ? 2 : 0); n > 0 && free.length; n--) {
       const k = free.splice(Math.floor(rnd() * free.length), 1)[0], backIn = rnd() < 0.25;
       parked.push(car(stallX(k) + (rnd() - 0.5) * 0.3, stallZ + 0.15 + (rnd() - 0.5) * 0.4, (backIn ? Math.PI : 0) + (rnd() - 0.5) * 0.12, { ...pick(STYLES), color: pick(PAINT) }));
+      parked.at(-1).userData.stall = k;
     }
   };
-  lotSpots = () => parked.map(g => g.position);   // (customers walk up from beside one)
   // and one driving by on the road: the ambience's passing-car sound calls this, so you see what you hear.
   // Right-hand traffic: eastbound in the lane nearer the store
-  const movers = [];
-  passCar = ({ dir, v, z, span }) => {
-    const g = car(-dir * span / 2, z, dir > 0 ? -Math.PI / 2 : Math.PI / 2,
-      { ...STYLES[Math.floor(Math.random() * STYLES.length)], color: PAINT[Math.floor(Math.random() * PAINT.length)], lit: wasDay === false });
-    movers.push({ g, vx: dir * v, end: dir * span / 2 });
+  const movers = [], ROAD_END = 35, laneZ = dir => dir > 0 ? -10.8 : -12.8;
+  const roadPass = (look, dir, v, then) => {
+    const g = car(-dir * ROAD_END, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c, lit: wasDay === false });
+    movers.push({ g, vx: dir * v, end: dir * ROAD_END, then });
+  };
+  carNew = () => ({ s: Math.floor(Math.random() * STYLES.length), c: PAINT[Math.floor(Math.random() * PAINT.length)] });
+  passCar = ({ dir, v }) => roadPass(carNew(), dir, v);
+  // a customer's own car: past on the road (you hear it go by), then back along the lot's drive aisle the other
+  // way and nosed into a free stall; they get out. Leaving, it backs out, heads off down the aisle, and goes
+  // by on the road the other way. The turns follow a curve, the car pointing along it (backwards, backing out)
+  const AISLE_Z = -3.6, PARK_Z = stallZ + 0.15, lotCars = [];
+  const lampsOn = (g, on) => g.traverse(m => { if (m.userData.lamp) m.material = on ? (m.userData.lamp === "head" ? litHead : litTail) : (m.userData.lamp === "head" ? headLampM : tailLampM); });
+  const bez = (a, b, c, t) => [(1 - t) ** 2 * a[0] + 2 * t * (1 - t) * b[0] + t * t * c[0], (1 - t) ** 2 * a[1] + 2 * t * (1 - t) * b[1] + t * t * c[1]];
+  driveIn = (look, onParked) => {                  // -> the car (where to get out: car.door), or null: no free stall
+    const taken = new Set([...parked.map(g => g.userData.stall), ...lotCars.map(c => c.stall)]);
+    const free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k) && !taken.has(k)); if (!free.length) return null;
+    const k = free[Math.floor(Math.random() * free.length)], sx = stallX(k), dir = Math.random() < 0.5 ? 1 : -1;   // dir: which way it comes by on the road (then back the other way down the aisle)
+    const c = { look, stall: k, sx, dir, phase: "road", t: 0, g: null, onParked, door: { x: sx - 1.2, z: PARK_Z } };   // the driver's side: west, nosed in toward the road
+    lotCars.push(c);
+    window.VaultAmbience?.drive?.(dir, 13);
+    roadPass(look, dir, 13, () => {                 // off past the end of the road: now back up the aisle
+      if (c.phase === "gone") return;
+      c.g = car(dir * 32, AISLE_Z, 0, { ...STYLES[look.s], color: look.c, lit: wasDay === false }); c.phase = "aisle";
+    });
+    return c;
+  };
+  driveOut = c => {                                 // in and gone (or never got parked: just gone)
+    if (c.phase !== "parked") { c.g?.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone"; return; }
+    c.phase = "backOut"; c.t = 0; c.e = Math.sign(c.sx) || 1; lampsOn(c.g, wasDay === false);   // out the nearer end of the lot
+  };
+  const steer = (c, x, z, back) => {                // put it at x/z, pointing the way it's going (backwards: the other way)
+    const p = c.g.position, dx = x - p.x, dz = z - p.z;
+    if (dx * dx + dz * dz > 1e-8) c.g.rotation.y = back ? Math.atan2(dz, -dx) : Math.atan2(-dz, dx);   // (the nose is the car's local +x)
+    p.x = x; p.z = z;
+  };
+  const lotTick = dt => {
+    for (const c of [...lotCars]) {
+      if (c.phase === "aisle") {                     // up the aisle toward the stall, the turn in starts 3m short of it
+        const x = c.g.position.x - c.dir * 6 * dt;
+        if ((x - (c.sx + c.dir * 3)) * c.dir <= 0) { c.phase = "turnIn"; c.t = 0; } else steer(c, x, AISLE_Z);
+      } else if (c.phase === "turnIn") {
+        c.t = Math.min(1, c.t + dt / 1.8); const [x, z] = bez([c.sx + c.dir * 3, AISLE_Z], [c.sx, AISLE_Z], [c.sx, PARK_Z], 1 - (1 - c.t) ** 2); steer(c, x, z);
+        if (c.t >= 1) { c.phase = "parked"; lampsOn(c.g, false); c.onParked?.(c); }
+      } else if (c.phase === "backOut") {
+        c.t = Math.min(1, c.t + dt / 2.2); const [x, z] = bez([c.sx, PARK_Z], [c.sx, AISLE_Z], [c.sx - c.e * 2.5, AISLE_Z], c.t * c.t * (3 - 2 * c.t)); steer(c, x, z, true);
+        if (c.t >= 1) c.phase = "aisleOut";
+      } else if (c.phase === "aisleOut") {
+        steer(c, c.g.position.x + c.e * 6 * dt, AISLE_Z);
+        if (Math.abs(c.g.position.x) > 32) {          // off the end of the lot: by on the road, the other way
+          c.g.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone";
+          window.VaultAmbience?.drive?.(-c.e, 13); roadPass(c.look, -c.e, 13);
+        }
+      }
+    }
   };
 
   eb(w, 0.12, 0.15, mat.curb, cx, 0.06, lotFar);
@@ -2124,8 +2174,9 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   exteriorTick = dt => {
     for (let i = movers.length - 1; i >= 0; i--) {   // the cars going by
       const m = movers[i]; m.g.position.x += m.vx * dt;
-      if ((m.g.position.x - m.end) * Math.sign(m.vx) > 0) { m.g.removeFromParent(); movers.splice(i, 1); }
+      if ((m.g.position.x - m.end) * Math.sign(m.vx) > 0) { m.g.removeFromParent(); movers.splice(i, 1); m.then?.(); }
     }
+    lotTick(dt);
     if (sodiumT === null) return;
     sodiumT += dt;
     let done = true;
@@ -5365,10 +5416,20 @@ const CUST_DOOR = { x: 0.7, z: 0.9 };
 // out front: customers walk up from the lot (from beside a parked car, or along the sidewalk), pull the
 // right-hand door open and come in; leaving, they push it open and go back the way they came
 const OUTSIDE_IN = [0.9, -0.9], INSIDE_DOOR = [0.75, 0.35];   // just outside the right leaf / just inside it
-function outsidePath() {                          // [where they start, ..., the door]
-  const cars = lotSpots(), car = cars.length && Math.random() < 0.6 ? cars[Math.floor(Math.random() * cars.length)] : null;
-  if (car) { const x = car.x + (Math.random() < 0.5 ? -1.2 : 1.2); return [[x, car.z], [x, -3.2], OUTSIDE_IN]; }   // the driver's side or the passenger's
-  return [[(Math.random() < 0.5 ? -1 : 1) * (14 + Math.random() * 6), -0.9], OUTSIDE_IN];   // up the sidewalk
+const outsidePath = () => [[(Math.random() < 0.5 ? -1 : 1) * (14 + Math.random() * 6), -0.9], OUTSIDE_IN];   // [where they start, ..., the door]: up the sidewalk
+const carPath = car => [[car.door.x, car.door.z], [car.door.x, -3.2], OUTSIDE_IN];   // from their car's door
+// who drives: decided the first time they come in, and kept on their record (m.car: { s: style, c: color }, or false)
+function custArriveByCar(cust) {
+  const m = cust.member; if (m.car === undefined) m.car = Math.random() < 0.55 ? carNew() : false;
+  if (!m.car) return false;
+  const car = driveIn(m.car, car => {             // parked: out they get
+    if (!cust.c) return driveOut(car);
+    const out = cust.outside = carPath(car); cust.c.group.visible = true;
+    cust.c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
+  });
+  if (!car) return false;                         // the lot's full: they parked down the street (and walk up)
+  cust.car = car; cust.c.group.visible = false; cust.c.group.position.set(0, 0, -40); cust.state = "drivingIn";
+  return true;
 }
 function frontDoorTick(dt) {                      // anyone right at the door: it swings open (the chime rings); then the closer pulls it shut
   const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3);
@@ -5517,8 +5578,10 @@ function custSpawn(member = custPickMember(true)) {
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
   Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
-  const out = cust.outside = outsidePath();       // ...from out front: up to the door and in
-  c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive";
+  if (!custArriveByCar(cust)) {                   // ...from out front: their car, or up the sidewalk; to the door and in
+    const out = cust.outside = outsidePath();
+    c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
+  }
   custs.push(cust);
   return cust;
 }
@@ -5563,6 +5626,11 @@ function custBumps(cust, p, dx, dz, dt) {
   return true;
 }
 function custGo(cust, state, spot, avoidPlayer = false) {   // head for a spot; state is what to do on arrival
+  if (cust.state === "drivingIn" || cust.c.group.position.z < 0.3) {   // still in the car, or out front: no finding a way out there. Sent off, they just turn back
+    if (state !== "leave" || cust.state === "outside") return;
+    if (cust.state === "drivingIn") return custGone(cust);
+    cust.path = (cust.outside || [OUTSIDE_IN]).slice(0, -1).reverse(); cust.state = "outside"; return;
+  }
   if (state === "leave") custLeaveLine(cust);
   const p = cust.c.group.position, r = 0.35;
   const you = avoidPlayer ? [{ x0: player.x - r, x1: player.x + r, z0: player.z - r, z1: player.z + r }] : [];
@@ -5667,6 +5735,7 @@ function custGone(cust) {
     if (cust.known) posTerm.incident(cust.member, `${cust.sneaking ? "SHOPLIFTED" : "LEFT WITHOUT PAYING FOR"} ${what}`);   // you know who it was: it goes on their account
     logAct(`${cust.known ? memberName(cust.member) : "Someone"} walked out with ${what}: stolen`, "bad", null, -75 * cust.tapes.length);
   }   // walked out with them: gone for good (order a replacement on the POS)
+  if (cust.car) driveOut(cust.car);               // back in the car and off (or, not parked yet: just gone)
   const c = cust.c;
   scene.remove(c.group); c.dispose();
   for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
@@ -5955,6 +6024,7 @@ function custStep(cust, dt) {
     switch (cust.state) {
       case "repath": if (cust.t <= 0) custGo(cust, cust.repath.state, cust.repath.spot); break;
       case "arrive": cust.state = "boot"; cust.t = 0; break;   // in the door
+      case "drivingIn": break;                    // (on their way, in the car)
       case "outside": c.setMood("off"); custGone(cust); return;   // back to their car (or off up the sidewalk)
       case "signedUp": if (cust.t <= 0) { c.holdProp(null); c.setPose("idle"); cust.stopsLeft > 0 ? custNextStop(cust) : custGo(cust, "leave", CUST_DOOR); } break;   // card in hand: now to look around
       case "caught": {                            // caught red-handed: facing you, waiting to hear what happens
@@ -9624,7 +9694,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },

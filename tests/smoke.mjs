@@ -81,6 +81,14 @@ const cal = await ev(() => {                     // day 1 is Mon Sept 30 1996; d
   __t.shift.day = 32; const s = __t.season(); out.push(s.rush > 1, s.today[0]?.label === "HALLOWEEN", s.lean.includes("Horror"));
   __t.shift.day = 40; out.push(!__t.season().lean.length); __t.shift.day = d0; __t.season(); return out.join(); });
 check("calendar: day 1 a Monday, Halloween busier with horror in season", cal === "true,true,true,true,true", cal);
+const drive = await ev(() => {                   // a member with a car: it comes by, parks, they get out and walk up; gone, it backs out and leaves
+  const m = __t.posTerm.members.find(m => m.active && !__t.custs.some(k => k.member === m)); m.car = { s: 1, c: 0x1f4a36 };
+  const k = __t.custSpawn(m), out = [k.state, !!k.car];
+  for (let i = 0; i < 400 && k.state === "drivingIn"; i++) __t.exteriorTick(0.05);
+  out.push(k.car.phase, k.state, k.c.group.visible, Math.abs(k.c.group.position.x - k.car.door.x) < 0.01);
+  const car = k.car; __t.custGone(k); for (let i = 0; i < 400 && car.phase !== "gone"; i++) __t.exteriorTick(0.05);
+  out.push(car.phase, JSON.stringify(__t.posTerm.recordsAll()[m.num]?.car)); return out.join(); });
+check("a customer's own car: drives in, parks, they get out; leaving, it drives off; the car's on their record", drive === 'drivingIn,true,parked,arrive,true,true,gone,{"s":1,"c":2050614}', drive);
 check("sound effects follow mute (M) and the volume setting", await ev(() => {
   const ac = new AudioContext(), was = VaultAmbience.muted(); VaultAmbience.setMuted(true); const off = __t.sfxOut(ac).gain.value;
   VaultAmbience.setMuted(false); const on = __t.sfxOut(ac).gain.value; VaultAmbience.setMuted(was); return off === 0 && on > 0; }));
