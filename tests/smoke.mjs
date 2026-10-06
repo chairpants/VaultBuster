@@ -49,6 +49,15 @@ await ev(() => { __t.coAct("printer"); for (let i = 0; i < 4 && __t.co(); i++) _
 check("checkout completes and scores", await ev(() => !__t.co() && __t.shift.stats.served === 1 && __t.shift.stats.score > 0));
 
 console.log("\nsandbox: stock, phone, counter gear");
+check("restock fills a lane from the back, even pointing at the pack in front", await ev(() => {
+  const lane = __t.snackLane(__t.snackUnits().find(u => !__t.snackLane(u).every(k => k === u) && __t.snackLane(u).length >= 2 && !u.userData.snack.kind));
+  lane.forEach(u => u.visible = true); const back = lane.at(-1); back.visible = false; __t.stockTake("food");
+  const slot = __t.stockSlotIn(lane[0]); __t.stockPlace(slot); return slot === back && back.visible; }));
+check("shoppers take the front pack of a lane", await ev(() => {
+  for (const k of [...__t.custs]) __t.custGone(k); __t.custSpawn(); const k = __t.custs.at(-1);
+  const spot = __t.snackSpots().find(s => !s.drinks); spot.units.forEach(u => u.visible = true);
+  Object.assign(k, { spot, state: "snack", t: 0, path: [] }); k.c.group.position.set(spot.x, 0, spot.z); __t.custTick(0.05);
+  const u = k.snackUnit, ok = !!u && __t.snackLane(u)[0] === u; __t.custGone(k); return ok; }));
 check("restock from the cupboard", await ev(() => { const u = __t.snackUnits().find(u => !u.userData.snack.r); u.visible = false; __t.stockTake("food"); __t.stockPlace(u); return u.visible && __t.stockCarry.size === 0; }));
 const hold = await ev(() => { __t.phone.next = null; __t.phone.ring = { member: __t.posTerm.members.find(m => m.active), title: __t.catalog.find(t => t.pos && !t.offShelf), t: 0, rang: 99 };
   __t.phoneAnswer(); __t.callAnswer(1); const h = __t.holds.at(-1); const c = [h.title, ...(h.title.copies || [])].find(c => !c.offShelf && c.pos); __t.pickup(c); __t.holdPlace(c); return !!h.copy; });

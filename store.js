@@ -5955,7 +5955,8 @@ function custStep(cust, dt) {
       case "snack":
         { const left = cust.spot.units.filter(u => u.visible && u !== heldSnack), cold = left.filter(u => !isDrink(u.userData.snack) || drinkTemp(u) <= DRINK_WARM);
           const from = cold.length ? cold : left, names = [...new Set(from.map(u => u.userData.snack.name))], want = names[Math.floor(Math.random() * names.length)];   // anyone would reach past a warm can for a cold one
-          const of = from.filter(u => u.userData.snack.name === want); cust.snackUnit = of[Math.floor(Math.random() * of.length)] || null; }   // pick a product, then one of it (not whichever's got the most packs on the rack)
+          const of = new Set(from.filter(u => u.userData.snack.name === want)), lanes = [...new Set([...of].map(snackLane))];
+          const lane = lanes[Math.floor(Math.random() * lanes.length)]; cust.snackUnit = lane ? laneFront(lane, u => of.has(u)) : null; }   // pick a product, then a lane of it, and take the front one
         if (cust.snackUnit) c.reachTo(cust.snackUnit.getWorldPosition(new THREE.Vector3())); else c.setPose("reach");
         c.setMood("happy"); cust.state = "snacking"; cust.t = 1.4;
         if (cust.spot.drinks && !coolerOpen) { coolerOpen = true; cust.openedCooler = true; }
@@ -7306,10 +7307,9 @@ function pickHover() {
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
     else if (aim?.object.userData.returns && aim.distance < 2.4) aimReturns = true;
+    else if ((aimStockSlot = aim && aim.distance < 2.4 && (aim.object.userData.unit || aim.object.userData.snack) && stockSlotIn(aim.object.userData.unit || aim.object) || null)) {}   // carrying one for this lane, and it has room: in it goes, at the back
     else if ((aim?.object.userData.unit || aim?.object.userData.snack) && (aim.object.userData.unit || aim.object).visible && aim.distance < 2.4)
       aimSnack = aim.object.userData.unit || aim.object;   // the exact unit you pointed at (a drink's whole group, not just the label you hit)
-    else if ((aim?.object.userData.unit || aim?.object.userData.snack) && aim.distance < 2.4 && stockFor(aim.object.userData.unit || aim.object) >= 0 && (u => !u.visible && (stockCarry.has(u) || emptySpots().includes(u)))(aim.object.userData.unit || aim.object))
-      aimStockSlot = aim.object.userData.unit || aim.object;   // an empty spot, and you're carrying one for it
     else if (aim?.object.userData.stock && aim.distance < 2.2) aimCupboard = aim.object.userData.stock;
     else if (aim?.object.userData.box && aim.distance < 2.4) aimBox = aim.object.userData.box;
     else if (aim?.object.userData.mess && aim.distance < 2.4) aimMess = aim.object.userData.mess;
@@ -7545,6 +7545,11 @@ function stockTake(kind) {                       // E on a stock cupboard
   const full = got < need.length - out.size;
   toast(got ? `Grabbed ${got} to restock${kind === "drinks" ? " (room temperature: they'll need time to chill)" : ""}${full ? " (hands full: come back for the rest)" : ""}${out.size ? ` · out of ${[...out].slice(0, 2).join(", ")}${out.size > 2 ? "…" : ""}` : ""}` : `Out of stock: order more on the register`, !!got);
   if (out.size) logAct(`Stock cupboard's out of ${[...out].join(", ")}: order more on the register`, "bad");
+}
+function stockSlotIn(u) {                        // the spot in u's lane a carried item would go (back and bottom first), or null
+  if (stockFor(u) < 0) return null;
+  const free = new Set(emptySpots());
+  return laneBack(snackLane(u), k => !k.visible && (free.has(k) || stockCarry.has(k))) || null;
 }
 function stockFor(u) {                           // a carried stock item that would go in this empty spot (in hand first)
   const name = u.userData.snack.name;
@@ -8972,6 +8977,20 @@ $("shiftNext").addEventListener("click", nextShift);
 // seek, so it's the episode — not the exact minute — that resumes).
 let resumePlay = null, saveOff = !!DEBUG_LVL;
 const snackUnits = () => [...new Set(aimables.map(o => o.userData.unit || (o.userData.snack ? o : null)).filter(Boolean))];
+// a lane: one product's column on a rack or cooler shelf, front to back (and each stack top to bottom). Shoppers
+// take from the front and the top; restocking fills from the back and the bottom, so a gap is never stuck behind a pack
+let snackLaneMap = null;
+function snackLane(u) {                           // -> the lane's units, frontmost (then topmost) first
+  if (!snackLaneMap) {
+    const by = new Map();
+    for (const k of snackUnits()) { const key = `${k.parent.uuid}|${k.userData.snack.name}|${Math.round(k.position.x * 100)}`; (by.get(key) || by.set(key, []).get(key)).push(k); }
+    snackLaneMap = new Map();
+    for (const lane of by.values()) { lane.sort((a, b) => b.position.z - a.position.z || b.position.y - a.position.y); for (const k of lane) snackLaneMap.set(k, lane); }   // (fixtures face their local +z)
+  }
+  return snackLaneMap.get(u) || [u];
+}
+const laneFront = (lane, ok) => lane.find(ok);    // what a shopper would grab
+const laneBack = (lane, ok) => lane.findLast(ok); // where restock goes
 function saveState() {
   if (saveOff || !started) return;           // nothing worth keeping until you've been in the store
   const units = snackUnits();
@@ -9338,5 +9357,6 @@ window.__t = {
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
   stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  snackLane, stockSlotIn, snackSpots,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
