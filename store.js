@@ -2550,7 +2550,7 @@ const corkTex = new THREE.CanvasTexture(corkCanvas); corkTex.colorSpace = THREE.
 // player (0.64m), so walking in means walking through a gate.
 {
   const BX = 1.95, Z0 = 0.15, Z1 = 4.35, HW = 1.05, T = 0.12;   // wall line: front wall -> level with the checkout's customer edge; height, thickness
-  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); scene.add(o); aimables.push(o); return o; };   // (aimable: it blocks the aim at what's behind it)
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); scene.add(o); aimBlockers.push(o); return o; };   // (no reaching through it to the shelves behind)
   const wood = new THREE.MeshLambertMaterial({ color: 0x7a5232 }), woodDk = new THREE.MeshLambertMaterial({ color: 0x5a3a22 });
   add(new THREE.BoxGeometry(T, HW, Z1 - Z0), mat.wall, BX, HW / 2, (Z0 + Z1) / 2);                          // the wall
   add(new THREE.BoxGeometry(T + 0.002, 0.1, Z1 - Z0 + 0.002), new THREE.MeshLambertMaterial({ color: 0x1d3f9e }), BX, 0.05, (Z0 + Z1) / 2);   // blue base, like the counters
@@ -7277,7 +7277,8 @@ function pickHover() {
       : `Carrying ${n === 1 ? "a trash bag" : `${n} trash bags`} · the chute's in the janitor's closet<div class="cat">Right-click — set ${n === 1 ? "it" : "them"} down</div>`;
     return;
   }
-  const hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
+  let hit = raycaster.intersectObjects(coverMeshes, false).find(h => h.distance < 3.4);   // a checked-out copy is collapsed out of the mesh, so the ray goes past its slot
+  if (hit && raycaster.intersectObjects(aimBlockers, false)[0]?.distance < hit.distance) hit = undefined;   // something solid in the way
   if (hit) hovered = hit.object.userData.tapes[Math.floor(hit.face.a / COVER_V)];
   const sh = strays.length && raycaster.intersectObjects(strays.map(s => s.mesh), false)[0];   // a misshelved tape sticks out in front of the row
   if (sh && sh.distance < 2.6 && (!hit || sh.distance < hit.distance + 0.05)) {
