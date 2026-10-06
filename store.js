@@ -2550,14 +2550,14 @@ const corkTex = new THREE.CanvasTexture(corkCanvas); corkTex.colorSpace = THREE.
 // player (0.64m), so walking in means walking through a gate.
 {
   const BX = 1.95, Z0 = 0.15, Z1 = 4.35, HW = 1.05, T = 0.12;   // wall line: front wall -> level with the checkout's customer edge; height, thickness
-  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); scene.add(o); return o; };
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); scene.add(o); aimables.push(o); return o; };   // (aimable: it blocks the aim at what's behind it)
   const wood = new THREE.MeshLambertMaterial({ color: 0x7a5232 }), woodDk = new THREE.MeshLambertMaterial({ color: 0x5a3a22 });
   add(new THREE.BoxGeometry(T, HW, Z1 - Z0), mat.wall, BX, HW / 2, (Z0 + Z1) / 2);                          // the wall
   add(new THREE.BoxGeometry(T + 0.002, 0.1, Z1 - Z0 + 0.002), new THREE.MeshLambertMaterial({ color: 0x1d3f9e }), BX, 0.05, (Z0 + Z1) / 2);   // blue base, like the counters
   add(new THREE.BoxGeometry(T + 0.06, 0.04, Z1 - Z0 + 0.04), wood, BX, HW + 0.02, (Z0 + Z1) / 2);            // wood cap
-  // the corkboard: on two legs screwed into the cap, facing the lane (-x)
+  // the corkboard: on two legs screwed into the cap behind it, facing the lane (-x)
   const CZ = 2.3, CW = 1.3, CH = 0.85, CY = HW + 0.12 + CH / 2;
-  for (const dz of [-CW / 2 + 0.05, CW / 2 - 0.05]) add(new THREE.BoxGeometry(0.05, CY + CH / 2 - HW, 0.05), woodDk, BX, (HW + CY + CH / 2) / 2 + 0.02, CZ + dz);
+  for (const dz of [-CW / 2 + 0.05, CW / 2 - 0.05]) add(new THREE.BoxGeometry(0.04, CY + CH / 2 - HW - 0.04, 0.05), woodDk, BX + 0.042, (HW + CY + CH / 2) / 2 + 0.02, CZ + dz);
   add(new THREE.BoxGeometry(0.04, CH + 0.06, CW + 0.06), woodDk, BX, CY, CZ);                                 // frame (and the back)
   const cork = add(new THREE.PlaneGeometry(CW, CH), new THREE.MeshLambertMaterial({ map: corkTex }), BX - 0.021, CY, CZ); cork.rotation.y = -Math.PI / 2;
   colliders.push({ x0: BX - T / 2, x1: BX + T / 2, z0: Z0, z1: Z1 });
