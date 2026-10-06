@@ -62,6 +62,20 @@ check("restock from the cupboard", await ev(() => { const u = __t.snackUnits().f
 const hold = await ev(() => { __t.phone.next = null; __t.phone.ring = { member: __t.posTerm.members.find(m => m.active), title: __t.catalog.find(t => t.pos && !t.offShelf), t: 0, rang: 99 };
   __t.phoneAnswer(); __t.callAnswer(1); const h = __t.holds.at(-1); const c = [h.title, ...(h.title.copies || [])].find(c => !c.offShelf && c.pos); __t.pickup(c); __t.holdPlace(c); return !!h.copy; });
 check("phone call -> hold put aside", hold);
+const calls = await ev(() => {                   // the other calls: the right answer scores, a waived fee clears the account
+  const m = __t.posTerm.members.find(m => m.active); m.owed = 6;
+  const ring = r => { __t.phone.ring = { ...r, t: 0, rang: 99 }; __t.phoneAnswer(); return document.getElementById("callPanel").textContent; };
+  const s0 = __t.shift.stats.score, q = ring({ kind: "hours", member: m }); __t.callAnswer(1);
+  ring({ kind: "fee", member: m }); __t.callAnswer(1);
+  return q.includes("close") && __t.shift.stats.score > s0 && __t.posTerm.owed(m) === 0; });
+check("other calls: closing time answered, late fee waived", calls);
+const inbox = await ev(() => {                   // a tape a week late: a call to make in the message center; a missed call leaves a note
+  const m = __t.posTerm.members.find(m => m.rentals.length); if (!m) return "no rentals";
+  const n0 = __t.posTerm.inbox();
+  m.rentals[0].due = new Date(+__t.shiftDate() - 7 * 864e5);
+  const n1 = __t.posTerm.inbox(); __t.phone.ring = { kind: "hours", member: m, t: 30, rang: 99 }; __t.phoneTick(0.1);
+  return n1 > n0 && __t.posTerm.inbox() > n1 && __t.posTerm.messagesAll().at(-1).text.includes("MISSED CALL"); });
+check("message center: overdue call to make, missed call noted", inbox === true, String(inbox));
 check("move the desensitizer along the counter", await ev(() => { __t.player.x = -4.9; __t.player.z = 3; const it = __t.counterItemsList().find(i => i.id === "desens");
   __t.moveStart(it); __t.cmove.spot = { x: -3.4, z: 3.85 }; __t.cmove.ok = true; __t.movePlace(); return Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && !__t.cmove.item; }));
 await page.waitForTimeout(2500);
