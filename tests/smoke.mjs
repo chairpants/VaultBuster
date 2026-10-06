@@ -76,6 +76,11 @@ const inbox = await ev(() => {                   // a tape a week late: a call t
   const n1 = __t.posTerm.inbox(); __t.phone.ring = { kind: "hours", member: m, t: 30, rang: 99 }; __t.phoneTick(0.1);
   return n1 > n0 && __t.posTerm.inbox() > n1 && __t.posTerm.messagesAll().at(-1).text.includes("MISSED CALL"); });
 check("message center: overdue call to make, missed call noted", inbox === true, String(inbox));
+const cal = await ev(() => {                     // day 1 is Mon Sept 30 1996; day 32 is Halloween: busier, and horror's in season
+  const d0 = __t.shift.day, out = [__t.shiftDate().getDay() === 1 || d0 !== 1];
+  __t.shift.day = 32; const s = __t.season(); out.push(s.rush > 1, s.today[0]?.label === "HALLOWEEN", s.lean.includes("Horror"));
+  __t.shift.day = 40; out.push(!__t.season().lean.length); __t.shift.day = d0; __t.season(); return out.join(); });
+check("calendar: day 1 a Monday, Halloween busier with horror in season", cal === "true,true,true,true,true", cal);
 check("move the desensitizer along the counter", await ev(() => { __t.player.x = -4.9; __t.player.z = 3; const it = __t.counterItemsList().find(i => i.id === "desens");
   __t.moveStart(it); __t.cmove.spot = { x: -3.4, z: 3.85 }; __t.cmove.ok = true; __t.movePlace(); return Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && !__t.cmove.item; }));
 await page.waitForTimeout(2500);
