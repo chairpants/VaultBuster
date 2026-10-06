@@ -108,7 +108,7 @@ const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 1
 camera.rotation.order = "YXZ";
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
-let parkLot = () => {}, passCar = () => {};   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
+let parkLot = () => {}, passCar = () => {}, lotSpots = () => [];   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
 let setExteriorDay;                        // (isDay) => ... — street lamps and lot lights on/off; wired up below, called from the time of day
 let setSky = () => {};                     // (color) => ... — sky + backdrop
 let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
@@ -682,6 +682,7 @@ function cutoutFit(x, z, ry, b) {            // floor box around the board's sol
   for (const [lx, lz] of [[-0.4, 0.05], [0.4, 0.05], [-0.4, -0.45], [0.4, -0.45]]) { xs.push(x + lx * c + lz * sn); zs.push(z - lx * sn + lz * c); }
   return Object.assign(b, { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) });
 }
+const frontDoor = { leaves: [], k: 0, open: false, hold: 0 };   // the storefront's double doors: k 0 shut .. 1 open (the right leaf: customers' side)
 const doors = [];                          // hinged interior doors (see makeDoor) — E swings them
 
 // ---------------- store shell ----------------
@@ -855,7 +856,13 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
         bracket.position.set(barX, barY + dy, DZ + DD / 2 + 0.025); scene.add(bracket);
       }
     };
-    door(-0.9, 1); door(0.9, -1);
+    const leaf = (cx, handleIn, hingeX) => {           // a leaf on its outboard hinge (they swing out, toward the lot)
+      const n0 = scene.children.length; door(cx, handleIn);
+      const piv = new THREE.Group(); piv.position.set(hingeX, 0, DZ); scene.add(piv);
+      for (const m of scene.children.slice(n0, -1)) piv.attach(m);
+      return piv;
+    };
+    frontDoor.leaves = [leaf(-0.9, 1, -1.8), leaf(0.9, -1, 1.8)];
     // deadbolt on the inside of the astragal: a brass plate and a thumb turn
     // (upright = unlocked, flat = locked), and a flip sign hung in the right leaf's glass
     const plate = box(0.07, 0.17, 0.014, mat.aluminum, 0, 1.12, DZ + 0.157);
@@ -865,7 +872,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       for (const face of [1, -1]) {                  // both faces: in toward the store, out toward the lot
         const sg = textPlane(text, 0.5, 0.2, fg, bg, "Arial Black", 70);
         sg.position.set(0.9, 1.95, DZ + face * 0.025); if (face < 0) sg.rotation.y = Math.PI;
-        sg.visible = open; sg.userData.open = open; scene.add(sg); frontLock.signs.push(sg);
+        sg.visible = open; sg.userData.open = open; scene.add(sg); frontLock.signs.push(sg); frontDoor.leaves[1].attach(sg);   // (hung in the right leaf: it swings with it)
       }
     // the doorway itself, for clocking out (an unseen pane: rays still find it)
     const exit = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 2.5), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
@@ -1944,6 +1951,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
       parked.push(car(stallX(k) + (rnd() - 0.5) * 0.3, stallZ + 0.15 + (rnd() - 0.5) * 0.4, (backIn ? Math.PI : 0) + (rnd() - 0.5) * 0.12, { ...pick(STYLES), color: pick(PAINT) }));
     }
   };
+  lotSpots = () => parked.map(g => g.position);   // (customers walk up from beside one)
   // and one driving by on the road: the ambience's passing-car sound calls this, so you see what you hear.
   // Right-hand traffic: eastbound in the lane nearer the store
   const movers = [];
@@ -5340,6 +5348,22 @@ function navPath(grid, ax, az, bx, bz) {         // A* (8-way, binary heap), the
   return out;
 }
 const CUST_DOOR = { x: 0.7, z: 0.9 };
+// out front: customers walk up from the lot (from beside a parked car, or along the sidewalk), pull the
+// right-hand door open and come in; leaving, they push it open and go back the way they came
+const OUTSIDE_IN = [0.9, -0.9], INSIDE_DOOR = [0.75, 0.35];   // just outside the right leaf / just inside it
+function outsidePath() {                          // [where they start, ..., the door]
+  const cars = lotSpots(), car = cars.length && Math.random() < 0.6 ? cars[Math.floor(Math.random() * cars.length)] : null;
+  if (car) { const x = car.x + (Math.random() < 0.5 ? -1.2 : 1.2); return [[x, car.z], [x, -3.2], OUTSIDE_IN]; }   // the driver's side or the passenger's
+  return [[(Math.random() < 0.5 ? -1 : 1) * (14 + Math.random() * 6), -0.9], OUTSIDE_IN];   // up the sidewalk
+}
+function frontDoorTick(dt) {                      // anyone right at the door: it swings open (the chime rings); then the closer pulls it shut
+  const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3);
+  if (near && !d.open) { d.open = true; window.VaultAmbience?.door("push", "open", 0.9, 1.1, 0.1); window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); }
+  if (near) d.hold = 0.7; else if (d.open && (d.hold -= dt) <= 0) d.open = false;
+  const was = d.k; d.k = Math.max(0, Math.min(1, d.k + (d.open ? 2.2 : -1.3) * dt));
+  if (was > 0 && d.k === 0) window.VaultAmbience?.door("push", "settle", 0.9, 1.1, 0.1);
+  if (d.leaves[1]) d.leaves[1].rotation.y = -1.35 * (1 - (1 - d.k) ** 2);
+}
 const CUST_COUNTER = { x: -5.45, z: 4.95, ry: Math.PI };           // across the register from the clerk
 // where customers browse: every shelf face in the store, found from the tapes
 // themselves (each knows its slot and which way its shelf faces). Tapes are
@@ -5461,7 +5485,6 @@ function custSpawn(member = custPickMember(true)) {
   const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
   const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
   custArrivals.lastMember = member; member.lastVisit = shift.day + shift.h / 24; shift.stats.visitors++;
-  window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false));   // the entry chime
   const loyal = member.loyalty || 0;
   who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
   member.likes = who.persona.taste.name;          // (for the POS: now somebody's noticed)
@@ -5480,6 +5503,8 @@ function custSpawn(member = custPickMember(true)) {
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
   Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
+  const out = cust.outside = outsidePath();       // ...from out front: up to the door and in
+  c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive";
   custs.push(cust);
   return cust;
 }
@@ -5915,6 +5940,8 @@ function custStep(cust, dt) {
     cust.t -= dt; cust.waitFor = null;
     switch (cust.state) {
       case "repath": if (cust.t <= 0) custGo(cust, cust.repath.state, cust.repath.spot); break;
+      case "arrive": cust.state = "boot"; cust.t = 0; break;   // in the door
+      case "outside": c.setMood("off"); custGone(cust); return;   // back to their car (or off up the sidewalk)
       case "signedUp": if (cust.t <= 0) { c.holdProp(null); c.setPose("idle"); cust.stopsLeft > 0 ? custNextStop(cust) : custGo(cust, "leave", CUST_DOOR); } break;   // card in hand: now to look around
       case "caught": {                            // caught red-handed: facing you, waiting to hear what happens
         cust.ry = Math.atan2(player.x - p.x, player.z - p.z);
@@ -6076,7 +6103,7 @@ function custStep(cust, dt) {
         custGo(cust, "leave", CUST_DOOR);
       } break;
       case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
-      case "leave": c.setMood("off"); cust.state = "out"; cust.t = 0.6; break;
+      case "leave": cust.path = [INSIDE_DOOR, ...(cust.outside || [OUTSIDE_IN]).slice().reverse()]; cust.state = "outside"; break;   // out the door, back the way they came
       case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); custGone(cust); } return;
     }
   }
@@ -9550,7 +9577,7 @@ renderer.setAnimationLoop(() => {
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
-  custTick(dt);
+  custTick(dt); frontDoorTick(dt);
   empTick(dt);
   trashTick(dt);
   deadLightTick(dt);
