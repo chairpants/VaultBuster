@@ -86,6 +86,13 @@ check("move the desensitizer along the counter", await ev(() => { __t.player.x =
 await page.waitForTimeout(2500);
 await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
 check("save/reload keeps the counter layout and the hold", await ev(() => Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && __t.holds.length === 1));
+await ev(() => {                                 // a store saved in 2026 (before the game was set in 1996): its dates move back
+  __t.stopSaving(); const k = Object.keys(localStorage).find(k => k.startsWith("vaultbuster-save") && JSON.parse(localStorage.getItem(k))?.shift);
+  const s = JSON.parse(localStorage.getItem(k)), dt = +new Date(2026, 9, 5, 12) - s.shift.date0; s.shift.date0 += dt;
+  for (const r of Object.values(s.rentals || {})) if (r) r[1] += dt;
+  localStorage.setItem(k, JSON.stringify(s)); });
+await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
+check("an old 2026 save moves to 1996, rentals with it", await ev(() => __t.shiftDate().getFullYear() === 1996 && __t.posTerm.members.flatMap(m => m.rentals).every(r => r.due.getFullYear() < 1998)));
 
 check("trash: a full bin spills, bag it, down the chute", await ev(() => { const b = __t.trashBins.lobby, m0 = __t.messes.length; __t.trashAdd(b, b.cap + 1);
   const spilled = __t.messes.length > m0; __t.binBag(b); const bagged = __t.bagCarry.length === 1 && b.n === 0; const s0 = __t.shift.stats.score; __t.chuteDrop();

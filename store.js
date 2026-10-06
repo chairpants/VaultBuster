@@ -327,6 +327,16 @@ const SAVE_KEY = slotKey(SLOT);
 const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, aa: !LOWMEM, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s?.v === SAVE_V ? s : null; } catch { return null; } })();
+{                                            // a store saved before the game was set in 1996: move its calendar (and every date it kept) back to Sept 30 1996
+  const DAY1 = +new Date(1996, 8, 30, 12), d0 = SAVE?.shift?.date0;
+  if (d0 > +new Date(2000, 0, 1)) {
+    const dt = DAY1 - d0, mv = v => typeof v === "number" && v > 0 ? v + dt : v;
+    SAVE.shift.date0 = DAY1;
+    for (const r of Object.values(SAVE.rentals || {})) if (r) r[1] = mv(r[1]);
+    for (const r of Object.values(SAVE.records || {})) { for (const k of ["until", "lastCall", "promise"]) r[k] = mv(r[k]); for (const i of r.incidents || []) i.at = mv(i.at); }
+    for (const m of SAVE.messages || []) m.at = mv(m.at);
+  }
+}
 // the game mode. Simulation: a bare-bones store you build up (no staff, no
 // theater, no popcorn machine, part of the library) out of what it earns.
 // Sandbox: everything open and a big budget. Saves from before modes are sandbox
