@@ -856,7 +856,7 @@ window.createPOS = function createPOS(api) {
     setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
     loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
-    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null || c.calls || c.promise).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit, calls: c.calls, lastCall: c.lastCall, promise: c.promise }])),
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null || c.calls || c.promise || c.car !== undefined).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit, calls: c.calls, lastCall: c.lastCall, promise: c.promise, car: c.car }])),
     message(text) { notes.push({ at: +TODAY, text: up(text), read: false }); if (notes.length > 40) notes.shift(); draw(); },   // a note in the message center
     inbox: () => inboxCount(),                 // what's waiting there: calls not made today, unread notes
     messagesAll: () => notes,
