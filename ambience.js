@@ -37,8 +37,9 @@
 // the chime, steps and doors get a little of a generated room reverb.
 //
 // window.VaultAmbience = { start(), tick(state), chime(x, y, z, vol), step(x, z, tile, weight), door(kind, action, x, y, z),
-//   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted() }
+//   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted(), onCarPass(fn) }
 window.VaultAmbience = (() => {
+  let carSeen = null;
   let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1;   // vol: the settings' store-sounds volume
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
   const noise = { white: null, pink: null, brown: null };
@@ -113,8 +114,9 @@ window.VaultAmbience = (() => {
     return g;
   }
   // a car going by on the road out front, left to right or right to left
-  function car(night) {
-    const t0 = ac.currentTime + 0.05, v = 10 + Math.random() * 7, dir = Math.random() < 0.5 ? 1 : -1, span = 70, dur = span / v, zRoad = -16 - Math.random() * 3;
+  function car(night) {                           // (and tells store.js, so it can drive one past: onCarPass)
+    const t0 = ac.currentTime + 0.05, v = 10 + Math.random() * 7, dir = Math.random() < 0.5 ? 1 : -1, span = 70, dur = span / v, zRoad = dir > 0 ? -10.8 : -12.8;   // right-hand lanes
+    carSeen?.({ dir, v, z: zRoad, span });
     const p = panner(-dir * span / 2, 0.6, zRoad, 5, 1);
     p.positionX.setValueAtTime(-dir * span / 2, t0); p.positionX.linearRampToValueAtTime(dir * span / 2, t0 + dur);
     const N = 64, dopp = new Float32Array(N), c = 343;       // pitch factor over the pass, heard from about the middle of the store
@@ -312,5 +314,5 @@ window.VaultAmbience = (() => {
   }
   function setMuted(b) { muted = b; try { localStorage.setItem("vaultbuster-ambience", b ? "off" : "on"); } catch {} if (master) master.gain.setTargetAtTime(b ? 0 : fade * 0.9 * vol, ac.currentTime, 0.2); }
   function setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(muted ? 0 : fade * 0.9 * vol, ac.currentTime, 0.1); }
-  return { start, tick, chime, step, door, swing, compressor, flush, water, bag, chute, setMuted, setVolume, muted: () => muted };
+  return { start, tick, chime, step, door, swing, compressor, flush, water, bag, chute, setMuted, setVolume, muted: () => muted, onCarPass: f => { carSeen = f; } };
 })();

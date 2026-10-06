@@ -108,6 +108,7 @@ const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 1
 camera.rotation.order = "YXZ";
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
+let parkLot = () => {}, passCar = () => {};   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
 let setExteriorDay;                        // (isDay) => ... — street lamps and lot lights on/off; wired up below, called from the time of day
 let setSky = () => {};                     // (color) => ... — sky + backdrop
 let exteriorTick = () => {};               // (dt) => ... — per-frame exterior animation (the lot lights warming up); wired up below
@@ -1810,9 +1811,8 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     line.rotation.x = -Math.PI / 2; line.position.set(x, 0.002, (driveTo + lotFar) / 2); ea(line);
   }
 
-  // three parked cars, deliberately different body styles — nosed in toward
-  // the road, so the store looks at their tails. Kept off to the sides of the
-  // building rather than right in front of the doors.
+  // the parked cars (see parkLot, below): mostly nosed in toward the road, so
+  // the store looks at their tails
   const stallX = k => x0 + 2.6 * (k + 1);               // center of stall k, between the painted lines above
   const stallZ = (driveTo + lotFar) / 2;
   // Each car is a side-profile silhouette (hood, windshield, roof, rear
@@ -1824,12 +1824,14 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const carTire = new THREE.MeshLambertMaterial({ color: 0x141414 });
   const carTrim = new THREE.MeshLambertMaterial({ color: 0x232325 });
   const chrome = new THREE.MeshPhongMaterial({ color: 0xc8ccd2, specular: 0xffffff, shininess: 100 });
-  const tailLamp = new THREE.MeshPhongMaterial({ color: 0x9a1616, specular: 0x552222, shininess: 60 });
-  const headLamp = new THREE.MeshPhongMaterial({ color: 0xe8e4cc, specular: 0xffffff, shininess: 80 });
+  const tailLampM = new THREE.MeshPhongMaterial({ color: 0x9a1616, specular: 0x552222, shininess: 60 });
+  const headLampM = new THREE.MeshPhongMaterial({ color: 0xe8e4cc, specular: 0xffffff, shininess: 80 });
+  const litHead = new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), litTail = new THREE.MeshBasicMaterial({ color: 0xff2a1a });
   const BEV = 0.04, BEVT = 0.06, YB = 0.25, ARCH = 0.5, TIRE = 0.33;
   const car = (x, z, yaw, s) => {
     const { L, W, color, noseY, hoodY, cowlX, wsTopX, roofY, rTopX, rBotX, rBotY, rearY, wheels } = s;
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g);
+    const headLamp = s.lit ? litHead : headLampM, tailLamp = s.lit ? litTail : tailLampM;   // (lit: driving at night)
     const part = (geo, m, px, py, pz) => {
       const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
     };
@@ -1906,17 +1908,50 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
         hub.rotation.x = Math.PI / 2;
       }
     }
+    return g;
   };
-  car(stallX(3), stallZ + 0.15, 0.03, {                         // maroon sedan: long hood, fastback-ish rear glass, short trunk
-    L: 4.1, W: 1.75, color: 0x8e1b1b, noseY: 0.72, hoodY: 0.92, cowlX: 0.75, wsTopX: 0.05, roofY: 1.38,
-    rTopX: -0.85, rBotX: -1.35, rBotY: 0.98, rearY: 0.78, wheels: [-1.25, 1.25], pillars: [-0.35] });
-  car(stallX(5), stallZ + 0.15, -0.05, {                        // teal station wagon: roof runs to the tail, woodgrain sides
-    L: 4.1, W: 1.72, color: 0x2e7d7a, noseY: 0.72, hoodY: 0.92, cowlX: 0.9, wsTopX: 0.25, roofY: 1.4,
-    rTopX: -1.8, rBotX: -1.97, rBotY: 0.95, rearY: 0.9, wheels: [-1.28, 1.28], pillars: [-0.2, -1.05],
-    wood: new THREE.MeshLambertMaterial({ color: 0x7a5230 }) });
-  car(stallX(16), stallZ + 0.15, 0.02, {                        // cream pickup: tall cab, open bed, chrome bumpers
-    L: 4.1, W: 1.82, color: 0xd8c79a, noseY: 0.82, hoodY: 1.0, cowlX: 0.95, wsTopX: 0.35, roofY: 1.55,
-    rTopX: -0.5, rBotX: -0.53, rBotY: 1.02, bedTop: 1.02, rearInset: 0.1, wheels: [-1.3, 1.3], chromeBumpers: true });
+  const STYLES = [
+    {                                                   // sedan: long hood, fastback-ish rear glass, short trunk
+      L: 4.1, W: 1.75, noseY: 0.72, hoodY: 0.92, cowlX: 0.75, wsTopX: 0.05, roofY: 1.38,
+      rTopX: -0.85, rBotX: -1.35, rBotY: 0.98, rearY: 0.78, wheels: [-1.25, 1.25], pillars: [-0.35] },
+    {                                                   // station wagon: roof runs to the tail, woodgrain sides
+      L: 4.1, W: 1.72, noseY: 0.72, hoodY: 0.92, cowlX: 0.9, wsTopX: 0.25, roofY: 1.4,
+      rTopX: -1.8, rBotX: -1.97, rBotY: 0.95, rearY: 0.9, wheels: [-1.28, 1.28], pillars: [-0.2, -1.05],
+      wood: new THREE.MeshLambertMaterial({ color: 0x7a5230 }) },
+    {                                                   // pickup: tall cab, open bed, chrome bumpers
+      L: 4.1, W: 1.82, noseY: 0.82, hoodY: 1.0, cowlX: 0.95, wsTopX: 0.35, roofY: 1.55,
+      rTopX: -0.5, rBotX: -0.53, rBotY: 1.02, bedTop: 1.02, rearInset: 0.1, wheels: [-1.3, 1.3], chromeBumpers: true },
+    {                                                   // hatchback: short, the roof sloping straight down to the tail
+      L: 3.8, W: 1.68, noseY: 0.7, hoodY: 0.9, cowlX: 0.7, wsTopX: 0.05, roofY: 1.36,
+      rTopX: -1.2, rBotX: -1.82, rBotY: 0.95, rearY: 0.85, wheels: [-1.15, 1.15], pillars: [-0.5] },
+    {                                                   // minivan: tall, the windshield well forward
+      L: 4.5, W: 1.85, noseY: 0.8, hoodY: 1.05, cowlX: 1.35, wsTopX: 0.75, roofY: 1.8,
+      rTopX: -2.05, rBotX: -2.2, rBotY: 1.1, rearY: 1.0, wheels: [-1.45, 1.4], pillars: [0.05, -1.0] },
+    {                                                   // coupe: low and long in the hood
+      L: 4.2, W: 1.75, noseY: 0.62, hoodY: 0.82, cowlX: 0.6, wsTopX: -0.2, roofY: 1.24,
+      rTopX: -0.8, rBotX: -1.5, rBotY: 0.9, rearY: 0.78, wheels: [-1.3, 1.3], chromeBumpers: true },
+  ];
+  const PAINT = [0x8e1b1b, 0x2e7d7a, 0xd8c79a, 0x1f3a6b, 0xe9e6dc, 0x2b2b2e, 0x5f6e36, 0xb8bcc2, 0x6e2650, 0x9c6a2a, 0x3d5f8f, 0x0f4a3a, 0xc9b24a];
+  // the lot: different every day (the same all day, reload or not): a few cars, more on a busy day, in any
+  // stall but the ones the lamp poles stand in, mostly nosed in, now and then backed in, never quite straight
+  let parked = [];
+  parkLot = (day, busy) => {
+    for (const g of parked) g.removeFromParent(); parked = [];
+    let seed = 7919 * day + 13; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k)), pick = a => a[Math.floor(rnd() * a.length)];
+    for (let n = 2 + Math.floor(rnd() * 4) + (busy ? 2 : 0); n > 0 && free.length; n--) {
+      const k = free.splice(Math.floor(rnd() * free.length), 1)[0], backIn = rnd() < 0.25;
+      parked.push(car(stallX(k) + (rnd() - 0.5) * 0.3, stallZ + 0.15 + (rnd() - 0.5) * 0.4, (backIn ? Math.PI : 0) + (rnd() - 0.5) * 0.12, { ...pick(STYLES), color: pick(PAINT) }));
+    }
+  };
+  // and one driving by on the road: the ambience's passing-car sound calls this, so you see what you hear.
+  // Right-hand traffic: eastbound in the lane nearer the store
+  const movers = [];
+  passCar = ({ dir, v, z, span }) => {
+    const g = car(-dir * span / 2, z, dir > 0 ? -Math.PI / 2 : Math.PI / 2,
+      { ...STYLES[Math.floor(Math.random() * STYLES.length)], color: PAINT[Math.floor(Math.random() * PAINT.length)], lit: wasDay === false });
+    movers.push({ g, vx: dir * v, end: dir * span / 2 });
+  };
 
   eb(w, 0.12, 0.15, mat.curb, cx, 0.06, lotFar);
   ground(lotFar, roadFar, mat.road);                     // the road behind the lot
@@ -2065,6 +2100,10 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   let sodiumT = null;                          // seconds since night fell while the lot lights warm up; null = settled
   const SODIUM_WARM = 5, cold = new THREE.Color(0xff4d1a), warm = new THREE.Color(0xffae4a);
   exteriorTick = dt => {
+    for (let i = movers.length - 1; i >= 0; i--) {   // the cars going by
+      const m = movers[i]; m.g.position.x += m.vx * dt;
+      if ((m.g.position.x - m.end) * Math.sign(m.vx) > 0) { m.g.removeFromParent(); movers.splice(i, 1); }
+    }
     if (sodiumT === null) return;
     sodiumT += dt;
     let done = true;
@@ -9067,7 +9106,8 @@ const posTerm = window.createPOS({
     canvas.requestPointerLock()?.catch?.(() => backToStore());
   },
 });
-posTerm.idle(); corkDraw();
+posTerm.idle(); corkDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
+window.VaultAmbience?.onCarPass?.(c => passCar(c));
 // right-click backs out of the register just like Escape (a screen back, or log off from the main menu);
 // being a click, closing it takes the mouse straight back instead of waiting for the next input
 $("posTerm").addEventListener("contextmenu", e => e.preventDefault());
@@ -9126,7 +9166,7 @@ function clockOut() {
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
-  posTerm.setDate(shiftDate()); calendarDraw(); corkDraw();
+  posTerm.setDate(shiftDate()); calendarDraw(); corkDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   { const sn = season(); for (const h of sn.today) logAct(`It's circled on the calendar: ${h.label}. ${h.rush > 1 ? "Expect a crowd" : "Expect a quiet one"}`, h.rush > 1 ? "good" : "");
     if (sn.lean.length) logAct(`Seasonal: ${sn.lean.includes("Holiday") ? "the holiday shelf" : sn.lean.includes("Horror") ? "horror" : sn.lean.join(" and ").toLowerCase()} is renting more than usual`); }
@@ -9543,7 +9583,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
