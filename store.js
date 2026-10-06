@@ -4513,7 +4513,7 @@ function logToggle() {
 function logScroll(dir) { const el = $("actLogList"); el.scrollTop += dir * el.clientHeight * 0.8; }
 const shift = {
   day: SAVE?.shift?.day ?? 1, h: SAVE?.shift?.h ?? SHIFT.start, warp: 0,
-  date0: SAVE?.shift?.date0 ?? new Date().setHours(12, 0, 0, 0),   // day 1's date (noon, like the POS's)
+  date0: SAVE?.shift?.date0 ?? +new Date(1996, 8, 30, 12),   // day 1: Monday, Sept 30 1996 (noon, like the POS's), a slow start
   stats: { ...shiftStats(), ...SAVE?.shift?.stats }, greet: null, report: false,
   goals: SAVE?.shift?.goals ?? null,              // today's two goals: [{ id, n }] (see GOALS)
 };
