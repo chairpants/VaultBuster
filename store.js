@@ -30,6 +30,7 @@ const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the 
 const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };
+const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 33.1], [11.1, 12.7, 27.9, 29.9], [-7.07, 1.33, 33.1, 46.6]] };   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
 // the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
 // (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
 // reaches), hand = the top grip [right, up, forward]; see toolTick).
@@ -939,8 +940,10 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   {
     const x0 = XR + WALL_T / 2, x1 = CLOSET.x1 - WALL_T / 2, z0 = BZ0 + WALL_T / 2, z1 = HZ - WALL_T / 2;
     floorPatch(vctTex, 2.4, XR, CLOSET.x1, BZ0, HZ);
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(CLOSET.x1 - XR, HZ - BZ0), new THREE.MeshLambertMaterial({ color: 0xe6e3dc }));   // plain painted drywall
-    ceil.rotation.x = Math.PI / 2; ceil.position.set((XR + CLOSET.x1) / 2, BH, (BZ0 + HZ) / 2); scene.add(ceil);
+    const csh = new THREE.Shape([[XR, BZ0], [CLOSET.x1, BZ0], [CLOSET.x1, HZ], [XR, HZ]].map(([x, z]) => new THREE.Vector2(x, z))), hatchHole = new THREE.Path();   // plain painted drywall, the roof hatch's opening cut in it (see the roof)
+    hatchHole.moveTo(11.88, 28.12); hatchHole.lineTo(12.48, 28.12); hatchHole.lineTo(12.48, 28.87); hatchHole.lineTo(11.88, 28.87); hatchHole.lineTo(11.88, 28.12); csh.holes.push(hatchHole);
+    const ceil = new THREE.Mesh(new THREE.ShapeGeometry(csh), new THREE.MeshLambertMaterial({ color: 0xe6e3dc }));
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = BH; scene.add(ceil);   // (shape y -> world z; facing down)
     const put = (geo, m, x, y, z, par = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); return o; };
     const bx = (w, h, d, m, x, y, z, par) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z, par);
     const cyl = (r, h, m, x, y, z, par) => put(new THREE.CylinderGeometry(r, r, h, 12), m, x, y, z, par);
@@ -5251,13 +5254,15 @@ function meTick(dt) {
   } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
     g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = seatAt.ry || 0;
     me.setPose("sit", seatAt.hipY ? { hipY: seatAt.hipY } : undefined);
+  } else if (roof.climb) {                   // on the closet ladder, facing the rungs
+    g.position.set(roof.cam.x, roof.cam.y - 1.65, roof.cam.z + 0.21); g.rotation.y = Math.PI; me.setPose("idle");
   } else if (ladder.on) {                    // up on the top step, facing the ladder
     const k = ladder.lift, e = k * k * (3 - 2 * k);
     g.position.set(player.x, floorHeightAt(player.x, player.z) + LADDER.STEP * e + 0.015, player.z); g.rotation.y = ladder.ry + Math.PI;
     me.setPose("idle");
   } else {
     speed = Math.hypot(player.x - meLast.x, player.z - meLast.z) / Math.max(dt, 1e-4);
-    g.position.set(player.x + Math.sin(player.yaw) * 0.21, floorHeightAt(player.x, player.z), player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
+    g.position.set(player.x + Math.sin(player.yaw) * 0.21, playerFloor(), player.z + Math.cos(player.yaw) * 0.21);   // 21 cm behind the eye: looking down, the chest only creeps in near the bottom
     g.rotation.y = player.yaw + Math.PI;      // the rig faces +z; yaw 0 looks down -z
     me.setPose(keys.has("KeyC") ? "crouch" : "idle");
   }
@@ -5464,6 +5469,7 @@ addEventListener("mousemove", e => {
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * k * (SETTINGS.invertY ? -1 : 1)));
 });
 function blocked(x, z) {
+  if (player.onRoof) return !onDeck(x, z) || roof.cols.some(c => x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r);   // up top: the deck, its parapets and its kit
   for (const c of colliders) if (!c.staff)       // (you walk through the staff: they can't pin you in a corner)
     if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) return true;
   return false;
@@ -5472,7 +5478,7 @@ function move(dt) {
   const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const rt = new THREE.Vector3(-f.z, 0, f.x);
   let ix = 0, iz = 0;
-  if (document.pointerLockElement !== canvas) return;
+  if (document.pointerLockElement !== canvas || roof.climb) return;
   if (onStool) {                            // E spins you; a move key gets you up
     if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) stoolStand();
     return;
@@ -6238,7 +6244,7 @@ function custPickCopy(cust) {                     // a copy still on this shelf,
   let r = cust.who.rnd() * w.reduce((a, b) => a + b, 0), i = 0; while (i < cs.length - 1 && (r -= w[i]) > 0) i++;
   return cs[i];
 }
-const registerStaffed = () => staff.some(e => e.state === "post") || Math.hypot(player.x - EMP_POST.x, player.z - EMP_POST.z) < 1.5;   // Dana at her post, or you behind the register
+const registerStaffed = () => staff.some(e => e.state === "post") || !player.onRoof && Math.hypot(player.x - EMP_POST.x, player.z - EMP_POST.z) < 1.5;   // Dana at her post, or you behind the register
 function custGone(cust) {
   custLeaveLine(cust);
   if (co?.cust === cust) { co = null; coHud(); drawerOpen = 0; }
@@ -8014,6 +8020,22 @@ function pickHover() {
     return;
   }
   raycaster.setFromCamera(aimNDC, camera);
+  aimRoofLadder = false;
+  if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down) is all there is
+    highlight.visible = false; const tip = $("hoverTip");
+    const a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children), false)[0];
+    aimRoofLadder = !!a && a.distance < 2.4;
+    tip.innerHTML = aimRoofLadder ? "E — climb back down" : ""; tip.style.display = aimRoofLadder ? "block" : "none";
+    return;
+  }
+  {                                          // the fixed ladder in the closet, up to the roof
+    const a = raycaster.intersectObjects(roof.ladderParts, false)[0], wall = a && raycaster.intersectObjects(aimBlockers, false)[0];
+    if (a && a.distance < 2.2 && !(wall && wall.distance < a.distance)) {
+      aimRoofLadder = true; highlight.visible = false;
+      const tip = $("hoverTip"); tip.innerHTML = roofHandsFull() ? "The roof ladder<div class=\"cat\">you'll need both hands free</div>" : "E — climb up to the roof"; tip.style.display = "block";
+      return;
+    }
+  }
   if (ladder.on) {                           // up the ladder: the lights are all there is
     highlight.visible = false;
     const a = raycaster.intersectObjects(aimables, false).find(h => h.object.userData.deadLight);
@@ -9054,6 +9076,284 @@ function decorTick(dt) {                          // the lights take turns
 }
 decorDraw();
 
+// ---------------- the roof ----------------
+// Up the fixed ladder in the janitor's closet (beside the chute) and out through a hatch: a flat gravel roof behind a
+// 3 ft parapet all the way round, with the building's kit on it. Two rooftop AC units (their condenser fans going in
+// the warm months), a whirlybird vent turning in the wind, mushroom exhaust fans over the restroom and the break
+// room, a satellite dish, an old TV antenna, vent stacks, drains, walkway pads out to the units. Up here is its own
+// level: its own colliders (the parapets and the kit), the inside of the store isn't drawn, the camera's on the deck.
+// And now that you can see it from up there, the world around the building: the stucco outside of its walls, a
+// paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
+const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], turbine: null, lid: null, lidA: 0, bulb: null };
+scene.add(roof.g); roof.g.visible = false;
+const ROOF_LADDER = { x: 12.2, z: 28.28 };                 // the rungs' line: against the closet's south wall, beside the chute
+const ROOF_HATCH = { x0: 11.88, x1: 12.48, z0: 28.12, z1: 28.87 };
+const ROOF_UP = { x: 11.4, z: 29.3 }, ROOF_DOWN = { x: 11.68, z: 28.8 };   // where you step off at the top / at the bottom
+const onDeck = (x, z) => ROOF.rects.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
+const playerFloor = () => player.onRoof ? ROOF.y : floorHeightAt(player.x, player.z);
+const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === "carried" || boxCarry.length || bagCarry.length || toolHeld || cmove.item;
+{
+  const Y = ROOF.y, G = roof.g, T = 0.2, PH = ROOF.wall;
+  const lam = c => new THREE.MeshLambertMaterial({ color: c }), phong = (c, s = 60) => new THREE.MeshPhongMaterial({ color: c, specular: 0x555555, shininess: s });
+  const put = (geo, m, x, y, z, par = G) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); return o; };
+  const bx = (w, h, d, m, x, y, z, par) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z, par);
+  const cy = (rt, rb, h, m, x, y, z, seg = 16, par) => put(new THREE.CylinderGeometry(rt, rb, h, seg), m, x, y, z, par);
+  const col = (x0, x1, z0, z1) => roof.cols.push({ x0, x1, z0, z1 });
+  const ext = o => { o.traverse(k => k.layers.set(EXTERIOR_LAYER)); return o; };   // (the world outside: lit by the sun / moon rig only)
+  const stick = (a, b, r, m, par = G) => { const d = new THREE.Vector3().subVectors(b, a), o = put(new THREE.CylinderGeometry(r, r, d.length(), 8), m, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, par); o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); return o; };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const galv = phong(0xa9aeb3, 40), alum = phong(0xd3d6da, 80), dark = lam(0x2a2c2f), beige = phong(0xd9d3c3, 20), cement = lam(0x9d9a92);
+
+  // ---- the deck: gravel ballast over the membrane, one sheet over the whole outline (a hole for the hatch) ----
+  const P = [[-7.84, -0.1], [11.1, -0.1], [11.1, 27.9], [12.7, 27.9], [12.7, 29.9], [11.1, 29.9], [11.1, 33.1], [1.33, 33.1], [1.33, 46.6], [-7.07, 46.6], [-7.07, 33.1], [-7.84, 33.1]];
+  const gravelTex = makeTexture((ctx, W, H) => {   // 1.2 m of pea gravel: thousands of rounded stones, each lit from the top left
+    ctx.fillStyle = "#77736c"; ctx.fillRect(0, 0, W, H);
+    const cols = ["#a8a49b", "#6f6b64", "#bdb6a8", "#5d5a55", "#9a8f7d", "#c9c2b3", "#837d72", "#b1a48d"];
+    for (let i = 0; i < 9000; i++) {
+      const x = Math.random() * W, y = Math.random() * H, r = 2 + Math.random() * 3.5, a = Math.random() * 3;
+      for (const [dx, dy] of [[0, 0], [W, 0], [-W, 0], [0, H], [0, -H]]) {   // (tiles seamlessly)
+        if (dx || dy) { if (x + dx < -8 || x + dx > W + 8 || y + dy < -8 || y + dy > H + 8) continue; }
+        ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(x + dx + 1.2, y + dy + 1.2, r, r * 0.75, a, 0, 7); ctx.fill();
+        ctx.fillStyle = cols[i % cols.length]; ctx.beginPath(); ctx.ellipse(x + dx, y + dy, r, r * 0.75, a, 0, 7); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.22)"; ctx.beginPath(); ctx.ellipse(x + dx - r * 0.3, y + dy - r * 0.25, r * 0.4, r * 0.3, a, 0, 7); ctx.fill();
+      }
+    }
+  }, 512, 512);
+  gravelTex.wrapS = gravelTex.wrapT = THREE.RepeatWrapping; gravelTex.repeat.set(1 / 1.2, 1 / 1.2); gravelTex.anisotropy = 8;
+  const gravel = new THREE.MeshLambertMaterial({ map: gravelTex });
+  WX_GROUND.push({ m: gravel, dry: new THREE.Color(0xffffff), wet: new THREE.Color(0x8a8f96), snow: 1 });   // gets wet and snowed on like the lot
+  {
+    const sh = new THREE.Shape(P.map(([x, z]) => new THREE.Vector2(x, -z))), hole = new THREE.Path();
+    const { x0, x1, z0, z1 } = ROOF_HATCH; hole.moveTo(x0, -z0); hole.lineTo(x0, -z1); hole.lineTo(x1, -z1); hole.lineTo(x1, -z0); hole.lineTo(x0, -z0); sh.holes.push(hole);
+    const deck = put(new THREE.ShapeGeometry(sh), gravel, 0, Y, 0); deck.rotation.x = -Math.PI / 2;   // (shape y = -world z; its uvs are world metres)
+  }
+
+  // ---- parapets: a wall just inside every edge, the stucco skin outside it all the way down, aluminium coping on top ----
+  const stucco = lam(0xcdbf9f), base = lam(0x8f8573), membrane = lam(0xb9bab5), coping = phong(0xc2c6cb, 50), fasciaBlue = lam(0x00349c), fasciaY = lam(0xf2c200);
+  const skin = new THREE.Group(); scene.add(skin);   // (the building's outside, in the scene not the roof group: seen from up here over the edge, and from anywhere out there)
+  for (let i = 0; i < P.length; i++) {
+    const [ax, az] = P[i], [bx_, bz] = P[(i + 1) % P.length], len = Math.hypot(bx_ - ax, bz - az), dx = (bx_ - ax) / len, dz = (bz - az) / len;
+    let nx = -dz, nz = dx; const mx = (ax + bx_) / 2, mz = (az + bz) / 2;
+    if (!onDeck(mx + nx * 0.05, mz + nz * 0.05)) { nx = -nx; nz = -nz; }   // n: inward, onto the deck
+    const along = Math.abs(dx) > 0.5, ry = along ? 0 : Math.PI / 2;
+    const wall = (inset, th, y0, y1, m, extra = 0, par = G) => { const o = bx(len + extra, y1 - y0, th, m, mx + nx * inset, (y0 + y1) / 2, mz + nz * inset, par); o.rotation.y = ry; return o; };
+    wall(T / 2, T, Y, Y + PH, membrane);                                     // the parapet, its inside face in the roof's membrane
+    wall(0.02, 0.4, Y + PH, Y + PH + 0.05, coping, 0.32);                    // coping over wall and skin
+    const front = Math.abs(az + 0.1) < 0.01 && Math.abs(bz + 0.1) < 0.01;  // the storefront: above the glass only, a blue fascia with a yellow stripe
+    wall(-0.075, 0.15, front ? 2.75 : 0, Y + PH, front ? fasciaBlue : stucco, 0.3, skin);
+    if (front) wall(-0.08, 0.16, 3.45, 3.6, fasciaY, 0.32, skin); else wall(-0.08, 0.16, 0, 0.5, base, 0.32, skin);   // a darker band at the foot
+    if (along) col(Math.min(ax, bx_), Math.max(ax, bx_), Math.min(az, az + nz * T), Math.max(az, az + nz * T));
+    else col(Math.min(ax, ax + nx * T), Math.max(ax, ax + nx * T), Math.min(az, bz), Math.max(az, bz));
+  }
+  ext(skin);
+
+  // ---- the hatch: a curb round the opening, a lid that props open while you're up here, the ladder's rails through it ----
+  {
+    const { x0, x1, z0, z1 } = ROOF_HATCH, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, CH = 0.35, steel = phong(0x8b9096, 30), CLOSET_Z0 = STORE.z + WALL_T / 2;   // (the closet's south wall face)
+    const hatch = new THREE.Group(); scene.add(hatch);              // (out in the scene: the shut lid is what you see looking up from the closet)
+    const add = (w, h, d, m, x, y, z, par = hatch) => bx(w, h, d, m, x, y, z, par);
+    add(x1 - x0 + 0.12, CH, 0.06, steel, cx, Y + CH / 2, z0 - 0.03); add(x1 - x0 + 0.12, CH, 0.06, steel, cx, Y + CH / 2, z1 + 0.03);
+    add(0.06, CH, z1 - z0, steel, x0 - 0.03, Y + CH / 2, cz); add(0.06, CH, z1 - z0, steel, x1 + 0.03, Y + CH / 2, cz);
+    const lid = new THREE.Group(); lid.position.set(cx, Y + CH, z0 - 0.06); hatch.add(lid); roof.lid = lid;   // hinged along its south edge
+    add(x1 - x0 + 0.16, 0.05, z1 - z0 + 0.14, steel, 0, 0.025, (z1 - z0 + 0.14) / 2, lid);
+    add(0.04, 0.03, 0.2, dark, 0, 0.065, z1 - z0 - 0.05, lid);     // its handle
+    add(0.03, 0.4, 0.03, galv, -(x1 - x0) / 2 + 0.04, 0.2, 0.05, lid).rotation.x = 0.3;   // the hold-open arm (folded)
+    ext(hatch); col(x0 - 0.06, x1 + 0.06, z0 - 0.06, z1 + 0.06);
+    // the shaft through the plenum, closet ceiling to deck (unlit: it's dark in there, and the room lighting would take it for outdoors)
+    const shaftM = new THREE.MeshBasicMaterial({ color: 0x34322e }), sy0 = BOH.h, sh = Y - sy0;
+    for (const [w, d, x, z] of [[x1 - x0, 0.02, cx, z0 - 0.01], [x1 - x0, 0.02, cx, z1 + 0.01], [0.02, z1 - z0, x0 - 0.01, cz], [0.02, z1 - z0, x1 + 0.01, cz]]) box(w, sh, d, shaftM, x, sy0 + sh / 2, z);
+    for (const [w, d, x, z] of [[x1 - x0 + 0.1, 0.05, cx, z0 - 0.025], [x1 - x0 + 0.1, 0.05, cx, z1 + 0.025], [0.05, z1 - z0, x0 - 0.025, cz], [0.05, z1 - z0, x1 + 0.025, cz]]) box(w, 0.03, d, mat.frame, x, sy0 - 0.015, z);   // trim round it, under the ceiling
+    // the ladder: galvanised rails standing off the wall on brackets, round rungs every 30 cm, the rails carried on up past
+    // the hatch so there's something to hold stepping off
+    const { x: lx, z: lz } = ROOF_LADDER, top = Y + 1.05;
+    for (const sx of [-1, 1]) {
+      roof.ladderParts.push(box(0.05, top, 0.016, galv, lx + sx * 0.22, top / 2, lz));
+      for (const y of [0.4, 1.6, 2.6]) box(0.04, 0.03, lz - CLOSET_Z0, galv, lx + sx * 0.22, y, (lz + CLOSET_Z0) / 2);   // wall brackets
+      const g = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.016, 6, 12, Math.PI), galv); g.position.set(lx + sx * 0.22, top, lz - 0.12); g.rotation.y = Math.PI / 2; scene.add(g); roof.ladderParts.push(g);   // the rails curl over at the top
+    }
+    for (let y = 0.3; y < Y - 0.05; y += 0.3) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.44, 8), galv); r.rotation.z = Math.PI / 2; r.position.set(lx, y, lz); scene.add(r); roof.ladderParts.push(r); }
+    for (const o of [...roof.ladderParts, ...hatch.children, ...lid.children]) if (o.isMesh) { o.userData.roofLadder = true; aimables.push(o); }
+    colliders.push({ x0: lx - 0.26, x1: lx + 0.26, z0: CLOSET_Z0, z1: lz + 0.03, y1: Y });
+    // a caged bulb on the parapet by the hatch, on at night (see roofTick)
+    roof.bulb = new THREE.MeshBasicMaterial({ color: 0x4a4a44 });
+    glow(put(new THREE.SphereGeometry(0.045, 10, 8), roof.bulb, 12.35, Y + PH - 0.18, 27.9 + T + 0.08));
+    bx(0.14, 0.14, 0.05, dark, 12.35, Y + PH - 0.18, 27.9 + T + 0.025);
+    for (const a of [0, 1, 2]) { const w = put(new THREE.TorusGeometry(0.06, 0.004, 4, 12), dark, 12.35, Y + PH - 0.18, 27.9 + T + 0.08); w.rotation.y = a * Math.PI / 3; }
+  }
+
+  // ---- rooftop AC units: packaged units on curbs, louvred coil grilles down the long sides, two condenser fans on top ----
+  const louvre = makeTexture((ctx, W, H) => {
+    ctx.fillStyle = "#cfc9b8"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#3b3a36"; ctx.fillRect(12, 12, W - 24, H - 24);
+    for (let y = 16; y < H - 14; y += 7) { ctx.fillStyle = "#8e8a80"; ctx.fillRect(14, y, W - 28, 3); ctx.fillStyle = "#bdb7a6"; ctx.fillRect(14, y, W - 28, 1); }
+  }, 256, 128);
+  const louvreM = new THREE.MeshLambertMaterial({ map: louvre });
+  const grille = makeTexture((ctx, W, H) => {        // the fan guard: wire rings and spokes, see-through
+    ctx.clearRect(0, 0, W, H); ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 3;
+    for (let r = 14; r < W / 2; r += 14) { ctx.beginPath(); ctx.arc(W / 2, H / 2, r, 0, 7); ctx.stroke(); }
+    for (let a = 0; a < 8; a++) { ctx.beginPath(); ctx.moveTo(W / 2, H / 2); ctx.lineTo(W / 2 + Math.cos(a * 0.785) * W / 2, H / 2 + Math.sin(a * 0.785) * H / 2); ctx.stroke(); }
+  }, 256, 256);
+  const grilleM = new THREE.MeshLambertMaterial({ map: grille, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
+  const rtu = (x, z, ry, phase) => {
+    const u = new THREE.Group(); u.position.set(x, Y, z); u.rotation.y = ry; G.add(u);
+    const L = 2.3, W = 1.35, H = 1.05;
+    bx(L + 0.1, 0.3, W + 0.1, lam(0x7d7a73), 0, 0.15, 0, u);                    // the curb
+    bx(L, H, W, beige, 0, 0.3 + H / 2, 0, u);
+    for (const s of [-1, 1]) { const p = put(new THREE.PlaneGeometry(L * 0.62, H * 0.75), louvreM, L * 0.17, 0.3 + H * 0.48, s * (W / 2 + 0.003), u); if (s < 0) p.rotation.y = Math.PI; }
+    for (const s of [-1, 1]) bx(0.004, H * 0.8, 0.5, lam(0xb9b3a2), -L / 2 - 0.002, 0.3 + H / 2, s * 0.3, u);   // service panels on the end
+    bx(0.12, 0.06, 0.03, dark, -L / 2 - 0.02, 0.3 + H * 0.5, 0.3, u); bx(0.12, 0.06, 0.03, dark, -L / 2 - 0.02, 0.3 + H * 0.5, -0.3, u);   // their handles
+    for (const fx of [0.2, 0.85]) {
+      cy(0.33, 0.33, 0.12, dark, fx, 0.3 + H + 0.06, 0, 24, u);                   // the shroud
+      const blades = new THREE.Group(); blades.position.set(fx, 0.3 + H + 0.09, 0); u.add(blades);
+      for (let b = 0; b < 4; b++) { const bl = bx(0.28, 0.008, 0.11, lam(0x1c1c1c), 0.15, 0, 0, blades); bl.rotation.x = 0.35; const piv = new THREE.Group(); piv.rotation.y = b * Math.PI / 2; blades.add(piv); piv.add(bl); }
+      cy(0.04, 0.04, 0.05, dark, 0, 0, 0, 10, blades);
+      const gr = put(new THREE.CircleGeometry(0.32, 24), grilleM, fx, 0.3 + H + 0.125, 0, u); gr.rotation.x = -Math.PI / 2;
+      roof.fans.push({ g: blades, v: 0, phase });
+    }
+    const plate = textPlane("CARRIER", 0.32, 0.07, "#ffffff", "#1d4f9c", "Arial Black", 60); plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map });
+    plate.position.set(-L / 2 - 0.004, 0.3 + H - 0.12, 0); plate.rotation.y = -Math.PI / 2; u.add(plate);
+    // the disconnect on a strut beside it, and its conduit
+    const sx = -L / 2 - 0.45;
+    bx(0.04, 0.9, 0.04, galv, sx, 0.45, 0.5, u); bx(0.26, 0.34, 0.12, lam(0x7e858c), sx, 0.75, 0.5, u); bx(0.03, 0.12, 0.05, dark, sx - 0.13, 0.75, 0.5, u);
+    stick(V(sx, 0.55, 0.45), V(-L / 2, 0.55, 0.45), 0.012, galv, u);
+    // the gas line in on its blocks
+    const gasM = lam(0xe0b400);
+    stick(V(-L / 2 + 0.3, 0.12, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.12, -W / 2 - 2.6), 0.018, gasM, u);
+    stick(V(-L / 2 + 0.3, 0.12, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.45, -W / 2 - 0.25), 0.018, gasM, u);
+    stick(V(-L / 2 + 0.3, 0.45, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.45, -W / 2), 0.018, gasM, u);
+    for (let k = 0; k < 3; k++) bx(0.12, 0.08, 0.1, lam(0x4a3f33), -L / 2 + 0.3, 0.04, -W / 2 - 0.7 - k * 0.8, u);
+    const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry)), hx = (L / 2 + 0.55) * c + (W / 2 + 0.1) * s, hz = (L / 2 + 0.55) * s + (W / 2 + 0.1) * c;
+    col(x - hx, x + hx, z - hz, z + hz);
+  };
+  rtu(-2.6, 9.5, 0, 0); rtu(4.6, 19.5, 0, 120);
+
+  // ---- the whirlybird over the lobby: a turbine vent that turns with the wind ----
+  {
+    const tx = -3.2, tz = 30.4, t = new THREE.Group(); t.position.set(tx, Y, tz); G.add(t);
+    cy(0.2, 0.24, 0.25, alum, 0, 0.125, 0, 16, t);                               // the throat on its flashing
+    cy(0.34, 0.34, 0.015, alum, 0, 0.01, 0, 20, t);
+    const head = new THREE.Group(); head.position.y = 0.28; t.add(head); roof.turbine = head;
+    const n = 20, R = 0.24, HH = 0.32;
+    for (let i = 0; i < n; i++) {                                                // curved vanes: each sweeps a quarter turn as it bulges out and back in
+      const a0 = i / n * Math.PI * 2, pts = [];
+      for (let k = 0; k <= 8; k++) { const f = k / 8, r = R * (0.62 + 0.38 * Math.sin(f * Math.PI)), a = a0 + f * 0.9; pts.push(V(Math.cos(a) * r, f * HH, Math.sin(a) * r)); }
+      put(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 0.012, 3), alum, 0, 0, 0, head);
+    }
+    cy(R * 0.64, R * 0.64, 0.025, alum, 0, 0, 0, 20, head);                      // bottom ring
+    const cap = put(new THREE.SphereGeometry(R * 0.66, 16, 6, 0, Math.PI * 2, 0, Math.PI / 2), alum, 0, HH, 0, head); cap.scale.y = 0.45;
+    col(tx - 0.36, tx + 0.36, tz - 0.36, tz + 0.36);
+  }
+  // ---- mushroom exhaust fans over the restroom and the break room ----
+  for (const [ex, ez] of [[9.6, 31.4], [5.2, 31.6]]) {
+    bx(0.62, 0.3, 0.62, lam(0x8a877f), ex, Y + 0.15, ez);
+    cy(0.2, 0.22, 0.25, alum, ex, Y + 0.42, ez, 20);
+    const dome = put(new THREE.SphereGeometry(0.36, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2), alum, ex, Y + 0.58, ez); dome.scale.y = 0.55;
+    cy(0.36, 0.36, 0.02, alum, ex, Y + 0.58, ez, 20);
+    put(new THREE.CylinderGeometry(0.34, 0.34, 0.1, 20, 1, true), grilleM, ex, Y + 0.52, ez);   // the screen under the hood
+    col(ex - 0.36, ex + 0.36, ez - 0.36, ez + 0.36);
+  }
+  // ---- the satellite dish: a 1 m offset dish on a ballasted sled, aimed south and up at the satellites ----
+  {
+    const dx = 8.4, dz = 3.2, d = new THREE.Group(); d.position.set(dx, Y, dz); G.add(d);
+    bx(1.1, 0.06, 0.1, galv, 0, 0.05, 0.4, d); bx(1.1, 0.06, 0.1, galv, 0, 0.05, -0.4, d); bx(0.1, 0.06, 0.9, galv, 0, 0.08, 0, d);   // the sled
+    for (const [sx, sz] of [[-0.42, 0.4], [0.42, 0.4], [-0.42, -0.4], [0.42, -0.4]]) bx(0.2, 0.1, 0.4, cement, sx, 0.13, sz, d);   // the blocks holding it down
+    cy(0.035, 0.035, 1.1, galv, 0, 0.6, 0, 10, d);
+    for (const [sx, sz] of [[0.5, 0], [-0.5, 0], [0, 0.4]]) stick(V(sx, 0.1, sz), V(0, 0.75, 0), 0.012, galv, d);   // braces
+    const aim = new THREE.Group(); aim.position.set(0, 1.12, 0); aim.rotation.set(0.68, 0, 0); d.add(aim);   // tipped up toward -z (south)
+    const prof = []; for (let k = 0; k <= 10; k++) { const r = k / 10 * 0.5; prof.push(new THREE.Vector2(r, r * r * 0.45)); }
+    const dish = put(new THREE.LatheGeometry(prof, 28), new THREE.MeshPhongMaterial({ color: 0xdedfe0, specular: 0x888888, shininess: 30, side: THREE.DoubleSide }), 0, 0, 0, aim);
+    dish.rotation.x = -Math.PI / 2;                                             // (opening toward local -z)
+    cy(0.06, 0.06, 0.1, dark, 0, 0, 0.04, 10, aim).rotation.x = Math.PI / 2;
+    stick(V(0, -0.45, 0.02), V(0, -0.05, -0.55), 0.014, galv, aim);              // the feed arm
+    bx(0.07, 0.07, 0.13, dark, 0, -0.03, -0.58, aim);                             // the LNB
+    stick(V(0, -0.05, -0.55), V(0, -0.9, -0.1), 0.007, dark, aim);                // its cable, down the mast
+    col(dx - 0.65, dx + 0.65, dz - 0.6, dz + 0.6);
+  }
+  // ---- an old TV antenna on a tripod (from before the dish), a little bent ----
+  {
+    const ax = -6.4, az = 24, a = new THREE.Group(); a.position.set(ax, Y, az); G.add(a);
+    for (let k = 0; k < 3; k++) { const t = k * 2.09; stick(V(Math.cos(t) * 0.45, 0.02, Math.sin(t) * 0.45), V(0, 0.9, 0), 0.015, galv, a); }
+    cy(0.022, 0.022, 3.0, galv, 0, 1.5, 0, 8, a);
+    const boom = new THREE.Group(); boom.position.y = 2.85; boom.rotation.set(0.04, 0.6, 0.05); a.add(boom);
+    bx(0.03, 0.03, 1.6, galv, 0, 0, 0, boom);
+    for (let k = 0; k < 9; k++) { const w = 1.0 - k * 0.07; bx(w, 0.012, 0.012, alum, 0, 0, -0.75 + k * 0.18, boom); }
+    stick(V(0, 0.2, 0), V(-0.1, 2.85, 0), 0.006, dark, a);
+    col(ax - 0.5, ax + 0.5, az - 0.5, az + 0.5);
+  }
+  // ---- vent stacks with their boots, drains, and walkway pads out to the units ----
+  for (const [vx, vz] of [[9.2, 32.4], [5.8, 32.6], [-1.2, 31.6], [-4.8, 40.5]]) {
+    cy(0.16, 0.2, 0.12, lam(0x5a5c5e), vx, Y + 0.06, vz, 12); cy(0.05, 0.05, 0.42, lam(0x9a9c9e), vx, Y + 0.21, vz, 10);
+  }
+  for (const [dx, dz] of [[1.5, 8], [1.5, 22], [-2.9, 40], [-6.5, 15]]) {
+    cy(0.22, 0.24, 0.02, dark, dx, Y + 0.01, dz, 16); const s = put(new THREE.SphereGeometry(0.12, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), dark, dx, Y + 0.02, dz); s.scale.y = 0.8;
+  }
+  const padM = lam(0x8f908c);
+  const pads = (pts) => { for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx2, bz] = pts[i + 1], n = Math.ceil(Math.hypot(bx2 - ax, bz - az) / 0.75);
+    for (let k = 0; k < n; k++) { const f = (k + 0.5) / n, p = bx(0.6, 0.025, 0.6, padM, ax + (bx2 - ax) * f, Y + 0.012, az + (bz - az) * f); p.rotation.y = Math.atan2(bx2 - ax, bz - az); } } };
+  pads([[10.6, 29.2], [6.6, 26], [6.6, 21.2]]); pads([[6.6, 21.2], [-0.4, 14], [-0.4, 10.9]]);
+
+  // ---- around the building: grass all round, a paved apron at its sides and back with the dumpster, the pizza place next door ----
+  const ground = (x0, x1, z0, z1, m, y = 0) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), m); g.rotation.x = -Math.PI / 2; g.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); scene.add(g); ext(g); };
+  for (const [x0, x1, z0, z1] of [[-60, -27.74, -24, 0], [31, 70, -24, 0], [-60, -7.84, 0, 90], [11.1, 70, 0, 27.9], [12.7, 70, 27.9, 29.9], [11.1, 70, 29.9, 90],
+    [-7.84, -7.07, 33.1, 46.6], [1.33, 11.1, 33.1, 46.6], [-7.84, 11.1, 46.6, 90]]) ground(x0, x1, z0, z1, mat.grass);
+  for (const [x0, x1, z0, z1] of [[-11.84, -7.84, 0, 50.6], [-7.84, -7.07, 33.1, 46.6], [11.1, 13, 0, 14], [11.1, 16.7, 14, 27.9], [12.7, 16.7, 27.9, 29.9], [11.1, 16.7, 29.9, 37.1],
+    [1.33, 11.1, 33.1, 37.1], [1.33, 5.33, 37.1, 50.6], [-11.84, 5.33, 46.6, 50.6]]) ground(x0, x1, z0, z1, mat.pavement, 0.004);
+  {                                                // the dumpster, out back by the closet: two plastic lids, forklift pockets, a bit of rust
+    const d = new THREE.Group(); d.position.set(14.4, 0, 31.6); d.rotation.y = -Math.PI / 2; scene.add(d);
+    const green = lam(0x2e5a3a), lidM = lam(0x1b1d1f);
+    put(new THREE.BoxGeometry(1.9, 1.1, 1.15), green, 0, 0.62, 0, d);
+    for (const s of [-1, 1]) { const l = bx(0.93, 0.05, 1.25, lidM, s * 0.475, 1.2, 0.05, d); l.rotation.x = -0.08; }
+    for (const s of [-1, 1]) bx(0.3, 0.12, 1.2, dark, s * 0.55, 0.07, 0, d);
+    bx(1.95, 0.05, 0.06, lam(0x6a3a22), 0, 0.95, 0.58, d);
+    ext(d); colliders.push({ x0: 13.8, x1: 15, z0: 30.6, z1: 32.6, y1: 1.3 });
+  }
+  {                                                // Tony's, next door: brick, a red awning band, warm windows (lit at night: see roofTick), its own little AC unit
+    const px0 = 13, px1 = 21, pz1 = 14, ph = 4.3, brick = lam(0x9a4a3a), p = new THREE.Group(); scene.add(p);
+    put(new THREE.BoxGeometry(px1 - px0, ph, pz1), brick, (px0 + px1) / 2, ph / 2, pz1 / 2, p);
+    put(new THREE.BoxGeometry(px1 - px0 + 0.1, 0.08, pz1 + 0.1), coping, (px0 + px1) / 2, ph + 0.04, pz1 / 2, p);
+    const win = roof.pizzaWin = new THREE.MeshBasicMaterial({ color: 0x2a2f36 });
+    for (const [x0, x1] of [[13.4, 15.0], [16.3, 20.6]]) put(new THREE.PlaneGeometry(x1 - x0, 1.9), win, (x0 + x1) / 2, 1.45, -0.006, p).rotation.y = Math.PI;
+    put(new THREE.PlaneGeometry(0.95, 2.2), lam(0x3a2418), PIZZA_DOOR[0], 1.1, -0.006, p).rotation.y = Math.PI;
+    put(new THREE.BoxGeometry(px1 - px0, 0.5, 0.6), lam(0xb3202a), (px0 + px1) / 2, 2.85, -0.3, p);   // the awning band
+    const sign = textPlane("TONY'S PIZZA", 4.2, 0.7, "#ffffff", "#b3202a", "Arial Black", 90); sign.position.set((px0 + px1) / 2, 3.55, -0.01); sign.rotation.y = Math.PI; p.add(sign);
+    put(new THREE.BoxGeometry(1.6, 0.9, 1.1), beige, 18, ph + 0.45, 8, p);
+    ext(p);
+  }
+}
+let aimRoofLadder = false;
+function roofClimb(dir) {                          // up (1) or down (-1) the closet ladder
+  if (dir > 0 && roofHandsFull()) { toast("Hands full: you need them both for the ladder"); return; }
+  roof.climb = { dir, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
+  player.yaw = 0;                                   // facing the rungs (south), up or down
+}
+function roofTick(dt) {
+  const R = roof, mo = shiftDate().getMonth(), h = shift.h;
+  R.lidA += ((player.onRoof || R.climb ? 1.45 : 0) - R.lidA) * Math.min(1, dt * 2.5); R.lid.rotation.x = -R.lidA;
+  if (R.bulb) R.bulb.color.setHex(tod.level < 0.5 ? 0xffe2a8 : 0x4a4a44);
+  if (R.pizzaWin) R.pizzaWin.color.setHex(tod.level < 0.6 && h > 10 && h < 23.5 ? 0xffc77a : tod.level < 0.6 ? 0x1a1d22 : 0x3a4048);
+  if (R.turbine) R.turbine.rotation.y += dt * (0.4 + 7 * (WX.wind || 0) + 4 * (WX.gust || 0));
+  const cooling = mo >= 4 && mo <= 8 ? 1 : (mo === 3 || mo === 9) && h > 12 && h < 18 ? 1 : 0;
+  for (const f of R.fans) {                          // the condensers cycle on and off, spinning up and coasting down
+    const on = cooling && (clockT + f.phase) % 300 < 200;
+    f.v += ((on ? 28 : 0) - f.v) * Math.min(1, dt * (on ? 0.8 : 0.35)); f.g.rotation.y += f.v * dt;
+  }
+  if (!R.climb) return;
+  const c = R.climb, DUR = 3.4; c.t = Math.min(DUR, c.t + dt);
+  const k = c.t / DUR, e = k * k * (3 - 2 * k), step = 0.04 * Math.sin(k * Math.PI * 12);   // a rung at a time
+  const lx = ROOF_LADDER.x, lz = ROOF_LADDER.z + 0.42, yLo = 1.65, yHi = ROOF.y + 1.65;
+  if (c.dir > 0) {                                   // walk the step to the foot, then up and out
+    const a = Math.min(1, k * 5); R.cam.set(c.x0 + (lx - c.x0) * a, yLo + (yHi + 0.15 - yLo) * e + step, c.z0 + (lz - c.z0) * a);
+    if (k > 0.92) R.cam.lerp(new THREE.Vector3(ROOF_UP.x, yHi, ROOF_UP.z), (k - 0.92) / 0.08);
+  } else {
+    const a = Math.min(1, k * 5); R.cam.set(c.x0 + (lx - c.x0) * a, yHi + 0.15 + (yLo - yHi - 0.15) * e + step, c.z0 + (lz - c.z0) * a);
+    if (k > 0.92) R.cam.lerp(new THREE.Vector3(ROOF_DOWN.x, yLo, ROOF_DOWN.z), (k - 0.92) / 0.08);
+  }
+  if (c.t >= DUR) {
+    R.climb = null; player.onRoof = c.dir > 0;
+    Object.assign(player, c.dir > 0 ? ROOF_UP : ROOF_DOWN);
+    if (player.onRoof) toast("On the roof · E at the hatch to climb back down", true);
+  }
+}
+
 // ---------------- the restroom's working parts ----------------
 function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
   if (bath.flushT > 0 && bath.water) {
@@ -9808,7 +10108,9 @@ function setLamp(l, on) {
   l.userData.pool.visible = on;
 }
 function onE() {
-  if (scrub || ladder.fix) return;               // busy mopping / sweeping / up at a light
+  if (scrub || ladder.fix || roof.climb) return;   // busy mopping / sweeping / up at a light / on the roof ladder
+  if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
+  if (player.onRoof) return;
   if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
   if (aimStool && !stool.by) { stoolSit(); return; }
@@ -10234,7 +10536,7 @@ function saveState() {
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
     : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg,
@@ -10389,8 +10691,9 @@ function regionTick() {
     nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
   }
   const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor)]];
-  const seen = new Set([roomAt(camera.position.x, camera.position.z)]);
-  for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
+  const seen = new Set([player.onRoof ? "out" : roomAt(camera.position.x, camera.position.z)]);   // (on the roof: just the outdoors, and the closet down the hatch)
+  roof.g.visible = player.onRoof || !!roof.climb;
+  if (!player.onRoof) for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
 }
 let clockT = 0;
@@ -10531,15 +10834,17 @@ renderer.setAnimationLoop(() => {
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
   move(dt); moveTick(); bathTick(dt);
-  if (inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
+  if (!player.onRoof && inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
   stoolTick(dt);
   thSeatTick(dt);
   toolTick(dt);
   ladderTick(dt);
+  roofTick(dt);
   meTick(dt);
-  if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
+  if (roof.climb) camera.position.copy(roof.cam);
+  else if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
   else if (ladder.on) {                          // up the steps: the eye where it always is, 21 cm ahead of your body (toward the ladder)
     const k = ladder.lift, e = k * k * (3 - 2 * k);
     camera.position.set(player.x - Math.sin(ladder.ry) * 0.21, floorHeightAt(player.x, player.z) + 1.65 + LADDER.STEP * e, player.z - Math.cos(ladder.ry) * 0.21);
@@ -10547,7 +10852,7 @@ renderer.setAnimationLoop(() => {
   else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(Math.sin(seatAt.ry || 0) * 0.06, 0.03, Math.cos(seatAt.ry || 0) * 0.06));   // eyes just above the collar, a touch forward
   else {
     eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
-    camera.position.set(player.x, eyeY + floorHeightAt(player.x, player.z), player.z);
+    camera.position.set(player.x, eyeY + playerFloor(), player.z);
   }
   if (!seated) seatFov = 70;                     // walking resets the couch zoom
   const fovTarget = seated ? seatFov : 70;
@@ -10594,7 +10899,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, pizzaRun, exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, pizzaRun, exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
