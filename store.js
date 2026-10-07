@@ -397,7 +397,6 @@ function setWindFrac(c, f) {
 // it's wound) with a motor whir, clunks when done, and E takes it out — early,
 // it comes out only partly rewound. Each machine is its own object in rewinders
 const REWIND_SECS = 10;
-let rewindAc = null;
 function rewinderLoad(rw, tape, who = "you") {
   Object.assign(rw, { tape, f0: windFrac(tape), t: 0, done: false });
   rw.dur = Math.max(1, rw.f0 * REWIND_SECS) * (owned("rewinders") ? 0.5 : 1) * Math.max(0.5, 1 - 0.025 * (lv(who, "dex") - 1)) * (has(who, "dex", 5) ? 0.7 : 1);   // (DEX: threaded and running faster; Quick Thread)
@@ -407,17 +406,17 @@ function rewinderLoad(rw, tape, who = "you") {
   if (rw.f0 > 0) rewinderSound(rw, true); else rewinderFinish(rw, false);
 }
 // every sound effect goes out through here, so the settings' Store sounds volume and M (mute) reach them too, not just the ambience
-const sfxOuts = new Map();                     // AudioContext -> its output gain
 const sfxVol = () => window.VaultAmbience?.muted?.() ? 0 : SETTINGS.sound / 100;
-function sfxOut(ac) { let g = sfxOuts.get(ac); if (!g) { g = ac.createGain(); g.connect(ac.destination); sfxOuts.set(ac, g); } g.gain.value = sfxVol(); return g; }
-const sfxRefresh = () => { for (const [ac, g] of sfxOuts) g.gain.setTargetAtTime(sfxVol(), ac.currentTime, 0.05); };   // (the alarm, a rewinder's whir: already playing)
+let sfxGain = null;                            // (one, on the shared context: see VaultAudio in ambience.js)
+function sfxOut() { if (!sfxGain) { sfxGain = VaultAudio.ctx().createGain(); sfxGain.connect(VaultAudio.out()); } sfxGain.gain.value = sfxVol(); return sfxGain; }
+const sfxRefresh = () => sfxGain?.gain.setTargetAtTime(sfxVol(), sfxGain.context.currentTime, 0.05);   // (the alarm, a rewinder's whir: already playing)
 function rewinderEmpty(rw) {                  // the tape's out: machine idle
   rewinderSound(rw, false); rw.tape = null; rw.tapeMesh.visible = false; rw.led.material.color.set(0x222222);
 }
 function rewinderFinish(rw, clunk = true) {
   rw.done = true; rewinderSound(rw, false); rw.led.material.color.set(0x2bff6a);
   if (clunk) try {                            // the eject thunk
-    const ac = rewindAc ||= new AudioContext(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    const ac = VaultAudio.ctx(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
     o.type = "square"; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.09);
     g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
     o.connect(g).connect(sfxOut(ac)); o.start(t); o.stop(t + 0.13);
@@ -427,7 +426,7 @@ function rewinderSound(rw, on) {
   if (!on) { rw.snd?.(); rw.snd = null; return; }
   rw.led.material.color.set(0xff3b1f);
   try {                                       // little motor: a soft hum, tape hiss, and the reel's rattle, speeding up a touch as the tape runs down
-    const ac = rewindAc ||= new AudioContext(); ac.resume();
+    const ac = VaultAudio.ctx(); ac.resume();
     const t = ac.currentTime, end = t + rw.dur, out = ac.createGain();
     out.gain.setValueAtTime(0, t); out.gain.linearRampToValueAtTime(0.05, t + 0.2); out.connect(sfxOut(ac));
     const hum = ac.createOscillator(), humF = ac.createBiquadFilter(), humG = ac.createGain();
@@ -443,7 +442,7 @@ function rewinderSound(rw, on) {
     rattle.gain.value = 0.35; depth.gain.value = 0.25; lfo.connect(depth).connect(rattle.gain);
     noise.connect(hiss).connect(rattle).connect(out);
     const src = [hum, noise, lfo]; src.forEach(o => o.start());
-    rw.snd = () => { src.forEach(o => o.stop()); out.disconnect(); };
+    rw.snd = () => { const t = ac.currentTime; out.gain.cancelScheduledValues(t); out.gain.setTargetAtTime(0, t, 0.015); src.forEach(o => o.stop(t + 0.1)); setTimeout(() => out.disconnect(), 200); };   // (a quick fade: cut dead it clicks)
   } catch {}
 }
 function rewinderTick(dt) {
@@ -464,10 +463,9 @@ function rewinderUse(rw) {                    // E on a rewinder
   } else if (held) { const t = held; releaseFromHand(); rewinderLoad(rw, t); }
 }
 // the counter's service bell: a bright struck-metal ding (a few inharmonic partials, fast attack, long ring)
-let bellAc = null;
 function dingBell() {
   try {
-    const ac = bellAc ||= new AudioContext(), t = ac.currentTime, out = ac.createGain();
+    const ac = VaultAudio.ctx(), t = ac.currentTime, out = ac.createGain();
     out.gain.value = 0.12; out.connect(sfxOut(ac));
     for (const [f, a, d] of [[2210, 1, 1.6], [5980, 0.35, 0.7], [3470, 0.25, 1.1]]) {
       const o = ac.createOscillator(), g = ac.createGain();
@@ -479,13 +477,13 @@ function dingBell() {
 // security tags: every copy's is live until run across the counter's
 // desensitizer (copy.desens = true), and live again once it's reshelved.
 // The gates only alarm on a live tag.
-let desensAc = null, desensFlash = 0;
+let desensFlash = 0;
 function desensitize(c) {
   if (c.desens) { toast(`${c.title} is already desensitized`); return; }
   c.desens = true; desensFlash = 0.6;
   toast(`Desensitized: ${c.title}`, true);
   try {                                        // the pad's confirm beep-beep
-    const ac = desensAc ||= new AudioContext(), t = ac.currentTime;
+    const ac = VaultAudio.ctx(), t = ac.currentTime;
     for (const [dt, f] of [[0, 1760], [0.11, 2350]]) {
       const o = ac.createOscillator(), g = ac.createGain(); o.type = "square"; o.frequency.value = f;
       g.gain.setValueAtTime(0.04, t + dt); g.gain.setValueAtTime(0, t + dt + 0.08); o.connect(g).connect(sfxOut(ac)); o.start(t + dt); o.stop(t + dt + 0.09);
@@ -5084,7 +5082,6 @@ function shiftHud() {
 // the world section below (lightSwitches), toggled with E
 const switchToggles = [];                         // { mesh, zone } — the rocker flips with its zone
 const switchPlate = { closet: ["closet"] };        // zone -> every zone on its plate, in order (the closet: just its bulb)
-let switchAc = null;
 function flipSwitch(zone) { setZone(zone, !zoneOn[zone]); switchSnap(zoneOn[zone]); }
 // hold E on a plate: the whole row goes the opposite of its first switch
 function flipPlate(zone) {
@@ -5094,7 +5091,7 @@ function flipPlate(zone) {
 }
 function switchSnap(on) {
   try {                                           // a plastic snap
-    const ac = switchAc ||= new AudioContext(), n = ac.sampleRate * 0.03, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    const ac = VaultAudio.ctx(), n = ac.sampleRate * 0.03, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
     for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (n * 0.12));
     const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
     f.type = "bandpass"; f.frequency.value = on ? 2600 : 2100; g.gain.value = 0.35;
@@ -5244,11 +5241,10 @@ let onStool = false;
   add(new THREE.BoxGeometry(0.03, 0.02, 0.04), black, 0.13, -0.11, 0.155, top).rotation.y = -0.6;  // its grip
   colliders.push(stool.box);
 }
-let stoolAc = null;
 function stoolPush() {
   stool.vel = Math.min(STOOL.MAX, stool.vel + STOOL.PUSH);
   try {                                           // the bearing's dry swish as it goes
-    const ac = stoolAc ||= new AudioContext(), n = ac.sampleRate * 0.25, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    const ac = VaultAudio.ctx(), n = ac.sampleRate * 0.25, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
     for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / n) ** 2;
     const src = ac.createBufferSource(), f = ac.createBiquadFilter(), gn = ac.createGain();
     f.type = "bandpass"; f.frequency.value = 500 + stool.vel * 40; f.Q.value = 2; gn.gain.value = 0.12;
@@ -7135,8 +7131,8 @@ let tvAudio = null;
 function tvLevel() {                              // RMS of the TV's audio right now, 0..~0.5 (null if unreadable)
   if (!playing || video.paused) return 0;
   if (!tvAudio) try {                             // built once, on first need: after this the TV's sound runs through it
-    const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 1024;
-    ac.createMediaElementSource(video).connect(an); an.connect(ac.destination);
+    const ac = VaultAudio.ctx(), an = ac.createAnalyser(); an.fftSize = 1024;
+    ac.createMediaElementSource(video).connect(an); an.connect(VaultAudio.out());
     tvAudio = { ac, an, buf: new Float32Array(1024) };
   } catch { tvAudio = { fail: true }; }
   if (tvAudio.fail) return null;
@@ -7759,10 +7755,9 @@ function receiptTear() {
   printer.tex.repeat.set(1, 1); printer.tex.offset.set(0, 0);
   posBeep(3200);
 }
-let printAc = null;
 function printBuzz(secs) {                       // dot-matrix: a buzzy rasp, pulsing line by line
   try {
-    const ac = printAc ||= new AudioContext(), t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
+    const ac = VaultAudio.ctx(), t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
     o.type = "sawtooth"; o.frequency.value = 118; lfo.type = "square"; lfo.frequency.value = 9; lg.gain.value = 0.012;
     g.gain.value = 0.014; lfo.connect(lg).connect(g.gain); o.connect(g).connect(sfxOut(ac));
     o.start(t); lfo.start(t); o.stop(t + secs); lfo.stop(t + secs);
@@ -7877,10 +7872,9 @@ const coHandMats = {
   card: new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, w, h); g.fillStyle = "#ffd400"; g.fillRect(0, h * 0.62, w, h * 0.14); g.fillStyle = "#fff"; g.font = `bold ${h * 0.16}px Arial`; g.fillText("VAULTBUSTER", w * 0.07, h * 0.3); g.font = `${h * 0.11}px monospace`; g.fillText("MEMBER", w * 0.07, h * 0.5); }, 256, 160) }),
   cash: new THREE.MeshLambertMaterial({ map: makeTexture((g, w, h) => { g.fillStyle = "#9cc795"; g.fillRect(0, 0, w, h); g.strokeStyle = "#3d6b3a"; g.lineWidth = 6; g.strokeRect(6, 6, w - 12, h - 12); g.fillStyle = "#3d6b3a"; g.beginPath(); g.ellipse(w / 2, h / 2, h * 0.28, h * 0.34, 0, 0, 7); g.fill(); g.font = `bold ${h * 0.3}px Georgia`; g.fillText("$", w * 0.08, h * 0.42); }, 256, 110) }),
 };
-let posBeepAc = null;
 function posBeep(f) {
   try {
-    const ac = posBeepAc ||= new AudioContext(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    const ac = VaultAudio.ctx(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
     o.type = "square"; o.frequency.value = f; g.gain.setValueAtTime(0.035, t); g.gain.setValueAtTime(0, t + 0.09);
     o.connect(g).connect(sfxOut(ac)); o.start(t); o.stop(t + 0.1);
   } catch {}
@@ -8426,7 +8420,7 @@ const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null, out: nu
 const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by, alert }
 const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === titleOfCopy(copy));   // a POS alert on a promised hold: the next return of it goes on the holds shelf
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
-let ringAc = null, ringOut = null;
+let ringOut = null;
 function heardFrom(x, z, falloff = true) {      // how loud a sound out on the sales floor is where you are: the whole floor hears it (fainter
   const room = player.z < STORE.z ? 1 : player.z < BOH.hallZ && player.x > BOH.x0 && player.x < STORE.x ? 0.4 : 0;   // with distance), the hall a little through the doorway, the back rooms not at all
   if (!falloff || !room) return room;              // (falloff off: the caller's sound already fades with distance, it just needs the walls)
@@ -8435,7 +8429,7 @@ function heardFrom(x, z, falloff = true) {      // how loud a sound out on the s
 const ringHeard = () => heardFrom(PHONE_AT.x, PHONE_AT.z);
 function ringBurst() {                            // a desk-set ringer: a clapper buzzing between two small gongs ~20 times a second for 2 s
   try {                                           // (lowpassed and not too loud: a real bell, but across the room and not in your ear)
-    const ac = ringAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ringOut = ac.createGain(), lp = ac.createBiquadFilter();
+    const ac = VaultAudio.ctx(), t = ac.currentTime + 0.02, out = ringOut = ac.createGain(), lp = ac.createBiquadFilter();
     lp.type = "lowpass"; lp.frequency.value = 3200; out.gain.value = 0.09 * ringHeard(); out.connect(lp).connect(sfxOut(ac));
     [[1180, 0], [1390, 0.025]].forEach(([f, off]) => {   // the two gongs, struck alternately
       for (const [r, a] of [[1, 1], [2.32, 0.35], [4.1, 0.12]]) {
@@ -8496,7 +8490,7 @@ function phoneTick(dt) {                          // (runs with the clock)
   const r = phone.ring; if (!r) { phoneCallTick(dt); return; }
   r.t += dt;
   if (r.t >= r.rang) { r.rang += 6; ringBurst(); }   // US cadence: 2 s on, 4 s off
-  if (ringOut) ringOut.gain.setTargetAtTime(0.09 * ringHeard(), ringAc.currentTime, 0.1);   // walk away mid-ring and it fades
+  if (ringOut) ringOut.gain.setTargetAtTime(0.09 * ringHeard(), ringOut.context.currentTime, 0.1);   // walk away mid-ring and it fades
   const taker = r.t > 6 && staff.find(e => e.c && e.state === "post" && co?.emp !== e && e.t <= 0 && withEmp(e, danaBestJob) === "phone");
   if (taker) return withEmp(taker, danaCall);   // top of someone's list right now: they get it
   if (r.t > 20) {                                 // rang out
@@ -8692,10 +8686,9 @@ function phoneOutTick(dt) {                        // ringing out, then whoever 
   if (!promise) logAct(`Called ${name} about their overdue tape: ${note.toLowerCase()}`, kind, null, kind ? (o.mood === "angry" ? -15 : null) : null);
   c.said = say; c.t = 4.5; callOutHud();
 }
-let ringBackAc = null;
 function ringBack() {                             // the ringback tone in the handset: 440 + 480 Hz, quietly
   try {
-    const ac = ringBackAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ac.createGain(); out.gain.value = 0.025; out.connect(sfxOut(ac));
+    const ac = VaultAudio.ctx(), t = ac.currentTime + 0.02, out = ac.createGain(); out.gain.value = 0.025; out.connect(sfxOut(ac));
     for (const f of [440, 480]) { const o = ac.createOscillator(); o.frequency.value = f; o.connect(out); o.start(t); o.stop(t + 1.6); }
     out.gain.setValueAtTime(0.025, t + 1.5); out.gain.linearRampToValueAtTime(0, t + 1.6);
   } catch {}
@@ -9965,18 +9958,18 @@ posTex.colorSpace = THREE.SRGBColorSpace;
 // Walk through the entry gates with a tape in hand and they trip: LEDs flash
 // red and a two-tone shop alarm sounds (WebAudio, no sound file) until it's
 // silenced from the register terminal — the only place that option shows up.
-const gateAlarm = { on: false, armed: true, t: 0, ac: null, stop: null };   // armed: off (from the POS) = walk through freely
+const gateAlarm = { on: false, armed: true, t: 0, stop: null };   // armed: off (from the POS) = walk through freely
 function startGateAlarm() {
   if (gateAlarm.on || !gateAlarm.armed) return;
   gateAlarm.on = true; gateAlarm.t = 0;
   try {
-    const ac = gateAlarm.ac ||= new AudioContext(); ac.resume();
+    const ac = VaultAudio.ctx(); ac.resume();
     const osc = ac.createOscillator(), g = ac.createGain();
     osc.type = "square"; g.gain.value = 0; osc.connect(g).connect(sfxOut(ac)); osc.start();
     let hi = false;
     const beep = () => { const t = ac.currentTime; hi = !hi; osc.frequency.setValueAtTime(hi ? 2600 : 2050, t); g.gain.setValueAtTime(0.045 * heardFrom(0, GATE_Z), t); g.gain.setValueAtTime(0, t + 0.2); };   // (as loud as it is where you are, beep by beep)
     beep(); const timer = setInterval(beep, 280);
-    gateAlarm.stop = () => { clearInterval(timer); osc.stop(); osc.disconnect(); };
+    gateAlarm.stop = () => { clearInterval(timer); const t = ac.currentTime; g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.01); osc.stop(t + 0.06); };
   } catch { /* no audio: the lights still go */ }
 }
 function silenceGateAlarm() {
