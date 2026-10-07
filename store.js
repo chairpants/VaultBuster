@@ -8899,14 +8899,42 @@ function decorDraw() {
     for (const [x, z, ry] of [[WALL_L + 0.11, 0.21, 0], [STORE.x - 0.11, 0.21, Math.PI / 2], [WALL_L + 0.11, STORE.z - 0.15, -Math.PI / 2], [STORE.x - 0.11, STORE.z - 0.15, Math.PI]]) {
       const w = add(new THREE.PlaneGeometry(0.9, 0.9), web, x, STORE.h - 0.02, z); w.rotation.set(Math.PI / 2, 0, ry); w.geometry.translate(0.45, -0.45, 0);   // across the corner, up at the ceiling
     }
-    const face = canvasMat(128, 128, (g) => { g.fillStyle = "#ffcf3a"; for (const [x, y] of [[40, 50], [88, 50]]) { g.beginPath(); g.moveTo(x - 12, y + 10); g.lineTo(x + 12, y + 10); g.lineTo(x, y - 10); g.fill(); }
-      g.beginPath(); g.moveTo(30, 80); for (let i = 0; i <= 8; i++) g.lineTo(30 + i * 8.5, 80 + (i % 2 ? 14 : 0)); g.lineTo(98, 96); g.lineTo(30, 96); g.fill(); }, { transparent: true });
-    for (const [x, z, s] of [[-1.62, 0.5, 1], [1.62, 0.5, 0.85], [1.62, 0.95, 0.6]]) {   // either side of the doors, lit from inside at night
-      const p = new THREE.Group(); p.position.set(x, 0, z); p.scale.setScalar(s); G.add(p);
-      const body = add(new THREE.SphereGeometry(0.2, 14, 10), lam(0xe8741a), 0, 0.17, 0, p); body.scale.y = 0.82;
-      add(new THREE.CylinderGeometry(0.02, 0.025, 0.08, 6), lam(0x4a6a1e), 0, 0.36, 0, p);
-      glow(add(new THREE.PlaneGeometry(0.26, 0.26), new THREE.MeshBasicMaterial({ map: face.map, transparent: true, color: 0xffb030 }), 0, 0.17, 0.205, p));
-      decor.cols.push({ x0: x - 0.2 * s, x1: x + 0.2 * s, z0: z - 0.2 * s, z1: z + 0.2 * s, y1: 0.35 * s }); colliders.push(decor.cols.at(-1));
+    // jack-o'-lanterns on the counter's lane-side ledge, first thing you see coming in: ribbed and squat, a crooked
+    // stem and a curl of vine, the lid cut round the stem, the faces carved through with candlelight showing in them
+    const R = 0.12, ribbed = geo => {             // ten lobes with creases between, dimpled top and bottom
+      const p = geo.attributes.position, v = new THREE.Vector3();
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i); const a = Math.atan2(v.z, v.x), k = 1 - 0.09 * (1 - Math.abs(Math.cos(a * 5))) ** 3, h = v.y / R;
+        p.setXYZ(i, v.x * k, v.y * 0.78 - 0.035 * R * (1 - h * h) ** 8 * Math.sign(h), v.z * k);
+      }
+      geo.computeVertexNormals(); return geo;
+    };
+    const skin = canvasMat(256, 128, (g, w, h) => {   // orange with darker crease lines and a few blemishes; the lid cut ringing the top
+      g.fillStyle = "#e5711a"; g.fillRect(0, 0, w, h);
+      for (let i = 0; i < 10; i++) { const gr = g.createLinearGradient(i * w / 10, 0, (i + 1) * w / 10, 0); gr.addColorStop(0, "#f08a2a"); gr.addColorStop(0.4, "#de701a"); gr.addColorStop(0.5, "#a8480c"); gr.addColorStop(0.6, "#de701a"); gr.addColorStop(1, "#f08a2a"); g.fillStyle = gr; g.fillRect(i * w / 10, 0, w / 10, h); }
+      g.fillStyle = "rgba(120,80,20,0.25)"; for (let i = 0; i < 14; i++) { g.beginPath(); g.arc((i * 73) % w, 30 + (i * 37) % 80, 1 + i % 3, 0, 7); g.fill(); }
+      g.fillStyle = "#4a2408"; g.fillRect(0, 12, w, 2);
+    }, { transparent: false, alphaTest: 0 });
+    const cut = g => { g.fill(); g.stroke(); };     // what's carved: the lit flesh inside, a dark rind edge round it
+    const faces = [
+      g => { for (const x of [42, 86]) { g.beginPath(); g.moveTo(x - 14, 60); g.lineTo(x + 14, 60); g.lineTo(x, 36); cut(g); }
+        g.beginPath(); g.moveTo(58, 72); g.lineTo(70, 72); g.lineTo(64, 62); cut(g);
+        g.beginPath(); g.moveTo(26, 82); for (let i = 0; i <= 8; i++) g.lineTo(26 + i * 9.5, 82 + (i % 2 ? 0 : 6) + Math.sin(i / 8 * Math.PI) * 14); g.lineTo(102, 82); g.quadraticCurveTo(64, 120, 26, 82); cut(g); },
+      g => { for (const x of [42, 86]) { g.beginPath(); g.ellipse(x, 50, 11, 14, 0, 0, 7); cut(g); }
+        g.beginPath(); g.ellipse(64, 92, 14, 17, 0, 0, 7); cut(g); },
+      g => { for (const [x, s] of [[42, -1], [86, 1]]) { g.beginPath(); g.moveTo(x - 14, 46 + s * 6); g.lineTo(x + 14, 46 - s * 6); g.lineTo(x, 62); cut(g); }
+        g.beginPath(); g.moveTo(24, 78); g.quadraticCurveTo(64, 126, 104, 78); g.quadraticCurveTo(64, 100, 24, 78); cut(g); g.clearRect(56, 84, 10, 12); g.clearRect(74, 80, 9, 10); },
+    ];
+    const vine = new THREE.MeshLambertMaterial({ color: 0x5a6a24 }), stemMat = new THREE.MeshLambertMaterial({ color: 0x6a5a2a });
+    for (const [z, s, f] of [[0.38, 1, 0], [0.7, 0.82, 2], [0.98, 0.68, 1]]) {   // on the ledge, x ~ -1.93; turned toward the doors
+      const x = -1.93, p = new THREE.Group(); p.position.set(x, 1.25, z); p.rotation.y = Math.atan2(0 - x, 1.4 - z) + (f - 1) * 0.15; p.scale.setScalar(s); G.add(p);
+      add(ribbed(new THREE.SphereGeometry(R, 40, 20)), skin, 0, R * 0.78, 0, p);
+      const face = canvasMat(128, 128, g => { const gr = g.createRadialGradient(64, 70, 6, 64, 70, 70); gr.addColorStop(0, "#fff2a8"); gr.addColorStop(1, "#ff8a1a"); g.fillStyle = gr; g.strokeStyle = "#5a2a08"; g.lineWidth = 5; g.lineJoin = "round"; faces[f](g); });
+      const lit = new THREE.MeshBasicMaterial({ map: face.map, transparent: true, alphaTest: 0.05, color: 0xffb030 });
+      glow(add(ribbed(new THREE.SphereGeometry(R * 1.01, 24, 16, Math.PI * 0.2, Math.PI * 0.6, Math.PI * 0.22, Math.PI * 0.5)), lit, 0, R * 0.78, 0, p));   // the front of the rind, facing local +z
+      const stem = add(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0.05, 0), new THREE.Vector3(0.02, 0.07, 0.015)), 6, 0.013, 6), stemMat, 0, R * 1.5, 0, p);
+      stem.rotation.y = f * 2;
+      add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([[0.01, 0], [0.04, 0.01], [0.06, -0.01], [0.05, -0.03], [0.035, -0.02]].map(([a, b]) => new THREE.Vector3(a, R * 0.02 + b * 0.3, b))), 16, 0.0035, 4), vine, 0, R * 1.52, 0, p).rotation.y = f * 2 + 1;
     }
   }
   if (key === "fall") {
