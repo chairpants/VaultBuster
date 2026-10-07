@@ -4983,7 +4983,8 @@ const wxFall = (() => {                           // the rain (streaks) and the 
     fragmentShader: `uniform float uK, uNight; varying float vS; void main() { vec2 d = gl_PointCoord - 0.5; float a = smoothstep(0.5, 0.2, length(d)); gl_FragColor = vec4(vec3(1.0) * (1.0 - 0.5 * uNight), a * 0.85 * uK); }` });
   const rain = new THREE.LineSegments(mk(4500, true), rainMat(box(...FAR))), rainNear = new THREE.LineSegments(mk(16000, true), rainMat(box(...NEAR)));
   const snow = new THREE.Points(mk(3500, false), snowMat(box(...FAR))), snowNear = new THREE.Points(mk(9000, false), snowMat(box(...NEAR)));
-  for (const o of [rain, rainNear, snow, snowNear]) { o.layers.set(EXTERIOR_LAYER); o.frustumCulled = false; o.visible = false; scene.add(o); }
+  for (const o of [rain, rainNear, snow, snowNear]) { o.layers.set(EXTERIOR_LAYER); o.frustumCulled = false; o.renderOrder = -1; o.visible = false;   // (-1: always drawn before the storefront glass, which writes depth; sorted by their origin they lost to it looking along the windows)
+    scene.add(o); }
   return { rain, rainNear, snow, snowNear, uni };
 })();
 const wxGlass = (() => {                          // rain on the outside of the storefront glass (either side of the doors):
