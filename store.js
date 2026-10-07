@@ -5016,6 +5016,21 @@ const wxGlass = (() => {                          // drops on the outside of the
   }
   return { m, t };
 })();
+// ponytail: temporary weather test kit; delete this block, its two key hooks (WX_KIT) and the bar goes with it.
+// A bar of weathers over the inventory: with nothing in your hands, 1-5 picks one and E sets it for the rest of the day,
+// straight to full (the ground already soaked / snowed over, as it would be a few hours in)
+const WX_KIT = [["☀️", "Clear", "clear", 0, 0, 0], ["🌦️", "Drizzle", "rain", 0.3, 0.6, 0], ["🌧️", "Downpour", "rain", 1, 1, 0], ["🌨️", "Flurries", "snow", 0.3, 0.2, 0.3], ["❄️", "Blizzard", "snow", 1, 0, 1]];
+const wxKit = { sel: -1, el: document.body.appendChild(Object.assign(document.createElement("div"), { style: "position:fixed;z-index:11;left:50%;bottom:84px;transform:translateX(-50%);display:flex;gap:6px;pointer-events:none" })) };
+function wxKitRender() {
+  wxKit.el.innerHTML = WX_KIT.map(([icon, name], i) => `<div style="width:66px;height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#00000060;border:3px solid ${i === wxKit.sel ? "var(--bb-yellow)" : "#ffffff40"};border-radius:4px;transform:translateY(${i === wxKit.sel ? -4 : 0}px);font:bold 10px Arial;color:#fff"><span style="font-size:24px">${icon}</span>${i + 1} ${name}</div>`).join("");
+}
+function wxKitSelect(i) { wxKit.sel = wxKit.sel === i ? -1 : i; wxKitRender(); }
+function wxKitUse() {
+  const [, name, kind, k, wet, cover] = WX_KIT[wxKit.sel];
+  WX.plan = { day: shift.day, kind, from: 0, to: 25, k }; Object.assign(WX, { kind: kind === "clear" ? WX.kind : kind, k, wet, cover });
+  toast(`Weather: ${name}`, true);
+}
+wxKitRender();
 function weatherTick(dt) {
   const plan = wxPlan(), h = shift.h, ramp = 0.4;
   const want = plan.kind === "clear" ? 0 : plan.k * Math.max(0, Math.min(1, (h - plan.from) / ramp, (plan.to - h) / ramp));
@@ -5310,6 +5325,7 @@ addEventListener("keydown", e => {
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat && cmove.item) { /* carrying one: click sets it down */ }
+  else if (e.code === "KeyE" && !e.repeat && wxKit.sel >= 0 && !inv.length) wxKitUse();   // (WX_KIT: temporary)
   else if (e.code === "KeyE" && !e.repeat) {
     if (aimMove && !seated && !onStool && !cutout.carried && !stool.carried && !boxCarry.length) { eHoldMove = aimMove; eHoldTimer = setTimeout(() => { eHoldTimer = null; const it = eHoldMove; eHoldMove = null; if (it) moveStart(it); }, HOLD_MS); }   // a tap does its usual thing (on release); a hold picks it up
     else if (aimPostit && !postitHeld) { eHoldPostit = aimPostit; eHoldTimer = setTimeout(() => { eHoldTimer = null; const n = eHoldPostit; eHoldPostit = null; if (n) postitPickUp(n); }, HOLD_MS); }   // a tap calls them; a hold peels it off
@@ -5324,6 +5340,7 @@ addEventListener("keydown", e => {
   }
   if (catchCall && /^Digit[1-5]$/.test(e.code)) catchDecide(+e.code[5]);   // deciding what happens to a shoplifter
   else if (phone.call && /^Digit[12]$/.test(e.code)) callAnswer(+e.code[5]);   // on the phone
+  else if (!inv.length && /^Digit[1-5]$/.test(e.code)) wxKitSelect(+e.code[5] - 1);   // (WX_KIT: temporary)
   else if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
