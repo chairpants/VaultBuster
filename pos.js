@@ -15,6 +15,7 @@
 //   replace(copy),      a replacement for a lost copy arrived: store.js puts it in the returns bin
 //   lose(copy),         a rental billed as lost: it's never coming back (off the rented list, on the lost one)
 //   promised(member),   an overdue member said on the phone they'll bring it in
+//   callNote(member),   an overdue call looked up: a post-it for the store phone (the call's made from there)
 //   savedMessages,      the message center's notes from last visit: [{ at, text, read }]
 //   returnBin(), held(), playing(),   live store state, read on demand
 //   alarm(), silenceAlarm(),          security gate alarm: is it going off / shut it up
@@ -124,31 +125,26 @@ window.createPOS = function createPOS(api) {
 
   // ---- the message center: the store's notes (missed calls and the like, left by store.js with message())
   // and the calls somebody has to make: anyone with a tape CALL_DAYS late gets one until they've promised to
-  // bring it in. Call from here: they pick up and promise (m.promise: store.js sends them in), or it's the
-  // machine (try again tomorrow). Still nothing after two tries and LOST_DAYS: bill the tapes as lost ----
+  // bring it in. Looking one up here writes a post-it for the store phone (api.callNote); the call's made from
+  // there, and store.js puts what came of it on their record (recordCall). Still nothing after two tries and
+  // LOST_DAYS: bill the tapes as lost ----
   const CALL_DAYS = 5, LOST_DAYS = 14;
   const notes = (api.savedMessages || []).slice(-40);
   const lateOf = c => c.rentals.filter(r => daysLate(r) >= CALL_DAYS);
   const toCall = () => customers.filter(c => lateOf(c).length && !(c.promise >= +TODAY - 2 * DAY))   // (a promise not kept in two days: back on the list)
     .sort((a, b) => Math.max(...lateOf(b).map(daysLate)) - Math.max(...lateOf(a).map(daysLate)));
   const inboxCount = () => toCall().filter(c => c.lastCall !== +TODAY).length + notes.filter(n => !n.read).length;
-  const EXCUSE_NOTE = ["SAYS IT'S IN THE CAR. WILL DROP IT OFF.", "THOUGHT THEY RETURNED IT. WILL LOOK.", "APOLOGIZED. BRINGING IT IN.", "KID HID IT IN THE TOY BOX. ON THE WAY."];
   function callScreen(c) {
-    return { title: `OVERDUE CALL - ${up(fullName(c))} #${c.num}`, prompt: "C TO CALL, L TO BILL AS LOST, ESC", lines: () => {
+    return { title: `OVERDUE CALL - ${up(fullName(c))} #${c.num}`, prompt: "L TO BILL AS LOST, ESC", lines: () => {
       const late = lateOf(c), worst = late.length ? Math.max(...late.map(daysLate)) : 0;
       return ["", ` MEMBER...: ${up(fullName(c))}  #${c.num}`, ` PHONE....: ${c.phone}`, ` LOYALTY..: ${c.loyalty > 30 ? "REGULAR" : c.loyalty < -30 ? "UNHAPPY" : "OK"}`, "",
         " OVERDUE:", ...late.map(r => `   ${L(up(r.copy.title), 44)} ${R(daysLate(r) + " DAYS", 8)}  ${R(money(lateFee(r)), 8)}`), "",
-        ` CALLS....: ${c.calls || 0}${c.lastCall ? `  (LAST ${fmtD(new Date(c.lastCall))})` : ""}`,
+        ` CALLS....: ${c.calls || 0}${c.lastCall ? `  (LAST ${fmtD(new Date(c.lastCall))})` : ""}`, ...(c.lastResult ? [` LAST CALL: ${c.lastResult}`] : []),
+        c.lastCall === +TODAY ? " CALLED TODAY. TRY AGAIN TOMORROW." : " A POST-IT'S BY THE STORE PHONE: CALL THEM FROM THERE.",
         ...(c.promise ? [` PROMISED.: ${fmtD(new Date(c.promise))} - NOT IN YET`] : []), "",
         worst >= LOST_DAYS && (c.calls || 0) >= 2 ? " L: BILL THE TAPES AS LOST (REPLACEMENT COST GOES ON THEIR ACCOUNT)" : ` (BILL AS LOST: AFTER ${LOST_DAYS} DAYS AND 2 CALLS)`];
     }, submit(v) {
-      if (v === "C") {
-        if (c.lastCall === +TODAY) { msg = "ALREADY CALLED TODAY. TRY TOMORROW."; return draw(); }
-        c.calls = (c.calls || 0) + 1; c.lastCall = +TODAY;
-        if (Math.random() < 0.55 + (c.loyalty || 0) / 250) { c.promise = +TODAY; msg = `THEY PICKED UP. ${EXCUSE_NOTE[Math.floor(Math.random() * EXCUSE_NOTE.length)]}`; api.promised?.(c); }
-        else msg = "NO ANSWER. LEFT A MESSAGE ON THEIR MACHINE.";
-        return draw();
-      }
+      if (v === "C") { msg = "CALLS GO OUT FROM THE STORE PHONE: THE POST-IT'S BY IT."; return draw(); }
       if (v === "L") {
         const late = lateOf(c);
         if (!late.length || Math.max(...late.map(daysLate)) < LOST_DAYS || (c.calls || 0) < 2) { msg = `NOT YET: ${LOST_DAYS} DAYS LATE AND 2 CALLS FIRST.`; return draw(); }
@@ -159,7 +155,7 @@ window.createPOS = function createPOS(api) {
         (c.incidents ||= []).push({ at: +TODAY, what: `BILLED FOR ${late.length} UNRETURNED TAPE${late.length > 1 ? "S" : ""}` });
         delete c.promise; back(); msg = "BILLED AS LOST. REORDER FROM B - REPLACEMENT COPIES."; return draw();
       }
-      msg = "C TO CALL, L TO BILL AS LOST."; draw();
+      msg = "L TO BILL AS LOST. CALL FROM THE STORE PHONE."; draw();
     } };
   }
   function messagesScreen() {
@@ -171,7 +167,7 @@ window.createPOS = function createPOS(api) {
         return ` ${R(n, 3)}  ${L(it.c.lastCall === +TODAY ? "CALLED" : "CALL", 6)} ${L(`${up(fullName(it.c))} #${it.c.num} - ${late.length} TAPE${late.length > 1 ? "S" : ""} ${Math.max(...late.map(daysLate))}D LATE${k ? ` (${k} CALL${k > 1 ? "S" : ""})` : ""}`, 66)}`;
       },
       it => {
-        if (it.c) return go(callScreen(it.c));
+        if (it.c) { api.callNote?.(it.c); return go(callScreen(it.c)); }   // (a post-it goes by the phone)
         it.read = true;
         go({ title: "MESSAGE", prompt: "D TO DELETE, ESC TO RETURN", lines: () => ["", ` ${fmtD(new Date(it.at))}`, "", ` ${it.text}`],
           submit(v) { if (v === "D") { notes.splice(notes.indexOf(it), 1); back(); back(); go(messagesScreen()); } else back(); } });
@@ -856,7 +852,16 @@ window.createPOS = function createPOS(api) {
     setStatus(m, status, days = 0) { m.status = status; m.until = status === "banned" ? +TODAY + days * DAY : 0; },   // "banned" (for days) | "cancelled" | "arrested" | null
     canVisit: m => !["cancelled", "arrested"].includes(m.status) && !(m.status === "banned" && m.until > +TODAY),
     loyal(m, d) { m.loyalty = Math.max(-100, Math.min(100, (m.loyalty || 0) + d)); },   // how they feel about the store: -100..100
-    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null || c.calls || c.promise || c.car !== undefined).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit, calls: c.calls, lastCall: c.lastCall, promise: c.promise, car: c.car }])),
+    recordsAll: () => Object.fromEntries(customers.filter(c => c.incidents || c.status || c.loyalty || c.lastVisit != null || c.calls || c.promise || c.car !== undefined).map(c => [c.num, { incidents: c.incidents, status: c.status, until: c.until, loyalty: c.loyalty, lastVisit: c.lastVisit, calls: c.calls, lastCall: c.lastCall, lastResult: c.lastResult, promise: c.promise, car: c.car }])),
+    // overdue calls, made from the store phone (store.js): who still needs one, and what came of it
+    needsCall: c => lateOf(c).length > 0 && !(c.promise >= +TODAY - 2 * DAY),
+    calledToday: c => c.lastCall === +TODAY,
+    lateSummary: c => { const late = lateOf(c); return late.length ? `${late.length} TAPE${late.length > 1 ? "S" : ""} ${Math.max(...late.map(daysLate))}D LATE` : ""; },
+    recordCall(c, { promise, result }) {
+      c.calls = (c.calls || 0) + 1; c.lastCall = +TODAY; c.lastResult = up(result);
+      if (promise) { c.promise = +TODAY; api.promised?.(c); }
+      if (open && mode === "app") draw();
+    },
     message(text) { notes.push({ at: +TODAY, text: up(text), read: false }); if (notes.length > 40) notes.shift(); draw(); },   // a note in the message center
     inbox: () => inboxCount(),                 // what's waiting there: calls not made today, unread notes
     messagesAll: () => notes,

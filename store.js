@@ -106,6 +106,7 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x1b2b4d, 24, 60);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 120);
 camera.rotation.order = "YXZ";
+const WX = { kind: "clear", k: 0, wet: 0, cover: 0, plan: null, said: null };   // the weather (see "weather"): what's falling, how hard (0..1), how wet the ground is, how much snow's lying
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
 let parkLot = () => {}, passCar = () => {}, carNew = () => null, driveIn = () => null, driveOut = () => {};   // wired up with the exterior: the day's
@@ -1834,12 +1835,57 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const chrome = new THREE.MeshPhongMaterial({ color: 0xc8ccd2, specular: 0xffffff, shininess: 100 });
   const tailLampM = new THREE.MeshPhongMaterial({ color: 0x9a1616, specular: 0x552222, shininess: 60 });
   const headLampM = new THREE.MeshPhongMaterial({ color: 0xe8e4cc, specular: 0xffffff, shininess: 80 });
-  const litHead = new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), litTail = new THREE.MeshBasicMaterial({ color: 0xff2a1a });
+  const revLampM = new THREE.MeshPhongMaterial({ color: 0xdcdcd6, specular: 0xffffff, shininess: 80 });
+  const litHead = new THREE.MeshBasicMaterial({ color: 0xfff4c8 }), litRev = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const dimTail = new THREE.MeshBasicMaterial({ color: 0x8c140e }), brakeTail = new THREE.MeshBasicMaterial({ color: 0xff3a24 });
+  // the lamps: head (on at night), tail (0 off, 1 the dim running lights at night, 2 the brake lights), rev (in reverse).
+  // Only what's set changes, and what's lit up bright glows (the bloom layer); the dim tail lights don't
+  const LAMP_MAT = { head: [headLampM, litHead], tail: [tailLampM, dimTail, brakeTail], rev: [revLampM, litRev] };
+  // ...and the light they throw on the ground at night: not real lights (every lit pixel in the store would pay for
+  // each one, and switching them on and off rebuilds shaders), but light painted onto the pavement, additively, on a
+  // plane under the car: the headlights' cones out ahead, a red wash behind on the brakes (a faint one from the
+  // running lights), white behind in reverse. Anything standing on it still hides it (it's drawn depth-tested)
+  const poolTex = (w, h, f) => {                   // f(u along, v across -1..1) -> 0..1
+    const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"), img = g.createImageData(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const a = Math.max(0, Math.min(1, f((x + 0.5) / w, ((y + 0.5) / h) * 2 - 1))) * 255, i = (y * w + x) * 4; img.data[i] = img.data[i + 1] = img.data[i + 2] = a; img.data[i + 3] = 255; }
+    g.putImageData(img, 0, 0); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  };
+  const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const HEAD_POOL = { len: 11, w: 7 };             // out ahead of the bumper, and how wide the cones get
+  const headTex = poolTex(256, 128, (u, v) => {    // two cones, one per lamp, spreading and fading with distance
+    const d = u * HEAD_POOL.len, half = HEAD_POOL.w / 2;
+    let a = 0;
+    for (const lx of [-0.62, 0.62]) {              // each lamp's center, in meters across
+      const c = lx * (1 + d * 0.08), spread = 0.35 + d * 0.27, x = v * half - c;
+      a += (1 - sstep(spread * 0.55, spread, Math.abs(x)));
+    }
+    const near = sstep(0, 0.8, d), fall = 1 / (1 + (d / 4.5) ** 2), hot = 0.35 * Math.exp(-(((d - 3) / 2) ** 2));
+    return Math.min(1, a) * near * (fall + hot) * (1 - sstep(0.85, 1, u));
+  });
+  const rearTex = poolTex(128, 128, (u, v) => {    // a wash spreading back from the bumper (u: 0 at it)
+    const r = Math.hypot(u * 1.15, v * 0.75);
+    return (1 - sstep(0.15, 1, r)) * sstep(0, 0.12, u);
+  });
+  const poolM = (map, color, opacity) => new THREE.MeshBasicMaterial({ map, color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, fog: false });
+  const POOL_MAT = { head: poolM(headTex, 0xffefc2, 0.75), brake: poolM(rearTex, 0xff1c0c, 0.85), tail: poolM(rearTex, 0xff1c0c, 0.18), rev: poolM(rearTex, 0xfff6ea, 0.6) };
+  const lampSet = (g, { head = false, tail = 0, rev = false }) => {
+    const dark = night(), key = `${+head}${tail}${+rev}${+dark}`; if (g.userData.lampKey === key) return; g.userData.lampKey = key;
+    g.traverse(m => {
+      const p = m.userData.pool;
+      if (p === "head") m.visible = dark && head;
+      else if (p === "rear") { m.visible = dark && tail > 0; m.material = tail === 2 ? POOL_MAT.brake : POOL_MAT.tail; }
+      else if (p === "rev") m.visible = dark && rev;
+      const k = m.userData.lamp; if (!k) return;
+      const v = k === "head" ? +head : k === "tail" ? tail : +rev; m.material = LAMP_MAT[k][v];
+      if (k === "tail" ? v === 2 : v) m.layers.enable(BLOOM_LAYER); else m.layers.disable(BLOOM_LAYER);
+    });
+  };
+  const night = () => wasDay === false;
+  const running = () => ({ head: night(), tail: night() ? 1 : 0 });   // just driving along
   const BEV = 0.04, BEVT = 0.06, YB = 0.25, ARCH = 0.5, TIRE = 0.33;
   const car = (x, z, yaw, s) => {
     const { L, W, color, noseY, hoodY, cowlX, wsTopX, roofY, rTopX, rBotX, rBotY, rearY, wheels } = s;
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g);
-    const headLamp = s.lit ? litHead : headLampM, tailLamp = s.lit ? litTail : tailLampM;   // (lit: driving at night)
     const part = (geo, m, px, py, pz) => {
       const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
     };
@@ -1906,8 +1952,9 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     part(new THREE.BoxGeometry(0.02, 0.14, W * 0.42), carTrim, L / 2 + 0.075, noseY - 0.15, 0);                       // grille
     const tailY = (s.bedTop ?? rearY) - 0.14;
     for (const sz of [-1, 1]) {
-      part(new THREE.BoxGeometry(0.04, 0.11, 0.3), headLamp, L / 2 + 0.07, noseY - 0.1, sz * (W / 2 - 0.3)).userData.lamp = "head";
-      part(new THREE.BoxGeometry(0.04, 0.12, 0.34), tailLamp, -L / 2 - 0.07, tailY, sz * (W / 2 - 0.26)).userData.lamp = "tail";
+      part(new THREE.BoxGeometry(0.04, 0.11, 0.3), headLampM, L / 2 + 0.07, noseY - 0.1, sz * (W / 2 - 0.3)).userData.lamp = "head";
+      part(new THREE.BoxGeometry(0.04, 0.12, 0.34), tailLampM, -L / 2 - 0.07, tailY, sz * (W / 2 - 0.26)).userData.lamp = "tail";
+      part(new THREE.BoxGeometry(0.04, 0.08, 0.12), revLampM, -L / 2 - 0.07, tailY - 0.01, sz * (W / 2 - 0.51)).userData.lamp = "rev";   // reverse lamp, inboard of the tail light
       part(new THREE.BoxGeometry(0.12, 0.08, 0.1), paint, cowlX - 0.12, hoodY + 0.1, sz * (W / 2 + 0.05));            // mirrors
       for (const wx of wheels) {
         const tire = part(new THREE.CylinderGeometry(TIRE, TIRE, 0.24, 18), carTire, wx, TIRE, sz * (W / 2 - 0.13));
@@ -1916,6 +1963,13 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
         hub.rotation.x = Math.PI / 2;
       }
     }
+    const pool = (kind, len, w, x, mat) => {       // a light pool on the pavement (local +x = the nose)
+      const geo = new THREE.PlaneGeometry(len, w); geo.rotateX(-Math.PI / 2); if (x < 0) geo.rotateY(Math.PI);   // (behind: u runs back from the bumper)
+      const p = part(geo, mat, x, 0.02, 0); p.userData.pool = kind; p.visible = false; return p;   // (no renderOrder: sorted with the other see-through things, so it's drawn before the storefront glass, which writes depth)
+    };
+    pool("head", HEAD_POOL.len, HEAD_POOL.w, L / 2 + 0.1 + HEAD_POOL.len / 2, POOL_MAT.head);
+    pool("rear", 3.4, W + 2.2, -(L / 2 + 0.1 + 3.4 / 2), POOL_MAT.tail);
+    pool("rev", 2.6, W + 1.2, -(L / 2 + 0.1 + 2.6 / 2), POOL_MAT.rev);
     return g;
   };
   const STYLES = [
@@ -1971,7 +2025,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   // Right-hand traffic: eastbound in the lane nearer the store
   const movers = [], ROAD_END = 35, laneZ = dir => dir > 0 ? -10.8 : -12.8;
   const roadPass = (look, dir, v, then) => {
-    const g = car(-dir * ROAD_END, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c, lit: wasDay === false });
+    const g = car(-dir * ROAD_END, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c }); lampSet(g, running());
     movers.push({ g, vx: dir * v, end: dir * ROAD_END, then });
   };
   carNew = () => ({ s: Math.floor(Math.random() * STYLES.length), c: PAINT[Math.floor(Math.random() * PAINT.length)] });
@@ -1980,42 +2034,59 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   // way and nosed into a free stall; they get out. Leaving, it backs out, heads off down the aisle, and goes
   // by on the road the other way. The turns follow a curve, the car pointing along it (backwards, backing out)
   const AISLE_Z = -3.6, PARK_Z = stallZ + 0.15, lotCars = [];
-  const lampsOn = (g, on) => g.traverse(m => { if (m.userData.lamp) m.material = on ? (m.userData.lamp === "head" ? litHead : litTail) : (m.userData.lamp === "head" ? headLampM : tailLampM); });
   const bez = (a, b, c, t) => [(1 - t) ** 2 * a[0] + 2 * t * (1 - t) * b[0] + t * t * c[0], (1 - t) ** 2 * a[1] + 2 * t * (1 - t) * b[1] + t * t * c[1]];
-  driveIn = (look, onParked) => {                  // -> the car (where to get out: car.door), or null: no free stall
+  driveIn = (look, onParked, near) => {            // -> the car (where to get out: car.door), or null: no free stall. near: an x to park close to (next door's customers)
     const taken = new Set([...parked.map(g => g.userData.stall), ...lotCars.map(c => c.stall)]);
-    const free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k) && !taken.has(k)); if (!free.length) return null;
+    let free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k) && !taken.has(k)); if (!free.length) return null;
+    if (near != null) { free.sort((a, b) => Math.abs(stallX(a) - near) - Math.abs(stallX(b) - near)); free = free.slice(0, 3); }
     const k = free[Math.floor(Math.random() * free.length)], sx = stallX(k), dir = Math.random() < 0.5 ? 1 : -1;   // dir: which way it comes by on the road (then back the other way down the aisle)
     const c = { look, stall: k, sx, dir, phase: "road", t: 0, g: null, onParked, door: { x: sx - 1.2, z: PARK_Z } };   // the driver's side: west, nosed in toward the road
     lotCars.push(c);
     window.VaultAmbience?.drive?.(dir, 13);
     roadPass(look, dir, 13, () => {                 // off past the end of the road: now back up the aisle
       if (c.phase === "gone") return;
-      c.g = car(dir * 32, AISLE_Z, 0, { ...STYLES[look.s], color: look.c, lit: wasDay === false }); c.phase = "aisle";
+      c.g = car(dir * 32, AISLE_Z, 0, { ...STYLES[look.s], color: look.c }); c.phase = "aisle";
     });
     return c;
   };
   driveOut = c => {                                 // in and gone (or never got parked: just gone)
     if (c.phase !== "parked") { c.g?.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone"; return; }
-    c.phase = "backOut"; c.t = 0; c.e = Math.sign(c.sx) || 1; lampsOn(c.g, wasDay === false);   // out the nearer end of the lot
+    c.phase = "startUp"; c.t = 0; c.e = Math.sign(c.sx) || 1;   // started up, foot on the brake, into reverse; then out the nearer end of the lot
   };
   const steer = (c, x, z, back) => {                // put it at x/z, pointing the way it's going (backwards: the other way)
     const p = c.g.position, dx = x - p.x, dz = z - p.z;
     if (dx * dx + dz * dz > 1e-8) c.g.rotation.y = back ? Math.atan2(dz, -dx) : Math.atan2(-dz, dx);   // (the nose is the car's local +x)
     p.x = x; p.z = z;
   };
+  // the lamps follow the driving: brakes on slowing for the turn in and held a moment once it's stopped, then all
+  // off; leaving, started up on the brake and into reverse (the reverse lamps), braking to a stop at the end of
+  // backing out, then into drive and away. Headlights and the dim tail lights whenever it's moving at night
   const lotTick = dt => {
+    for (const g of movers) lampSet(g.g, running());   // (night can fall while one's going by)
+    for (const c of lotCars) if (c.phase === "parked" && c.idling) lampSet(c.g, running());
     for (const c of [...lotCars]) {
       if (c.phase === "aisle") {                     // up the aisle toward the stall, the turn in starts 3m short of it
-        const x = c.g.position.x - c.dir * 6 * dt;
-        if ((x - (c.sx + c.dir * 3)) * c.dir <= 0) { c.phase = "turnIn"; c.t = 0; } else steer(c, x, AISLE_Z);
+        const x = c.g.position.x - c.dir * 6 * dt, left = (x - (c.sx + c.dir * 3)) * c.dir;
+        lampSet(c.g, { ...running(), tail: left < 2.5 ? 2 : running().tail });   // slowing for it
+        if (left <= 0) { c.phase = "turnIn"; c.t = 0; } else steer(c, x, AISLE_Z);
       } else if (c.phase === "turnIn") {
         c.t = Math.min(1, c.t + dt / 1.8); const [x, z] = bez([c.sx + c.dir * 3, AISLE_Z], [c.sx, AISLE_Z], [c.sx, PARK_Z], 1 - (1 - c.t) ** 2); steer(c, x, z);
-        if (c.t >= 1) { c.phase = "parked"; lampsOn(c.g, false); c.onParked?.(c); }
+        lampSet(c.g, { head: night(), tail: 2 });
+        if (c.t >= 1) { c.phase = "stopped"; c.t = 0; }
+      } else if (c.phase === "stopped") {            // in the stall, foot still on the brake; then into park and off
+        if ((c.t += dt) >= 0.9) { c.phase = "parked"; lampSet(c.g, c.idling ? running() : {}); c.onParked?.(c); }   // (idling: somebody waits in it, engine running, lights on)
+      } else if (c.phase === "startUp") {            // started, on the brake; into reverse
+        c.t += dt; lampSet(c.g, { head: night(), tail: 2, rev: c.t > 0.6 });
+        if (c.t >= 1.2) { c.phase = "backOut"; c.t = 0; }
       } else if (c.phase === "backOut") {
         c.t = Math.min(1, c.t + dt / 2.2); const [x, z] = bez([c.sx, PARK_Z], [c.sx, AISLE_Z], [c.sx - c.e * 2.5, AISLE_Z], c.t * c.t * (3 - 2 * c.t)); steer(c, x, z, true);
-        if (c.t >= 1) c.phase = "aisleOut";
+        lampSet(c.g, { head: night(), tail: c.t > 0.7 ? 2 : running().tail, rev: true });   // (easing to a stop at the end: on the brake)
+        if (c.t >= 1) { c.phase = "shift"; c.t = 0; }
+      } else if (c.phase === "shift") {              // stopped in the aisle, on the brake, out of reverse and into drive
+        c.t += dt; lampSet(c.g, { head: night(), tail: 2, rev: c.t < 0.35 });
+        if (c.t >= 0.6) c.phase = "aisleOut";
       } else if (c.phase === "aisleOut") {
+        lampSet(c.g, running());
         steer(c, c.g.position.x + c.e * 6 * dt, AISLE_Z);
         if (Math.abs(c.g.position.x) > 32) {          // off the end of the lot: by on the road, the other way
           c.g.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone";
@@ -2359,6 +2430,18 @@ const GATE_Z = 4.0;                           // security gate line across the e
     cord.rotation.y = 0.55;
     pos.traverse(o => { if (o.isMesh) { o.userData.pos = true; aimables.push(o); } });   // E anywhere on it logs in
   }
+  // a pad of post-its and a pen, past the keyboard's right end: an overdue call looked up on the register gets
+  // written on one and stuck by the phone (see post-its)
+  {
+    const g = new THREE.Group(); g.position.set(-5.145, TOP, 3.77); g.rotation.y = 0.12; scene.add(g); COUNTER.groups.notepad = g;
+    const edge = new THREE.MeshLambertMaterial({ color: 0xeed65a }), top = new THREE.MeshLambertMaterial({ color: 0xffea6e });
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.076, 0.014, 0.076), [edge, edge, top, edge, edge, edge]); pad.position.y = 0.007; g.add(pad);
+    const pen = new THREE.Group(); pen.position.set(-0.06, 0.0045, 0.012); pen.rotation.y = Math.PI / 2 - 0.1; g.add(pen);   // (down the pad's left side, clear of the keyboard)
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.11, 10).rotateZ(Math.PI / 2), new THREE.MeshPhongMaterial({ color: 0x1d3f9e, shininess: 60 })); pen.add(barrel);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.035, 10).rotateZ(Math.PI / 2), new THREE.MeshPhongMaterial({ color: 0x15161a, shininess: 60 })); cap.position.x = 0.065; pen.add(cap);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.0045, 0.014, 10).rotateZ(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0xd8d8dc })); tip.position.x = -0.062; pen.add(tip);
+    g.traverse(o => { if (o.isMesh) { o.userData.notepad = true; aimables.push(o); } });
+  }
   // tape rewinders, a pair on the lane counter either side of the returns tote (placed below, once RZ is known).
   // The machine (rw.g: where it sits, what you aim at and move) wears a model: a plain black box to start; the
   // classic little sports car once they're high-speed (rewinderKit.model swaps it, see amenities). Either way a
@@ -2624,11 +2707,20 @@ const GATE_Z = 4.0;                           // security gate line across the e
     };
     put(new THREE.TubeGeometry(coil, 520, 0.0018, 5), beigeP, 0, 0, 0, ph);
     phoneLook = now => {                              // handset off the hook while you're on a call; line 1 flashes while it rings
-      handset.visible = !phone.call;
-      lamps[0].material = phone.call || (phone.ring && now % 1000 < 500) ? lampLit : lampOff;
+      handset.visible = !phone.call && !phone.out;
+      lamps[0].material = phone.call || phone.out || (phone.ring && now % 1000 < 500) ? lampLit : lampOff;
       lamps[5].material = posTerm?.inbox() ? lampMsg : lampOff;   // message waiting: see the register (M)
     };
     ph.traverse(m => { if (m.isMesh) { m.userData.phone = true; aimables.push(m); } });
+    // the staff's own little wastebasket, in the corner between the cabinet and the wall (post-its, receipts, wrappers)
+    {
+      const cx = (WALL_L + bx0) / 2, cz = bz;
+      const can = put(new THREE.LatheGeometry([[0.1, 0], [0.125, 0.34], [0.118, 0.34], [0.094, 0.012], [0.001, 0.012]].map(([r, y]) => new THREE.Vector2(r, y)), 24),
+        new THREE.MeshPhongMaterial({ color: 0x2d3440, specular: 0x333333, shininess: 25, side: THREE.DoubleSide }), cx, 0, cz);
+      const liner = put(new THREE.TorusGeometry(0.123, 0.005, 6, 28), new THREE.MeshLambertMaterial({ color: 0xd8dde2 }), cx, 0.34, cz); liner.rotation.x = Math.PI / 2;
+      trashBins.counter = { id: "counter", name: "counter wastebasket", cap: 8, x: cx, z: cz, rimY: 0.34, r: 0.1, liner: 0xd8dde2, parts: [can, liner], stand: { x: cx + 0.15, z: cz + 0.62, ry: Math.PI } };
+      colliders.push({ x0: cx - 0.13, x1: cx + 0.13, z0: cz - 0.13, z1: cz + 0.13, y1: 0.34 });
+    }
     // stack of brown paper bags
     const kraft = new THREE.MeshLambertMaterial({ color: 0xa8804f });
     for (let i = 0; i < 6; i++) put(new THREE.BoxGeometry(0.3, 0.008, 0.2), kraft, -5.75 + (i % 2) * 0.01, BHt + 0.004 + i * 0.008, bz).rotation.y = Math.PI / 2;   // turned endwise, clear of the job board
@@ -3177,6 +3269,24 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
 // ---------------- posters on the walls ----------------
 const marquee = [];   // flashing bulbs around the posters: { mesh, phases } — one InstancedMesh per poster, a color per bulb
 const bulbTmp = new THREE.Color();
+// which poster goes where changes every week (the same all week): the whole set reshuffled, a couple resting
+let posterDay = null;                             // (the shift's day; before the shift's set up, the saved one)
+const posterWeek = () => Math.floor(((posterDay ?? SAVE?.shift?.day ?? 1) - 1) / 7), posterSpots = [];
+function posterFor(i) {
+  const picks = (window.VAULT_POSTERS || []).map(art => ({ art })), wk = posterWeek();
+  let seed = 4111 + wk * 7741; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const order = picks.map((p, k) => [rnd(), p]).sort((a, b) => a[0] - b[0]).map(e => e[1]);
+  return wk === 0 ? picks[i] || order[i] : order[i % order.length];   // (week one: the original hang)
+}
+function postersSwap() {                          // a new week: down they come, up go this week's
+  posterDay = shift.day;
+  const loader = new THREE.TextureLoader(), wk = posterWeek();
+  for (const pm of posterMats) {
+    if (pm.userData.week === wk) continue; pm.userData.week = wk;
+    const art = posterFor(pm.userData.spot)?.art; if (!art) continue;
+    loader.load(artUrl(art), t => { t.colorSpace = THREE.SRGBColorSpace; pm.map?.dispose(); pm.map = pm.emissiveMap = t; pm.needsUpdate = true; });
+  }
+}
 const posterMats = [];                     // the posters, lit by their own bulbs: a touch always, a lot more when their zone's lights are off
 // the marquee's warm spill on the wall around each poster: one shared soft
 // halo texture, additively blended — a real point light per poster (~21 of
@@ -3207,13 +3317,14 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
   const pts = MARQUEE_PTS;
   function placePoster(tape, x, y, z, ry, i) {  // group faces +z local; wall sits just behind
     if (!tape) return;                       // fewer posters than wall spots: leave the spot bare
-    loader.load(artUrl(tape.art), t => {
+    posterSpots.push(i);
+    loader.load(artUrl(posterFor(i).art), t => {
       t.colorSpace = THREE.SRGBColorSpace;
       const g = new THREE.Group(); g.position.set(x, overWallShelf(x, z) ? 2.85 : y, z); g.rotation.y = ry;   // lifted clear of any wall shelving below it
       const back = new THREE.Mesh(new THREE.BoxGeometry(0.97, 1.39, 0.04), mat.dark);
       back.position.z = -0.027; g.add(back);
       const pm = new THREE.MeshLambertMaterial({ map: t, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: t });
-      pm.userData.zone = lightZoneAt(x, z); posterMats.push(pm);
+      pm.userData.zone = lightZoneAt(x, z); pm.userData.spot = i; pm.userData.week = posterWeek(); posterMats.push(pm);
       g.add(new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.31), pm));
       const bulbs = glow(new THREE.InstancedMesh(bulbGeo, bulbMat, pts.length)), bd = new THREE.Object3D();
       pts.forEach(([px, py], j) => { bd.position.set(px, py, 0.04); bd.updateMatrix(); bulbs.setMatrixAt(j, bd.matrix); bulbs.setColorAt(j, bulbTmp.set(0xffd400)); });
@@ -4828,13 +4939,111 @@ function todTick() {                              // sample the sky for the shif
   let i = 0; while (i < SKY_KEYS.length - 2 && SKY_KEYS[i + 1].h <= h) i++;
   const a = SKY_KEYS[i], b = SKY_KEYS[i + 1], t = Math.min(1, Math.max(0, (h - a.h) / (b.h - a.h))), k = t * t * (3 - 2 * t);
   tod.level = a.level + (b.level - a.level) * k;
-  tod.sky.lerpColors(a.sky, b.sky, k); setSky(tod.sky);
+  tod.sky.lerpColors(a.sky, b.sky, k);
+  if (WX.k > 0) tod.sky.lerp(WX_SKY.setRGB(0.42 * tod.level + 0.07, 0.45 * tod.level + 0.08, 0.5 * tod.level + 0.1), WX.k * 0.8);   // overcast
+  setSky(tod.sky);
   setExteriorDay(tod.level > 0.5);                                   // lamps/lot lights from dusk on
   TVU.uDayC.value.setRGB(...a.glass.map((v, n) => v + (b.glass[n] - v) * k));   // daylight through the glass (linear)
   TVU.uNightC.value.set(0.035, 0.045, 0.08);                        // moonlight + the lot lights through it
   const arc = Math.min(1, Math.max(0, (h - 5.9) / 14.2)) * Math.PI, up = Math.sin(arc);   // the sun: up in the east ~6, across, down in the west ~8
   TVU.uSunDir.value.set(-16 * Math.cos(arc), 3 + 30 * up, -8).normalize();
   TVU.uSunC.value.copy(SUN_C).lerp(SUN_LOW, (1 - up) ** 3);         // warm and low at either end of the day
+  if (WX.k > 0) { TVU.uSunC.value.multiplyScalar(1 - (WX.kind === "snow" ? 0.45 : 0.7) * WX.k); TVU.uDayC.value.multiplyScalar(1 - 0.4 * WX.k); }   // no sun through the clouds, a duller light through the glass
+}
+const WX_SKY = new THREE.Color();
+// ---------------- weather ----------------
+// Each day has its own (worked out from the date, so a reload doesn't change it): mostly clear, sometimes a spell of
+// rain (more in spring and fall, a summer afternoon storm), snow in the winter months. Rain streaks down outside,
+// the lot goes dark and wet (and dries slowly after), drops run down the storefront glass, people come in under
+// umbrellas and track water in by the door (a puddle for the mop), and you hear it on the roof. Snow drifts down
+// and settles on the lot and the grass. It changes the day, too: a wet afternoon is slow, a wet evening's a movie night
+function wxPlan() {
+  if (WX.plan?.day === shift.day) return WX.plan;
+  let seed = 7907 * shift.day + 101; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  rnd(); rnd();
+  const mo = shiftDate().getMonth(), winter = mo === 11 || mo <= 1, summer = mo >= 5 && mo <= 7;
+  const plan = { day: shift.day, kind: "clear", from: 0, to: 0, k: 0 };
+  if (rnd() < (winter ? 0.4 : summer ? 0.25 : 0.33)) {
+    plan.kind = winter && rnd() < 0.65 ? "snow" : "rain";
+    const allDay = rnd() < 0.25;
+    plan.from = allDay ? 0 : summer && plan.kind === "rain" ? 14 + rnd() * 4 : 8 + rnd() * 13;
+    plan.to = allDay ? 25 : plan.from + (summer ? 1 + rnd() * 2 : 2 + rnd() * 6);
+    plan.k = 0.45 + rnd() * 0.55;
+  }
+  return WX.plan = plan;
+}
+const wxRush = () => !WX.k ? 1 : WX.kind === "snow" ? (shift.h < 17 ? 1 - 0.4 * WX.k : 1) : shift.h < 17 ? 1 - 0.3 * WX.k : 1 + 0.25 * WX.k;   // (see rushLevel)
+const WX_GROUND = [[mat.pavement, 0x55595e, 0x2e3237, 1], [mat.road, 0x2b2d31, 0x1b1d20, 0.6], [mat.sidewalk, 0x9a9d9f, 0x6a6e72, 1], [mat.curb, 0xb9bcc0, 0x8c9094, 1], [mat.grass, 0x3f7d3a, 0x2f5f2c, 1]]   // [material, dry, wet, how much snow settles]
+  .map(([m, dry, wet, snow]) => ({ m, dry: new THREE.Color(dry), wet: new THREE.Color(wet), snow }));
+const WX_SNOW = new THREE.Color(0xe6ebf0);
+const wxFall = (() => {                           // the rain (streaks) and the snow (flakes): one buffer each, falling in the shader
+  const X0 = -30, X1 = 38, Z0 = -32, Z1 = -0.45, H = 12;
+  const mk = (n, lines) => {
+    const pos = new Float32Array(n * (lines ? 6 : 3)), end = new Float32Array(n * (lines ? 2 : 1)), seed = new Float32Array(n * (lines ? 2 : 1));
+    for (let i = 0; i < n; i++) {
+      const x = X0 + Math.random() * (X1 - X0), y = Math.random() * H, z = Z0 + Math.random() * (Z1 - Z0), r = Math.random();
+      for (let v = 0; v < (lines ? 2 : 1); v++) { const j = i * (lines ? 2 : 1) + v; pos.set([x, y, z], j * 3); end[j] = v; seed[j] = r; }
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("end", new THREE.BufferAttribute(end, 1)); g.setAttribute("seed", new THREE.BufferAttribute(seed, 1));
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3((X0 + X1) / 2, H / 2, (Z0 + Z1) / 2), 60);
+    return g;
+  };
+  const uni = { uT: { value: 0 }, uK: { value: 0 }, uNight: { value: 0 }, uH: { value: H } };
+  const rain = new THREE.LineSegments(mk(4500, true), new THREE.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false,
+    vertexShader: `attribute float end; attribute float seed; uniform float uT, uH; varying float vE;
+      void main() { vec3 p = position; p.y = mod(position.y - uT * (9.0 + seed * 3.0), uH) + end * 0.45; p.x += end * 0.06; vE = end;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
+    fragmentShader: `uniform float uK, uNight; varying float vE; void main() { gl_FragColor = vec4(vec3(0.78, 0.82, 0.9) * (1.0 - 0.55 * uNight), (0.12 + 0.3 * vE) * uK); }` }));
+  const snow = new THREE.Points(mk(3500, false), new THREE.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false,
+    vertexShader: `attribute float seed; uniform float uT, uH; varying float vS;
+      void main() { vec3 p = position; float t = uT * (0.7 + seed * 0.5); p.y = mod(position.y - t, uH); p.x += sin(t * 0.9 + seed * 40.0) * 0.35; p.z += cos(t * 0.7 + seed * 30.0) * 0.25; vS = seed;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = clamp((2.0 + seed * 3.0) * 40.0 / -mv.z, 1.0, 7.0); gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform float uK, uNight; varying float vS; void main() { vec2 d = gl_PointCoord - 0.5; float a = smoothstep(0.5, 0.2, length(d)); gl_FragColor = vec4(vec3(1.0) * (1.0 - 0.5 * uNight), a * 0.85 * uK); }` }));
+  for (const o of [rain, snow]) { o.layers.set(EXTERIOR_LAYER); o.frustumCulled = false; o.visible = false; scene.add(o); }
+  return { rain, snow, uni };
+})();
+const wxGlass = (() => {                          // drops on the outside of the storefront glass, running down (either side of the doors)
+  const c = document.createElement("canvas"); c.width = 256; c.height = 512; const g = c.getContext("2d");
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * 256, y = Math.random() * 512, r = 1 + Math.random() * 2.6;
+    g.fillStyle = "rgba(220,230,245,0.55)"; g.beginPath(); g.ellipse(x, y, r, r * 1.25, 0, 0, 7); g.fill();
+    g.fillStyle = "rgba(255,255,255,0.8)"; g.fillRect(x - r * 0.4, y - r * 0.6, 1, 1);
+    if (Math.random() < 0.3) { g.strokeStyle = "rgba(220,230,245,0.25)"; g.lineWidth = r * 0.8; g.beginPath(); g.moveTo(x, y - r); g.lineTo(x + (Math.random() - 0.5) * 3, y - r - 20 - Math.random() * 50); g.stroke(); }   // a run
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0, depthWrite: false });
+  for (const [x0, x1] of [[WALL_L + 0.1, -1.95], [1.95, STORE.x - 0.1]]) {
+    const w = x1 - x0, p = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.24), m); p.position.set((x0 + x1) / 2, 1.55, -0.045); scene.add(p);
+    t.repeat.set(w / 1.6, 2.24 / 3.2);
+  }
+  return { m, t };
+})();
+function weatherTick(dt) {
+  const plan = wxPlan(), h = shift.h, ramp = 0.4;
+  const want = plan.kind === "clear" ? 0 : plan.k * Math.max(0, Math.min(1, (h - plan.from) / ramp, (plan.to - h) / ramp));
+  if (WX.kind !== plan.kind && WX.k < 0.02) WX.kind = plan.kind === "clear" ? WX.kind : plan.kind;
+  WX.k += (want - WX.k) * Math.min(1, dt / 6);
+  if (WX.k < 0.001) WX.k = 0;
+  const hrs = dt / SHIFT.hour, raining = WX.kind === "rain" ? WX.k : 0, snowing = WX.kind === "snow" ? WX.k : 0;
+  WX.wet = Math.max(0, Math.min(1, WX.wet + (raining > 0.15 ? hrs * 2.5 : -hrs * 0.25) + (snowing > 0.15 && WX.cover < 0.1 ? hrs * 0.5 : 0)));   // soaks in fast, dries over hours
+  WX.cover = Math.max(0, Math.min(1, WX.cover + (snowing > 0.15 ? hrs * 0.6 * snowing : -hrs * (WX.kind === "rain" ? 0.6 : 0.12))));
+  for (const g of WX_GROUND) g.m.color.copy(g.dry).lerp(g.wet, WX.wet).lerp(WX_SNOW, WX.cover * g.snow * 0.85);
+  const F = wxFall; F.uni.uT.value += dt; F.uni.uK.value = WX.k; F.uni.uNight.value = 1 - tod.level;
+  F.rain.visible = raining > 0.01; F.snow.visible = snowing > 0.01;
+  wxGlass.m.opacity = Math.min(0.9, WX.wet * 0.9) * (WX.kind === "rain" || WX.wet > 0.3 ? 1 : 0); wxGlass.t.offset.y -= dt * 0.015 * raining;
+  const now = WX.k > 0.15 ? WX.kind : "clear";     // what to say about it
+  if (now !== WX.said && WX.said !== null && !(WX.said === "clear" && now === "clear")) logAct(now === "rain" ? "It's started raining" : now === "snow" ? "It's snowing!" : WX.said === "rain" ? "The rain's let up" : "It's stopped snowing");
+  WX.said = now;
+  for (const k of custs) {                         // umbrellas up out front in the rain, down once they're inside
+    if (!k.c || k.kid) continue;
+    const z = k.c.group.position.z, out = z < 0.25 && raining > 0.2;
+    if (out && !k.umb && !k.c.prop) { k.umb = true; k.c.holdProp("umbrella"); }
+    else if (!out && k.umb) { k.umb = false; if (k.c.prop === "umbrella") k.c.holdProp(null); }
+    if (z > 0.9 && !k.tracked && k.state !== "outside") {   // just in the door: dripping, tracking it in
+      k.tracked = true;
+      if ((WX.wet > 0.4 || WX.cover > 0.2) && Math.random() < 0.22) { const p = k.c.group.position; messAdd("puddle", p.x + (Math.random() - 0.5) * 0.8, 1.4 + Math.random() * 1.6); }
+    }
+  }
 }
 function shiftTick(dt) {
   if (shift.report) return;
@@ -5088,7 +5297,7 @@ function dizzyTick(dt) {
 }
 const keys = new Set();
 const HOLD_MS = 450;                       // hold E on the standee to lift it
-let eHoldTimer = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
+let eHoldTimer = null, eHoldPostit = null;                     // hold E on the standee to lift it (a tap does nothing, so it's hard to grab by accident)
 let eHoldStool = false, eHoldLadder = false;   // (the ladder the same: tap climbs, hold picks it up)                    // E went down on the stool: a tap sits on release, a hold picks it up
 let eHoldSwitch = null;                    // E went down on a multi-switch plate: a tap flips this one on release, a hold flips the plate
 addEventListener("keydown", e => {
@@ -5107,6 +5316,7 @@ addEventListener("keydown", e => {
   if (e.code === "KeyE" && !e.repeat && cmove.item) { /* carrying one: click sets it down */ }
   else if (e.code === "KeyE" && !e.repeat) {
     if (aimMove && !seated && !onStool && !cutout.carried && !stool.carried && !boxCarry.length) { eHoldMove = aimMove; eHoldTimer = setTimeout(() => { eHoldTimer = null; const it = eHoldMove; eHoldMove = null; if (it) moveStart(it); }, HOLD_MS); }   // a tap does its usual thing (on release); a hold picks it up
+    else if (aimPostit && !postitHeld) { eHoldPostit = aimPostit; eHoldTimer = setTimeout(() => { eHoldTimer = null; const n = eHoldPostit; eHoldPostit = null; if (n) postitPickUp(n); }, HOLD_MS); }   // a tap calls them; a hold peels it off
     else if (aimCutout) eHoldTimer = setTimeout(() => { eHoldTimer = null; if (aimCutout) cutoutPickUp(); }, HOLD_MS);
     else if (aimLadder && ladder.state === "placed") { eHoldLadder = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldLadder = false; ladderPickUp(); }, HOLD_MS); }
     else if (aimStool && !stool.by) { eHoldStool = true; eHoldTimer = setTimeout(() => { eHoldTimer = null; eHoldStool = false; stoolPickUp(); }, HOLD_MS); }
@@ -5138,6 +5348,7 @@ addEventListener("keyup", e => {
     if (eHoldStool) { eHoldStool = false; stoolSit(); }                  // a tap on the stool: sit
     if (eHoldLadder) { eHoldLadder = false; ladderClimb(); }             // a tap on the ladder: up you go
     if (eHoldMove) { eHoldMove = null; onE(); }                         // a tap on a rewinder / the pad / the printer: its usual thing
+    if (eHoldPostit) { const n = eHoldPostit; eHoldPostit = null; postitCall(n); }   // a tap on a post-it: make the call
   }
 });
 let seatFov = 70;
@@ -5219,6 +5430,7 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
 let aimStool = false;
+let aimPostit = null, aimNotepad = false;          // a post-it by the phone / the pad by the register
 let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null, aimLadder = false, aimLadderHome = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
 // a tape you're only looking at — held up straight off a shelf or out of
@@ -5422,14 +5634,30 @@ const carPath = car => [[car.door.x, car.door.z], [car.door.x, -3.2], OUTSIDE_IN
 function custArriveByCar(cust) {
   const m = cust.member; if (m.car === undefined) m.car = Math.random() < 0.55 ? carNew() : false;
   if (!m.car) return false;
-  const car = driveIn(m.car, car => {             // parked: out they get
-    if (!cust.c) return driveOut(car);
-    const out = cust.outside = carPath(car); cust.c.group.visible = true;
-    cust.c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
+  const car = driveIn(m.car, car => {             // parked: out they all get (the driver's side, then the passengers', the kids' out the back)
+    const riders = [...car.riders].filter(k => k.c);
+    if (!riders.length) { car.riders.clear(); return driveOut(car); }
+    riders.forEach((k, i) => {
+      const door = i === 0 ? car.door : { x: car.sx + 1.2, z: car.door.z + (k.kid ? 0.7 : 0) };   // (east: the passenger side)
+      const out = k.outside = carPath({ door }); k.c.group.visible = true;
+      k.c.group.position.set(out[0][0], 0, out[0][1]); k.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; k.state = "arrive"; k.spot = CUST_DOOR;
+    });
   });
   if (!car) return false;                         // the lot's full: they parked down the street (and walk up)
+  car.riders = new Set([cust]);
+  car.idling = Math.random() < 0.12;              // somebody's waiting in the car with the engine running: they won't be long
   cust.car = car; cust.c.group.visible = false; cust.c.group.position.set(0, 0, -40); cust.state = "drivingIn";
   return true;
+}
+// arriving with someone: in the same car, or up the sidewalk a step behind them
+function custRideWith(cust, lead) {
+  if (lead.car && lead.state === "drivingIn") {
+    lead.car.riders.add(cust); cust.car = lead.car;
+    cust.c.group.visible = false; cust.c.group.position.set(0, 0, -40); cust.state = "drivingIn"; return;
+  }
+  const lp = lead.c.group.position, side = lp.x > 0 ? 1 : -1;   // (a step further out along the sidewalk than them)
+  cust.outside = lead.outside; cust.c.group.position.set(lp.x + side * 0.8, 0, lp.z - 0.35);
+  cust.path = [...lead.path.slice(0, -2).map(([x, z]) => [x, z]), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
 }
 function frontDoorTick(dt) {                      // anyone right at the door: it swings open (the chime rings); then the closer pulls it shut
   const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3);
@@ -5516,6 +5744,7 @@ function rushLevel() {
   if (weekend && h >= 18) r *= 1.35;
   if (d === 2) r *= 1.15;                         // new release Tuesday
   r *= season().rush;                             // a holiday (see the calendar)
+  r *= wxRush();                                  // the weather
   const members = SIM ? (rushLevel.n ??= posTerm.members.filter(m => m.active).length) : 150;   // (simulation: a small member base is a quiet store)
   const easeIn = SIM ? Math.min(1, 0.25 + 0.15 * shift.day) : 1;   // (simulation: a gentle first week, 40% busy on day 1 up to full on day 5)
   return r * repMult() * (0.45 + 0.55 * Math.min(1, members / 150)) * easeIn;
@@ -5524,6 +5753,7 @@ const custMax = () => Math.min(6, Math.round(2 + 2 * rushLevel()));
 const custs = [], custLine = [];
 const custArrivals = { t: 3, lastMember: null };
 const custLikes = (cust, spot) => {               // 0..1: how much of this shelf is their kind of thing
+  if (!spot?.cats) return 0;
   const lean = season().lean, extra = lean.length ? 0.5 * lean.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n : 0;   // the season pulls everyone toward a section
   const cats = cust.who.persona.taste.cats; if (!cats.length) return Math.min(1, 0.3 + extra);
   return Math.min(1, cats.reduce((a, k) => a + (spot.cats[k] || 0), 0) / spot.n + extra);
@@ -5556,20 +5786,21 @@ function custPickMember(anyone = false) {      // anyone: skip the visiting rhyt
 const memberName = m => `${m.first[0]}${m.first.slice(1).toLowerCase()} ${m.last[0]}${m.last.slice(1).toLowerCase()}`;
 const SHEEPISH = ["I'm so sorry. It was under the couch the whole time.", "My brother-in-law had it. Don't ask.", "I swear I thought I returned this.",
   "It got packed in a moving box.", "The dog... look, it still plays.", "Please don't make me look at the fee."];
-function custSpawn(member = custPickMember(true)) {
-  const who = customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
-  const cust = { who, member, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
-  custArrivals.lastMember = member; member.lastVisit = shift.day + shift.h / 24; shift.stats.visitors++;
+function custSpawn(member = custPickMember(true), opts = {}) {   // opts.kid: a parent's kid tagging along (not a member); opts.ride: arriving with someone (see custBringAlong)
+  const kid = opts.kid || null;
+  const who = kid ? kidFor(kid) : customerFor(Math.imul(member.num, 2654435761) >>> 0, member.female);   // member # -> the same person every time
+  const cust = { who, member, kid: !!kid, ry: 0, face: 0, hi: 0, box: { x0: CUST_DOOR.x - 0.22, x1: CUST_DOOR.x + 0.22, z0: CUST_DOOR.z - 0.22, z1: CUST_DOOR.z + 0.22, shadow: false } };
+  if (!kid) { custArrivals.lastMember = member; member.lastVisit = shift.day + shift.h / 24; shift.stats.visitors++; }
   const loyal = member.loyalty || 0;
   who.persona.patience *= 1 + loyal / 200;        // regulars will wait a bit longer; the fed-up, less
-  member.likes = who.persona.taste.name;          // (for the POS: now somebody's noticed)
+  if (!kid) member.likes = who.persona.taste.name;   // (for the POS: now somebody's noticed)
   if (shift.h >= 23 && Math.random() < 0.5) { who.persona.stops = 7 + Math.floor(Math.random() * 4); who.persona.dwell *= 1.5; }   // the 11:30 walk-in, in no hurry at all
-  if (loyal >= 40) logAct(`${memberName(member)}, one of the regulars, came in`);
+  if (loyal >= 40 && !kid) logAct(`${memberName(member)}, one of the regulars, came in`);
   cust.litterT = Math.random() < 0.15 ? 15 + Math.random() * 60 : Infinity;   // now and then somebody drops something
   const grot = messes.length + binList().filter(binFull).length + bagsDown.length + deadLights.length;   // litter, overflowing bins, bags left lying about, dead lights
-  if (grot >= 3) { posTerm.loyal(member, -2); if (clockT - (custSpawn.messNote || -999) > 120) { custSpawn.messNote = clockT; logAct(`Customers are noticing the mess (${messes.length} spots to clean${binList().some(binFull) ? ", the trash overflowing" : ""})`, "bad"); } }
-  cust.thief = Math.random() < 0.06 * (upg.cameras ? 0.6 : 1) * (upg.sign ? 0.7 : 1);   // now and then somebody means to walk out with it (less, with cameras and signs up)
-  cust.returning = member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
+  if (grot >= 3 && !kid) { posTerm.loyal(member, -2); if (clockT - (custSpawn.messNote || -999) > 120) { custSpawn.messNote = clockT; logAct(`Customers are noticing the mess (${messes.length} spots to clean${binList().some(binFull) ? ", the trash overflowing" : ""})`, "bad"); } }
+  cust.thief = !kid && Math.random() < 0.06 * (upg.cameras ? 0.6 : 1) * (upg.sign ? 0.7 : 1);   // now and then somebody means to walk out with it (less, with cameras and signs up)
+  cust.returning = kid ? [] : member.rentals.filter(r => posTerm.dueIn(r) <= 0 || (posTerm.dueIn(r) === 1 && Math.random() < 0.5)).map(r => r.copy);   // what's due (or late) comes back; the rest stays out
   who.persona.maxTapes = Math.min(who.persona.maxTapes, Math.max(0, posTerm.rentMax - (member.rentals.length - cust.returning.length)));   // 3 out at a time, counting what they're keeping
   const c = cust.c = VaultCustomers.build(who.outfit);
   c.parts.forEach(m => { m.userData.customer = cust; aimables.push(m); });
@@ -5578,13 +5809,211 @@ function custSpawn(member = custPickMember(true)) {
   scene.add(c.group); colliders.push(cust.box);
   c.setMood("on"); c.setPose(cust.returning.length ? "hold" : "idle"); c.holdTape(Math.min(3, cust.returning.length));
   Object.assign(cust, { tagged: false, alarmed: false, holding: 0, tapes: [], snacks: [], snackDone: false, seen: new Set(), stopsLeft: who.persona.stops, path: [], spot: null, state: "boot", t: 0.6 });   // screen warms up, then in they come
-  if (!custArriveByCar(cust)) {                   // ...from out front: their car, or up the sidewalk; to the door and in
+  if (opts.ride) custRideWith(cust, opts.ride);   // with someone: in their car, or walking up beside them
+  else if (!custArriveByCar(cust)) {              // ...from out front: their car, or up the sidewalk; to the door and in
     const out = cust.outside = outsidePath();
     c.group.position.set(out[0][0], 0, out[0][1]); cust.path = [...out.slice(1), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
   }
   custs.push(cust);
   return cust;
 }
+// ---- the little things people do while they stand there ----
+// Browsing: pull a tape out and turn it over to read the back (and put it back), glance up at the lounge TV when
+// something's on, check the time. In line or waiting at the counter: check the time, sigh, look around
+function custFidget(cust, dt) {
+  const c = cust.c, f = cust.fid;
+  if (f && (f.state !== cust.state || co?.cust === cust)) {   // something came up (it's their turn, they're off): drop it
+    c.reachTo(null); c.lookAt(null); if (f.kind === "read") c.holdTape(cust.holding); cust.fid = null; return;
+  }
+  if (co?.cust === cust || cust.chatting) return;
+  if (f) {                                         // in the middle of one
+    f.t -= dt;
+    if (f.t > 0) return;
+    if (f.kind === "read") {
+      if (f.phase === 0) { c.reachTo(null); c.holdTape(Math.min(3, cust.holding + 1)); c.setPose("read"); c.setMood(Math.random() < 0.3 ? "love" : "neutral"); f.phase = 1; f.t = 2 + Math.random() * 2.5; return; }
+      if (f.phase === 1) { c.setPose(cust.holding ? "hold" : "idle"); c.reachTo(f.at); f.phase = 2; f.t = 0.6; return; }   // back where it came from
+      c.reachTo(null); c.holdTape(cust.holding); c.setMood("browse");
+    } else { c.setPose(f.pose0 || (cust.holding ? "hold" : "idle")); c.lookAt(null); if (cust.state === "browse") c.setMood("browse"); }
+    cust.fid = null; return;
+  }
+  if ((cust.fidT = (cust.fidT ?? 2 + Math.random() * 4) - dt) > 0) return;
+  cust.fidT = 3 + Math.random() * 6;
+  const r = Math.random(), p = c.group.position;
+  const tvRel = playing && Math.hypot(p.x - TV.x, p.z - TV.z) < 14 ? Math.atan2(TV.x - p.x, TV.z - p.z) - cust.face : null;
+  if (cust.state === "browse" && cust.t > 2.5 && !cust.kid) {
+    if (r < 0.45 && cust.spot?.copies) {           // a tape off the shelf, turned over
+      const copy = cust.spot.copies.find(k => !k.offShelf && Math.random() < 0.15) || cust.spot.copies.find(k => !k.offShelf);
+      if (!copy?.pos) return;
+      cust.fid = { state: cust.state, kind: "read", phase: 0, t: 0.6, at: copy.pos.clone() }; c.reachTo(copy.pos); cust.t += 4; return;
+    }
+    if (r < 0.65 && tvRel !== null) { cust.fid = { state: cust.state, kind: "look", t: 2 + Math.random() * 2 }; c.lookAt(Math.atan2(Math.sin(tvRel), Math.cos(tvRel))); c.setMood("watch"); return; }   // what's on?
+    if (r < 0.75) { cust.fid = { state: cust.state, kind: "watch", t: 1.3, pose0: cust.holding ? "hold" : "idle" }; c.setPose("watch"); return; }   // is it that late already?
+  }
+  if (["inLine", "wait", "impatient", "tagAlong"].includes(cust.state)) {
+    const pose0 = cust.state === "tagAlong" ? (cust.holding ? "hold" : "idle") : "wait";
+    if (r < 0.3) { cust.fid = { state: cust.state, kind: "watch", t: 1.3, pose0 }; c.setPose("watch"); }
+    else if (r < 0.5 && cust.state !== "tagAlong") { c.sigh(); }
+    else if (r < 0.75) { cust.fid = { state: cust.state, kind: "look", t: 1.5 + Math.random() * 1.5, pose0 }; c.lookAt(tvRel !== null && Math.random() < 0.6 ? Math.atan2(Math.sin(tvRel), Math.cos(tvRel)) : (Math.random() * 2 - 1) * 1.1); }
+  }
+}
+// ---- people who come in together ----
+// Now and then a member brings someone: a friend or their partner (another member, with their own visit: they split
+// up to browse, and whoever's done first waits on the other, then out they go together), or, for a parent, a kid
+// (not a member: straight to the kids' shelves, maybe back with a tape for the parent, and called back when it's time
+// to go). They come in the same car, or up the sidewalk side by side, and leave the same way
+const KID_TASTE = { name: "kid", cats: ["Family & Kids", "Kids & Educational", "Animation"] };
+function kidFor(parent) {                          // a kid: small, a little TV, their own clothes; a fresh face each visit
+  const seed = (Math.random() * 2 ** 31) | 0, who = customerFor(seed, Math.random() < 0.5), o = who.outfit;
+  Object.assign(o, { height: 0.6 + Math.random() * 0.08, build: 0.82, bust: 0, hat: Math.random() < 0.3 ? o.hat : null, umbrella: null });
+  Object.assign(o.tv, { w: 0.33, h: 0.26, d: 0.25, antenna: Math.random() < 0.5 });
+  Object.assign(who.persona, { taste: KID_TASTE, stops: 1 + Math.floor(Math.random() * 3), speed: parent.who.persona.speed, picky: 0.8, maxTapes: 1, dwell: 0.8 });
+  return who;
+}
+function custBringAlong(lead) {                   // a regular arrival might not be alone
+  if (!lead || lead.prospect || lead.pickup || lead.moviegoer || custs.length >= custMax()) return lead;
+  const parent = lead.who.persona.taste.name === "parent", r = Math.random();
+  if (r < (parent ? 0.5 : 0.05)) {
+    const k = custSpawn(lead.member, { kid: lead, ride: lead }); lead.party = k.party = [lead, k];
+    if (lead.member.loyalty >= 40) logAct(`${memberName(lead.member)} brought their kid`);
+  } else if (r < (parent ? 0.62 : 0.24)) {
+    const ms = posTerm.members.filter(m => m.active && m !== lead.member && !custs.some(k => k.member === m) && posTerm.canVisit(m) && (m.loyalty || 0) > -60);
+    const m = ms[Math.floor(Math.random() * ms.length)]; if (!m) return lead;
+    const k = custSpawn(m, { ride: lead }); k.thief = lead.thief = false;   // (nobody shoplifts with a friend watching)
+    lead.party = k.party = [lead, k]; k.who.persona.speed = lead.who.persona.speed;
+  }
+  return lead;
+}
+const LEAVING = ["leave", "outside", "out", "gone"];
+const custPartners = cust => (cust.party || []).filter(k => k !== cust && k.c && !LEAVING.includes(k.state) && k.state !== "tagAlong");   // still busy in the store
+function custTagAlong(cust) {                      // done: go wait by whoever they came with
+  const kid = (cust.party || []).find(k => k.kid && k !== cust && k.c && k.state !== "tagAlong" && !LEAVING.includes(k.state));
+  if (!cust.kid && kid) {                          // a parent: "come on, we're going"
+    cust.c.setMood("impatient"); cust.hi = 2; kid.stopsLeft = 0; kid.c.setMood("meh"); kid.hi = 1.5;
+    if (["stop", "browse", "reach", "chat"].includes(kid.state) || kid.path.length) custTagAlong(kid);
+    if (!kid.hurried) { kid.hurried = true; kid.who.persona.speed *= 1.35; }   // (and they hurry)
+  }
+  cust.state = "tagAlong"; cust.t = 0; cust.path = []; cust.tagT = 0; cust.c.setPose(cust.holding ? "hold" : "idle");
+}
+function custTagAlongTick(cust) {                 // standing by: near whoever's still going; when nobody is, out together
+  const c = cust.c, busy = custPartners(cust);
+  if (cust.kid && cust.tapes.length) {            // a kid with a tape: "can we get this one?"
+    const par = cust.party[0];
+    if (par.c && ["stop", "browse", "reach", "tagAlong", "chat"].includes(par.state) && Math.hypot(par.c.group.position.x - c.group.position.x, par.c.group.position.z - c.group.position.z) < 1.6) {
+      const t = cust.tapes.pop(); cust.holding = 0; c.holdTape(0); c.setMood("ask"); cust.hi = 2;
+      par.tapes.push(t); par.holding++; par.c.holdTape(Math.min(3, par.holding)); par.c.setPose("hold"); par.c.setMood("meh"); par.hi = 1.5;   // (they cave)
+      if (par.state === "tagAlong") { par.state = "browse"; par.t = 0.5; par.stopsLeft = 0; }   // that's one more to pay for
+    } else if (!par.c || LEAVING.includes(par.state) || ["queue", "inLine", "counter", "wait", "impatient", "angry", "checkout", "coBack", "paid"].includes(par.state)) {   // too late (they're paying, or going): it gets stuck on the nearest shelf
+      const t = cust.tapes.pop(); cust.holding = 0; c.holdTape(0); if (cust.spot?.copies) misshelve(t, cust.spot); else setOnShelf(t, true);
+    }
+  }
+  if (!busy.length) {                              // everyone's done: out the door together
+    const par = (cust.party || []).find(k => k !== cust && k.c && !LEAVING.includes(k.state));   // (someone's still at the counter or the door: walk out with them)
+    if (!par || par.state === "tagAlong" || cust.kid) { c.setMood(cust.holding || cust.paid ? "happy" : "neutral"); return custGo(cust, "leave", CUST_DOOR); }
+  }
+  if (cust.t > 0) return;
+  const k = busy[0] || (cust.party || []).find(q => q !== cust && q.c), p = c.group.position;
+  if (!k) return custGo(cust, "leave", CUST_DOOR);
+  const q = k.c.group.position, d = Math.hypot(q.x - p.x, q.z - p.z);
+  cust.tagT += 2;
+  if (cust.tagT > 90 && busy.length && !k.kid) { k.stopsLeft = Math.min(k.stopsLeft, 0); k.c.setMood("meh"); k.hi = 1; }   // "come on..."
+  if (d > 1.8) {                                   // go stand beside them (by the line, not in it)
+    const a = Math.random() * Math.PI * 2, spot = { x: q.x + Math.cos(a) * 0.9, z: q.z + Math.sin(a) * 0.9 + (["inLine", "queue", "counter", "wait", "checkout"].includes(k.state) ? 0.6 : 0) };
+    spot.ry = Math.atan2(q.x - spot.x, q.z - spot.z);
+    custGo(cust, "tagAlong", spot); cust.t = 2.5; return;
+  }
+  cust.ry = Math.atan2(q.x - p.x, q.z - p.z); c.talk(Math.random() < 0.5); c.setMood(Math.random() < 0.3 ? "browse" : "neutral");
+  cust.state = "tagAlong"; cust.t = 2 + Math.random() * 2;
+}
+// two regulars (or two who came in together) end up at the same shelf: they stop and catch up for a bit
+function custChatTick(dt) {
+  if ((custChatTick.t = (custChatTick.t || 0) - dt) > 0) return; custChatTick.t = 1;
+  const free = custs.filter(k => k.c && !k.kid && k.state === "browse" && !k.chatting);
+  for (let i = 0; i < free.length; i++) for (let j = i + 1; j < free.length; j++) {
+    const a = free[i], b = free[j], pa = a.c.group.position, pb = b.c.group.position;
+    if (Math.hypot(pa.x - pb.x, pa.z - pb.z) > 2.6 || (a.chatted ||= new Set()).has(b)) continue;
+    const together = a.party && a.party.includes(b), regulars = (a.member.loyalty || 0) >= 30 && (b.member.loyalty || 0) >= 30;
+    if (!together && !regulars) continue;
+    if (!together && Math.random() < 0.5) { a.chatted.add(b); continue; }   // (a nod is enough sometimes)
+    a.chatted.add(b); (b.chatted ||= new Set()).add(a);
+    const t = 4 + Math.random() * 5;
+    for (const [k, o] of [[a, pb], [b, pa]]) {
+      const p = k.c.group.position; k.ry = Math.atan2(o.x - p.x, o.z - p.z); k.state = "chat"; k.t = t; k.chatting = true;
+      k.c.talk(true); k.c.setMood(Math.random() < 0.3 ? "love" : "happy"); k.hi = t;
+    }
+    if (!together && clockT - (custChatTick.said || -999) > 90) { custChatTick.said = clockT; logAct(`${memberName(a.member)} and ${memberName(b.member)}, a couple of regulars, are catching up in the aisle`); }
+    return;
+  }
+}
+// ---- out front: people going by, and the pizza place next door ----
+// Folks walk past on the sidewalk without coming in (umbrellas up in the rain). Next door, east of us, is a pizza
+// place we never see: only its people. They park (or walk up) and head in empty-handed, and a while later come back
+// out with a pizza box and go home; busy at lunch and dinner. After dark its storefront lights the walk and the lot
+// in front of it. None of them are our customers: they're not in custs, just people on a path
+const PIZZA_DOOR = [15.6, -0.75], SIDEWALK_Z = -0.95;
+const walkers = [];                               // { c, path: [[x, z]...], speed, then, box }
+const walkerAt = { t: 4, pizzaT: 20 };
+function walkerMake(path, then, box = false) {
+  const seed = (Math.random() * 2 ** 31) | 0, o = customerFor(seed, Math.random() < 0.5).outfit;
+  const c = VaultCustomers.build(o); c.group.position.set(path[0][0], 0, path[0][1]); scene.add(c.group); c.setMood("neutral");
+  const w = { c, path: path.slice(1), speed: 1.1 + Math.random() * 0.5, then, box: null };
+  if (box) walkerBox(w, true);
+  walkers.push(w); return w;
+}
+function pizzaBox() {                            // a pizza box, carried flat
+  const g = new THREE.Group(), box = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.4), [0xe8dcc4, 0xe8dcc4, 0xf2ead8, 0xe8dcc4, 0xe8dcc4, 0xe8dcc4].map((c, i) => new THREE.MeshLambertMaterial({ color: c })));
+  const lbl = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.12), new THREE.MeshBasicMaterial({ color: 0xc8312a })); lbl.rotation.x = -Math.PI / 2; lbl.position.y = 0.026; g.add(box, lbl); return g;
+}
+function walkerBox(w, on) { w.c.holdItem(on ? pizzaBox() : null); w.c.setPose(on ? "hold" : "idle"); w.box = on; }
+function walkerInside(w, secs, out) { w.c.group.visible = false; w.inside = secs; w.out = () => { w.c.group.visible = true; walkerBox(w, true); out(); }; }   // in next door for a while (game time)
+function walkerGone(w) { w.c.group.removeFromParent(); w.c.dispose(); walkers.splice(walkers.indexOf(w), 1); }
+function pizzaRun() {                             // someone getting a pizza: by car (parked near it) or on foot
+  const wait = SHIFT.hour * (0.12 + Math.random() * 0.15);
+  if (Math.random() < 0.6) {
+    const look = carNew(), car = driveIn(look, car => {
+      const d = car.door;
+      walkerMake([[d.x, d.z], [d.x, -3.2], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInside(w, wait, () => {   // in they go, and back out with it
+        w.path = [[PIZZA_DOOR[0], SIDEWALK_Z], [d.x, -3.2], [d.x, d.z]]; w.then = w => { walkerGone(w); driveOut(car); };
+      }));
+    }, PIZZA_DOOR[0]);
+    if (car) { car.idling = Math.random() < 0.2; window.VaultAmbience?.drive?.(car.dir, 13); return; }
+  }
+  const from = (Math.random() < 0.5 ? -1 : 1) * 24;   // on foot, up the sidewalk
+  walkerMake([[from, SIDEWALK_Z - Math.random() * 0.3], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInside(w, wait, () => {
+    w.path = [[PIZZA_DOOR[0], SIDEWALK_Z], [from > 0 ? -24 : 24, SIDEWALK_Z]]; w.then = walkerGone;
+  }));
+}
+function walkerTick(dt) {
+  const h = shift.h, night = h < 7 || h > 21.5;
+  if (started && (walkerAt.t -= dt) <= 0) {        // somebody going by
+    walkerAt.t = (night ? 70 + Math.random() * 120 : 18 + Math.random() * 40) * (WX.k > 0.3 ? 1.8 : 1);
+    if (walkers.length < 4 && h > 6.5) { const dir = Math.random() < 0.5 ? 1 : -1, z = SIDEWALK_Z - Math.random() * 0.4; walkerMake([[-dir * 24, z], [dir * 24, z]], walkerGone); }
+  }
+  const open = h >= 11 && h < 23, busy = (h > 11.5 && h < 13.5) || (h > 17 && h < 20.5);
+  if (started && open && (walkerAt.pizzaT -= dt) <= 0) { walkerAt.pizzaT = (busy ? 25 : 70) + Math.random() * (busy ? 40 : 110); if (walkers.length < 5) pizzaRun(); }
+  pizzaGlow.material.opacity = open ? 0.85 * Math.max(0, 1 - tod.level * 1.4) : 0; pizzaGlow.visible = pizzaGlow.material.opacity > 0.01;
+  for (const w of [...walkers]) {
+    const c = w.c, p = c.group.position;
+    if (!c.group.visible) { if (w.inside != null && (w.inside -= dt) <= 0) { w.inside = null; w.out(); } continue; }
+    let speed = 0;
+    if (w.path.length) {
+      const [tx, tz] = w.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+      if (d < 0.05) w.path.shift();
+      else { speed = w.speed; const st = Math.min(d, speed * dt); p.x += dx / d * st; p.z += dz / d * st; c.group.rotation.y = Math.atan2(dx, dz); }
+    } else { const f = w.then; w.then = null; f?.(w); if (!walkers.includes(w) || !c.group.visible) continue; }
+    const rain = WX.kind === "rain" && WX.k > 0.2; if (rain !== !!w.umb && !w.box) { w.umb = rain; c.holdProp(rain ? "umbrella" : null); }
+    c.tick(dt, speed);
+  }
+}
+const pizzaGlow = (() => {                        // next door's lit front, on the walk and the lot in front of it
+  const W = 9, D = 6, c = document.createElement("canvas"); c.width = 256; c.height = 192; const g = c.getContext("2d"), img = g.createImageData(256, 192);
+  for (let y = 0; y < 192; y++) for (let x = 0; x < 256; x++) {
+    const u = (x + 0.5) / 256 * 2 - 1, v = (y + 0.5) / 192, a = Math.max(0, 1 - Math.abs(u) ** 2.5) * Math.exp(-v * 2.6) * Math.min(1, v * 20), i = (y * 256 + x) * 4;
+    img.data[i] = 255; img.data[i + 1] = 180 + 40 * (1 - v); img.data[i + 2] = 110; img.data[i + 3] = 255 * a;
+  }
+  g.putImageData(img, 0, 0); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  m.rotation.x = -Math.PI / 2; m.position.set(PIZZA_DOOR[0] + 0.5, 0.03, -D / 2); m.layers.set(EXTERIOR_LAYER); scene.add(m); return m;
+})();
 // ---- getting past you (shared by customers and Dana) ----
 // you're standing on where they're headed: use a spot beside it (sideways to
 // the way they'd face there), whichever side is open
@@ -5690,6 +6119,7 @@ function custPickTheaterSeat(cust) {              // pick an open stadium seat a
   return true;
 }
 function custDone(cust) {                         // out of shelves to look at: grab a snack, catch a movie, or head out
+  if (cust.kid) return custTagAlong(cust);         // (kids don't pay: they go find their parent)
   if (cust.thief && cust.holding && !(cust.known && Math.random() < 0.35)) return custSneak(cust);   // you've had an eye on them: maybe not today
   if (!cust.snackDone) {
     cust.snackDone = true;
@@ -5698,6 +6128,7 @@ function custDone(cust) {                         // out of shelves to look at: 
   }
   if (!cust.holding && !cust.watchedTheater && Math.random() < (playing ? 0.75 : 0.35) && custPickTheaterSeat(cust)) return;
   if (cust.holding || cust.snacks.length) { cust.c.setMood("happy"); custLine.push(cust); custToLine(cust); }
+  else if (custPartners(cust).length) custTagAlong(cust);   // nothing for them: they wait on whoever they came with
   else { cust.c.setMood("meh"); custGo(cust, "leave", CUST_DOOR); }
 }
 function custDecide(cust) {                       // done browsing this shelf: take one, put one back, or move on
@@ -5735,7 +6166,7 @@ function custGone(cust) {
     if (cust.known) posTerm.incident(cust.member, `${cust.sneaking ? "SHOPLIFTED" : "LEFT WITHOUT PAYING FOR"} ${what}`);   // you know who it was: it goes on their account
     logAct(`${cust.known ? memberName(cust.member) : "Someone"} walked out with ${what}: stolen`, "bad", null, -75 * cust.tapes.length);
   }   // walked out with them: gone for good (order a replacement on the POS)
-  if (cust.car) driveOut(cust.car);               // back in the car and off (or, not parked yet: just gone)
+  if (cust.car) { cust.car.riders?.delete(cust); if (!cust.car.riders?.size) driveOut(cust.car); }   // back in the car, and off once everyone's in (or, not parked yet: just gone)
   const c = cust.c;
   scene.remove(c.group); c.dispose();
   for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
@@ -5754,6 +6185,7 @@ function custInteract(cust) {                     // E on a customer: ring them 
   else if (co?.cust === cust && co.by === "player") coAct("customer");
   else if (cust.state !== "out") {
     cust.hi = 1.4; c.setMood("happy");
+    if (!cust.greeted && !cust.kid) regularSays(cust, "hi");
     if (cust.thief && !cust.greeted && Math.random() < 0.7) cust.thief = false;   // a friendly hello: suddenly they'd rather just rent it
     if (!cust.greeted) gainXp("you", "wis", 2);   // (sizing people up)
     cust.greeted = true;
@@ -5804,6 +6236,27 @@ function custWatched(cust, dt) {
 // for themselves
 const TASTE_ASK = { "horror fan": "something scary", parent: "something for the kids", "couch potato": "a show to binge",
   "action junkie": "something with some action", "date night": "something for date night", "anime kid": "some anime" };
+// regulars know the place, and you: a word when you say hi, and at the counter (once a visit each). The more
+// often they're in, the more they've got to say; the unhappy ones keep it short
+const REG_LINES = {
+  hi: ["Hey! How's it going?", "Back again, I know.", "Look who's working today.", "Hey, you're here! Good.", "Busy one today?"],
+  hiTaste: t => [`Get anything new in ${t}?`, `What's good in ${t} lately?`, `I'm out of ${t} I haven't seen. Help me out.`],
+  counter: ["The usual, I think.", "Anything good come in this week?", "What would you watch tonight?", "Long day?", "I'll have these back on time. Probably.", "Every Friday, right?"],
+  ofYou: name => [`Tell ${name} I said hi.`, `${name} told me to rent this one.`],
+  unhappy: ["Just these.", "Can we hurry this up?"],
+};
+const TASTE_WORDS = { "horror fan": "horror", parent: "the kids' section", "couch potato": "TV shows", "action junkie": "action", "date night": "romance", "anime kid": "anime" };
+function regularSays(cust, when, by = "you") {
+  if (!cust?.member || cust.kid || (cust.said ||= {})[when]) return;
+  const loy = cust.member.loyalty || 0, pick = a => a[Math.floor(Math.random() * a.length)];
+  let line;
+  if (loy <= -30 && when === "counter") line = pick(REG_LINES.unhappy);
+  else if (loy < 35) return;
+  else if (when === "hi") { const t = TASTE_WORDS[cust.who.persona.taste.name]; line = pick(t && Math.random() < 0.5 ? REG_LINES.hiTaste(t) : REG_LINES.hi); }
+  else { const e = staff.find(e => e.c && by === "dana" ? false : e.c); line = pick(e && Math.random() < 0.2 ? REG_LINES.ofYou(e.first) : REG_LINES.counter); }
+  cust.said[when] = true; cust.hi = 2; cust.c?.setMood(loy <= -30 ? "meh" : "happy");
+  if (by === "you") logAct(`${memberName(cust.member)}: "${line}"`);
+}
 const custAsks = [];                              // who's waiting at the counter for help, in order
 const ASK_SPOT = i => ({ x: CUST_COUNTER.x + 1.2 + 0.7 * i, z: CUST_COUNTER.z + 0.1, ry: Math.PI });
 const titleCopies = t => [t, ...(t.copies || [])];
@@ -5957,7 +6410,7 @@ function snackProxy(u) {
 function custTick(dt) {
   if (custs.length < custMax() && !frontLock.locked && shiftOpen() && (custArrivals.t -= dt) <= 0) {   // locked: whoever's inside finishes up; nobody new
     if (custs.some(k => Math.hypot(k.c.group.position.x - CUST_DOOR.x, k.c.group.position.z - CUST_DOOR.z) < 1.2)) custArrivals.t = 1;   // someone's in the doorway: give them a sec
-    else { const m = custPickMember(); if (m) custSpawn(m); custArrivals.t = (6 + Math.random() * 20) / rushLevel(); }   // (nobody due in: a quiet spell)
+    else { const m = custPickMember(); if (m) custBringAlong(custSpawn(m)); custArrivals.t = (6 + Math.random() * 20) / rushLevel(); }   // (nobody due in: a quiet spell)
   }
   if (growth.prospects > 0 && !frontLock.locked && shiftOpen() && custs.length < custMax() + 1 && (growth.pT -= dt) <= 0) {   // somebody new, here to sign up
     growth.pT = (40 + Math.random() * 80) / rushLevel();
@@ -5965,7 +6418,7 @@ function custTick(dt) {
     if (!m) growth.prospects = 0;
     else { const k = custSpawn(m); k.prospect = true; k.thief = false; k.returning = []; k.tickets = 0; growth.prospects--; }
   }
-  wisTick(dt);
+  wisTick(dt); custChatTick(dt);
   for (const k of [...custs]) {
     custHearAlarm(k, dt); custWatched(k, dt);
     if ((k.litterT -= dt) <= 0 && k.path.length && k.state !== "leave") { k.litterT = Infinity; const p = k.c.group.position; const r = Math.random(); messAdd(r < 0.5 ? "wrapper" : r < 0.8 ? "popcorn" : "spill", p.x, p.z); }
@@ -6021,6 +6474,7 @@ function custStep(cust, dt) {
     if (!cust.path.length && cust.spot?.ry !== undefined) cust.ry = cust.spot.ry;
   } else {                                        // arrived: do this stop's thing
     cust.t -= dt; cust.waitFor = null;
+    custFidget(cust, dt);
     switch (cust.state) {
       case "repath": if (cust.t <= 0) custGo(cust, cust.repath.state, cust.repath.spot); break;
       case "arrive": cust.state = "boot"; cust.t = 0; break;   // in the door
@@ -6038,8 +6492,8 @@ function custStep(cust, dt) {
         if (cust.prospect) { custLine.push(cust); custToLine(cust); }   // straight to the counter, form in hand
         else if (cust.pickup) { cust.want = { kind: "hold", title: cust.pickup.title, hold: cust.pickup }; custAskGo(cust); }   // here for their hold: they ask at the counter
         else if (cust.returning.length) custGo(cust, "dropoff", custReturnsSpot());
-        else if (custWant(cust)) custAskGo(cust);
-        else if (Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
+        else if (!cust.kid && custWant(cust)) custAskGo(cust);
+        else if (!cust.kid && !cust.party && Math.random() < (playing ? 0.5 : 0.25) && custPickTheaterSeat(cust)) {}
         else custNextStop(cust);
       } break;
       case "toAsk":                               // at the counter: "excuse me..."
@@ -6125,7 +6579,7 @@ function custStep(cust, dt) {
         break;
       }
       case "stop": c.setMood("browse"); cust.state = "browse"; cust.t = custDwell(cust); break;
-      case "browse": if (cust.t <= 0) custDecide(cust); break;
+      case "browse": if (cust.fid) break; if (cust.t <= 0) custDecide(cust); break;   // (finishing a little something first: see custFidget)
       case "snack":
         { const left = cust.spot.units.filter(u => u.visible && u !== heldSnack), cold = left.filter(u => !isDrink(u.userData.snack) || drinkTemp(u) <= DRINK_WARM);
           const from = cold.length ? cold : left, names = [...new Set(from.map(u => u.userData.snack.name))], want = names[Math.floor(Math.random() * names.length)];   // anyone would reach past a warm can for a cold one
@@ -6186,7 +6640,9 @@ function custStep(cust, dt) {
         logAct(`${memberName(cust.member)} gave up waiting to have their tag fixed and left`, "bad", null, -50);
         custGo(cust, "leave", CUST_DOOR);
       } break;
-      case "paid": if (cust.t <= 0) { c.setMood("happy"); custGo(cust, "leave", CUST_DOOR); } break;
+      case "paid": if (cust.t <= 0) { c.setMood("happy"); if (custPartners(cust).length) custTagAlong(cust); else custGo(cust, "leave", CUST_DOOR); } break;   // (paid up, but the others aren't done)
+      case "tagAlong": custTagAlongTick(cust); break;
+      case "chat": if (cust.t <= 0) { c.talk(false); c.lookAt(null); cust.chatting = null; cust.state = "browse"; cust.t = 0.5 + Math.random(); } break;
       case "leave": cust.path = [INSIDE_DOOR, ...(cust.outside || [OUTSIDE_IN]).slice().reverse()]; cust.state = "outside"; break;   // out the door, back the way they came
       case "out": if (cust.t <= 0) { window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); custGone(cust); } return;
     }
@@ -6339,12 +6795,12 @@ function rollApplicant(rnd = Math.random) {
   const levels = Object.fromEntries(SKILL_IDS.map(k => [k, 1]));
   for (let left = STAT_TOTAL - SKILL_IDS.length; left > 0;) { const k = pickR(SKILL_IDS); if (levels[k] < 6) { levels[k]++; left--; } }
   const outfit = { ...VaultCustomers.randomOutfit(rnd, female), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: first.toUpperCase(),
-    pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null };
+    pants: female ? "jeans" : "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, sleeve: female ? "cap" : "short", hightop: false, tights: null };   // (hers: the same khakis in a slimmer cut, the fitted polo)
   return { first, last: pickR(LASTS), female, outfit, levels };
 }
 const DANA_APP = { first: "Dana", last: "Reyes", female: true, levels: { dex: 3, int: 3, cha: 3, str: 2, con: 2, wis: 2 },
   outfit: { ...VaultCustomers.randomOutfit(seeded(417), true), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, nameTag: "DANA",
-    pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#c9a8ff" } };
+    pants: "jeans", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, sleeve: "cap", tights: null, tv: { kind: "black", color: "#1c1c1e", w: 0.46, h: 0.36, d: 0.36, antenna: false, knobs: true }, phosphor: "#c9a8ff" } };
 function looksOf(o) {                             // "tall, broad build, a silver TV with an antenna"
   return [o.height > 1.035 ? "tall" : o.height < 0.965 ? "short" : "average height", o.build > 1.07 ? "broad build" : o.build < 0.96 ? "slim" : "average build",
     `a ${o.tv.kind} TV${o.tv.antenna ? " with antennas" : ""}`].join(", ");
@@ -6726,7 +7182,7 @@ const EMP_STOOL = { x: -4.75, z: 2.7 };          // where she parks it: beside t
 const EMP_STOOL_WAIT = 8;                        // seconds of nothing going on before she goes for it
 const EMP_BORED_AT = 25;                         // seconds up there before she's bored enough to really spin
 const STOOL_STATES = ["toStool", "stoolGrab", "stoolCarry", "stoolSitDown", "stoolSit", "stoolStandUp"];
-const empIdle = () => emp.task === "register" && !emp.paused && !custs.length && !co && !gateAlarm.on && !empCanWatch() && !danaBestJob();   // (work on the board gets her off the stool)
+const empIdle = () => emp.task === "register" && !emp.paused && !custs.length && !co && !gateAlarm.on && !empCanWatch() && !danaBestJob() && !empLunchDue();   // (lunchtime gets her off it too)   // (work on the board gets her off the stool)
 const stoolFree = () => !stool.carried && !onStool && !stool.by && !eHoldStool;
 const clearFor = (x, z, r, skip) => !colliders.some(c => !skip.includes(c) && x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
 function stoolSide(fx, fz) {                      // a clear spot to stand beside the stool, on the side nearest (fx, fz), facing it
@@ -6769,7 +7225,63 @@ function empLeaveStool() {                       // dropped mid-whatever (you ca
   c.setPose("idle"); c.reachTo(null); c.lookAt(null);
   stool.by = null;
 }
-function empTick(dt) { for (const e of staff) withEmp(e, () => empTickOne(dt)); }   // each of them in turn
+function empTick(dt) { for (const e of staff) withEmp(e, () => empTickOne(dt)); staffChatTick(dt); }   // each of them in turn
+// ---- the staff between customers: leaning on the counter, checking the time, an eye on the lounge TV, a chat with
+// whoever else is on, and lunch in the break room (a half hour, sometime around midday, on a long enough shift) ----
+const LUNCH_CHAIRS = [{ x: 3.6, z: 31.05, ry: 0 }, { x: 4.2, z: 31.1, ry: 0.15 }, { x: 3.9, z: 32.45, ry: Math.PI }, { x: 4.82, z: 31.8, ry: -Math.PI / 2 + 0.2 }];
+const CHAT_TOPICS = ["last night's X-Files", "a guy who returned a tape full of sand", "the new Pearl Jam album", "weekend plans", "whether Titanic's ever coming out on tape",
+  "car trouble", "the Bulls game", "which of the regulars rewinds", "a weird dream", "the best pizza in town", "Friends", "the district manager's tie"];
+function empIdleTick(dt) {                        // at their post with nothing to do: the small stuff (see "post")
+  const c = emp.c, f = emp.fid;
+  if (f) {
+    if ((f.t -= dt) > 0) return;
+    c.setPose("idle"); c.lookAt(null); emp.fid = null; return;
+  }
+  if (emp.chatWith) return;
+  if ((emp.fidT = (emp.fidT ?? 3 + Math.random() * 4) - dt) > 0) return;
+  emp.fidT = 4 + Math.random() * 7;
+  const r = Math.random(), p = c.group.position;
+  if (r < 0.4) { emp.fid = { t: 4 + Math.random() * 6 }; c.setPose("lean"); c.setMood(Math.random() < 0.5 ? "neutral" : "meh"); }   // forearms on the counter
+  else if (r < 0.6) { emp.fid = { t: 1.3 }; c.setPose("watch"); }                                       // how long till...
+  else if (r < 0.85 && playing) { const a = Math.atan2(TV.x - p.x, TV.z - p.z) - emp.face; emp.fid = { t: 2.5 + Math.random() * 3 }; c.lookAt(Math.atan2(Math.sin(a), Math.cos(a))); c.setMood("watch"); }   // what's on
+  else { emp.fid = { t: 1.5 + Math.random() * 2 }; c.lookAt((Math.random() * 2 - 1) * 1.2); c.setMood("browse"); }   // keeping an eye on the floor
+}
+function empFidgetStop() { if (emp.fid) { emp.fid = null; emp.c.setPose("idle"); emp.c.lookAt(null); } }
+function staffChatTick(dt) {                      // two of them idle and near each other: a chat
+  for (const e of staff) if (e.chatWith) {
+    const o = e.chatWith, busy = x => !x.c || !["post", "stoolSit"].includes(x.state) || co?.emp === x || custWaiting();
+    if ((e.chatT -= dt) <= 0 || busy(e) || busy(o)) { e.chatWith = null; if (e.c) { e.c.talk(false); e.c.lookAt(null); } continue; }
+    const p = e.c.group.position, q = o.c.group.position, a = Math.atan2(q.x - p.x, q.z - p.z) - e.face;
+    e.c.lookAt(Math.max(-1.3, Math.min(1.3, Math.atan2(Math.sin(a), Math.cos(a))))); e.c.talk(true);
+    if ((e.moodT = (e.moodT || 0) - dt) <= 0) { e.moodT = 1.5 + Math.random() * 2.5; e.c.setMood(["happy", "happy", "neutral", "love", "shock"][Math.floor(Math.random() * 5)]); }
+  }
+  if ((staffChatTick.t = (staffChatTick.t || 0) - dt) > 0) return; staffChatTick.t = 3;
+  const idle = staff.filter(e => e.c && !e.chatWith && ["post", "stoolSit"].includes(e.state) && co?.emp !== e && !e.leaving && clockT - (e.chatAt || -999) > 60);
+  if (idle.length < 2 || custWaiting() || Math.random() < 0.5) return;
+  const [a, b] = idle, pa = a.c.group.position, pb = b.c.group.position;
+  if (Math.hypot(pa.x - pb.x, pa.z - pb.z) > 4) return;
+  const t = 6 + Math.random() * 8;
+  for (const [e, o] of [[a, b], [b, a]]) { e.chatWith = o; e.chatT = t; e.chatAt = clockT; withEmp(e, empFidgetStop); }
+  if (clockT - (staffChatTick.said || -999) > 240) { staffChatTick.said = clockT; logAct(`${a.first} and ${b.first} are chatting about ${CHAT_TOPICS[Math.floor(Math.random() * CHAT_TOPICS.length)]}`); }
+}
+function empLunchDue() {                          // time for their lunch? (only on a 5-hour shift, around midday, when it's not busy)
+  if (emp.lunchDay === shift.day || emp.leaving || shift.h < 11.5 || shift.h > 14.5 || bits(emp.sched[weekday()]) < 5) return false;
+  if (co || custWaiting() || custs.length > 3) return false;
+  const covered = staff.some(e => e !== emp && e.c && e.state === "post");   // someone else on the register, or it's quiet
+  return covered || rushLevel() < 0.9 || shift.h > 14;
+}
+function empLunchStart() {
+  const taken = new Set(staff.map(e => e.lunchChair).filter(Boolean)), ch = LUNCH_CHAIRS.find(c => !taken.has(c)); if (!ch) return;
+  emp.lunchDay = shift.day; emp.lunchChair = ch; empFidgetStop(); emp.chatWith = null; emp.c.talk(false);
+  const fx = Math.sin(ch.ry), fz = Math.cos(ch.ry);   // the way the chair faces (to the table): come at it from behind
+  empGo("toLunch", { x: ch.x - fx * 0.5, z: ch.z - fz * 0.5, ry: ch.ry });
+  logAct(`${emp.first}'s on lunch`);
+}
+const sandwichMesh = () => {                      // a sandwich in its wax paper
+  const g = new THREE.Group(), m = (w, h, d, col, y) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color: col })); o.position.y = y; g.add(o); };
+  m(0.11, 0.015, 0.09, 0xe0b878, 0); m(0.115, 0.008, 0.095, 0x5aa83a, 0.011); m(0.11, 0.008, 0.09, 0xd65a4a, 0.018); m(0.11, 0.015, 0.09, 0xe0b878, 0.03);
+  return g;
+};
 function empTickOne(dt) {
   if (!emp.c) {                                   // off the clock: in when their shift starts (already at their post if the store's just loaded)
     if (!window.VaultCustomers || !posTerm || shift.report || !onDuty(emp)) return;
@@ -6846,8 +7358,11 @@ function empTickOne(dt) {
           const q = co.cust.c.group.position, rel = Math.atan2(q.x - p.x, q.z - p.z) - emp.face;
           c.lookAt(coStep()?.at === "customer" ? Math.atan2(Math.sin(rel), Math.cos(rel)) : null);
           if ((emp.chatT = (emp.chatT || 0) - dt) <= 0) { emp.chatT = 1.5 + Math.random() * 2; c.setMood(["happy", "happy", "neutral", "love"][Math.floor(Math.random() * 4)]); }
-        } else { c.talk(false); if (emp.coWas) c.lookAt(null); }
+        } else { if (!emp.chatWith) c.talk(false); if (emp.coWas) c.lookAt(null); }
         emp.coWas = mine;
+        if (mine || custWaiting()) { empFidgetStop(); emp.chatWith = null; }
+        else if (!best && emp.t <= 0) empIdleTick(dt);
+        if (!mine && emp.t <= 0 && empLunchDue()) { empLunchStart(); break; }
         if (mine && Math.abs(gap) <= 0.02 && (emp.coT -= dt) <= 0) {   // one step at a time: hand out, then the step happens
           const s = coStep();
           if (emp.coReached) { emp.coReached = false; coAct(s.at); c.reachTo(null); emp.coT = 0.35; }
@@ -6907,7 +7422,7 @@ function empTickOne(dt) {
           stool.angle += Math.sign(d) * Math.min(Math.abs(d), 0.9 * dt);
         }
         emp.ry = emp.face = stool.angle + Math.PI;
-        if (emp.t <= 0 && !stool.vel) {            // a whim — the longer nothing happens, the more bored she gets
+        if (emp.t <= 0 && !stool.vel && !emp.chatWith) {   // a whim — the longer nothing happens, the more bored she gets
           const r = Math.random();
           if (emp.bored > EMP_BORED_AT) {          // that's it: a real spin
             emp.bored = 0; emp.spins = 4 + Math.floor(Math.random() * 4); emp.spinT = 0; c.lookAt(null); c.setMood("happy");
@@ -6925,6 +7440,18 @@ function empTickOne(dt) {
         if (emp.t <= 0) { stool.by = null; empGo("toPost", emp.home); }
         break;
       }
+      case "toLunch": emp.state = "lunchSit"; emp.t = 0.7; emp.from = { x: p.x, z: p.z }; c.setPose("sit", { hipY: 0.47 }); break;
+      case "lunchSit": {                          // into the chair, then a sandwich
+        const ch = emp.lunchChair, k = 1 - Math.max(0, emp.t) / 0.7;
+        p.x = emp.from.x + (ch.x - emp.from.x) * k; p.z = emp.from.z + (ch.z - emp.from.z) * k; emp.ry = emp.face = ch.ry;
+        if (emp.t <= 0) { emp.state = "lunch"; emp.t = SHIFT.hour * 0.5; c.holdItem(sandwichMesh()); c.setMood("happy"); emp.biteT = 0; }
+        break;
+      }
+      case "lunch":                               // eating, looking about, the odd glance at the clock
+        if ((emp.biteT -= dt) <= 0) { emp.biteT = 3 + Math.random() * 5; const r = Math.random(); c.setMood(r < 0.4 ? "happy" : r < 0.7 ? "neutral" : r < 0.85 ? "love" : "sleep"); c.lookAt(r > 0.6 ? (Math.random() * 2 - 1) * 0.8 : null); }
+        if (emp.t <= 0 || emp.leaving) { c.holdItem(null); c.setPose("idle"); c.lookAt(null); c.setMood("neutral"); emp.state = "lunchUp"; emp.t = 0.5; }
+        break;
+      case "lunchUp": if (emp.t <= 0) { const ch = emp.lunchChair; p.x = ch.x - Math.sin(ch.ry) * 0.5; p.z = ch.z - Math.cos(ch.ry) * 0.5; emp.lunchChair = null; logAct(`${emp.first}'s back from lunch`); empGo("toPost", emp.home); } break;
       case "toCouch": emp.state = "sitDown"; emp.t = 0.7; emp.from = { x: p.x, z: p.z }; c.setPose("sit"); break;
       case "sitDown": {                            // back onto the cushion, facing the TV
         const k = 1 - Math.max(0, emp.t) / 0.7;
@@ -7136,6 +7663,7 @@ const CO_STEPS = [
     } },
 ];
 function coStart(by, cust = custLine[0]) {
+  regularSays(cust, "counter", by);
   if (cust.prospect) {                           // not buying: signing up
     co = { by, cust, kind: "signup", i: 0, total: 0, bill: 0, change: 0, hand: null, start: clockT, pts: 0, fees: 0 };
     cust.state = "checkout"; cust.c.setMood("happy"); cust.c.setPose("wait"); coSkip(); coHud(); return;
@@ -7384,6 +7912,7 @@ window.VaultAim = {
   center() { aimNDC.x = aimNDC.y = 0; pickHover(); },
 };
 function pickHover() {
+  aimPostit = null; aimNotepad = false;
   hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
@@ -7492,6 +8021,8 @@ function pickHover() {
     else if (aim?.object.userData.toolHome && aim.distance < 2.4 && toolHeld === aim.object.userData.toolHome) aimTool = toolHeld;
     else if (aim?.object.userData.ladder && aim.distance < 2.4) aimLadder = true;
     else if (aim?.object.userData.deadLight && aim.distance < 3.8) aimDead = aim.object.userData.deadLight;
+    else if (aim?.object.userData.postit && aim.distance < 2.4) aimPostit = aim.object.userData.postit;
+    else if (aim?.object.userData.notepad && aim.distance < 2.4) aimNotepad = true;
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
     else if (aim?.object.userData.jobBoard && aim.distance < 2.4) aimBoard = true;
@@ -7500,7 +8031,7 @@ function pickHover() {
     else if (aim?.object.userData.towels && aim.distance < 2.2) aimTowels = true;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
     else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
-    else if (aim?.object.userData.trashBin && aim.distance < 2.4 && (heldSnack || heldPopcorn) && !binFull(aim.object.userData.trashBin)) aimTrash = aim.object.userData.trashBin;
+    else if (aim?.object.userData.trashBin && aim.distance < 2.4 && (heldSnack || heldPopcorn || postitHeld) && !binFull(aim.object.userData.trashBin)) aimTrash = aim.object.userData.trashBin;
     else if (aim?.object.userData.trashBin && aim.distance < 2.4) aimBin = aim.object.userData.trashBin;
     else if (aim?.object.userData.trashBag && aim.distance < 2.4) aimBag = aim.object.userData.trashBag;
     else if (aim?.object.userData.chute && aim.distance < 2.4) aimChute = true;
@@ -7524,7 +8055,12 @@ function pickHover() {
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
       returnBin.length && inv.length < INV_MAX && `CLICK — look at a tape from Returns (${returnBin.length})`].filter(Boolean).join("<br>");
     else if (aimPop) tip.innerHTML = popcornStep(aimPop, false);
-    else if (aimTrash) tip.innerHTML = `E — throw away ${heldSnack ? heldSnack.userData.snack.name : "the popcorn"}`;
+    else if (aimTrash) tip.innerHTML = `E — throw away ${postitHeld ? "the post-it" : heldSnack ? heldSnack.userData.snack.name : "the popcorn"}`;
+    else if (postitHeld && (aimPostit || aimPhone || aimNotepad)) tip.innerHTML = "E — stick the post-it back by the phone";
+    else if (aimPostit) { const n = aimPostit, m = n.m, can = !phone.out && !phone.call && posTerm.needsCall(m) && !posTerm.calledToday(m);
+      tip.innerHTML = `Post-it: call ${memberName(m)} · ${m.phone}<div class="cat">${n.result ? n.result.toLowerCase() : posTerm.lateSummary(m).toLowerCase()}</div>` +
+        (eHoldTimer && eHoldPostit ? "Peeling…" : (can ? "E — call them<br>" : !posTerm.needsCall(m) ? "<div class=\"cat\">the tape's back: no need to call</div>" : posTerm.calledToday(m) ? "<div class=\"cat\">called today: try again tomorrow</div>" : "") + "Hold E — peel it off"); }
+    else if (aimNotepad) tip.innerHTML = `Post-it notes<div class="cat">an overdue call looked up on the register (messages) goes on one, by the phone</div>`;
     else if (aimBin) tip.innerHTML = aimBin.n ? `E — bag the trash<div class="cat">${aimBin.name} · ${binFull(aimBin) ? "full" : `${Math.round(100 * aimBin.n / aimBin.cap)}% full`}</div>` : `The ${aimBin.name} · empty`;
     else if (aimBag) tip.innerHTML = "E — pick up the trash bag";
     else if (aimChute) tip.innerHTML = "Trash chute<div class=\"cat\">E — open the hatch · bag up the bins and bring them here</div>";
@@ -7546,7 +8082,7 @@ function pickHover() {
     else if (aimStool) tip.innerHTML = stool.by ? `${stool.by.first}'s using the stool` : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimExit) tip.innerHTML = !afterClose() ? "Open till midnight · clock out after close" : custs.length ? "Customers still inside" : "E — clock out and go home";
-    else if (aimCustomer) tip.innerHTML = custTip(aimCustomer) + `<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
+    else if (aimCustomer) tip.innerHTML = aimCustomer.kid ? `E — say hi<div class="cat">${memberName(aimCustomer.member)}'s kid</div>` : custTip(aimCustomer) + `<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
     else if (aimStockSlot) tip.innerHTML = `E — put out a ${aimStockSlot.userData.snack.name}`;
     else if (aimCupboard) { const n = emptySpots().filter(u => isDrink(u.userData.snack) === (aimCupboard === "drinks")).length;
       const mine = inv.filter(e => stockMine(e, aimCupboard)).length, inHand = heldSnack && stockMine({ kind: "snack", ref: heldSnack }, aimCupboard);
@@ -7556,7 +8092,7 @@ function pickHover() {
     else if (aimSink) tip.innerHTML = `E — turn the tap ${bath.tap ? "off" : "on"}`;
     else if (aimTowels) tip.innerHTML = "E — take a paper towel";
     else if (aimBoard) tip.innerHTML = `E — the staff job board<div class="cat">${staff.map(e => `${e.first}: ${withEmp(e, () => JOBS[danaJobNow()]?.name.toLowerCase() || "free")}`).join(" · ")}</div>`;
-    else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : "The store phone";
+    else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : phone.out ? "On the phone" : `The store phone${postits.length ? `<div class="cat">${postits.length} post-it${postits.length > 1 ? "s" : ""} beside it</div>` : ""}`;
     else if (aimHolds) { const h = held && holds.find(h => !h.copy && titleOfCopy(held) === h.title), open = holds.filter(h => !h.copy);
       const ask = !held && custAsks.find(k => k.state === "asking" && k.want.kind === "hold" && k.want.hold.copy);
       tip.innerHTML = h ? `E — put ${tapeName(held)} on hold for ${memberName(h.member)}` : ask ? `E — take down ${tapeName(ask.want.title)} for ${memberName(ask.member)}` : open.length ? `Holds to put aside:<div class="cat">${open.map(h => `${tapeName(h.title)} (${memberName(h.member)}, ~${fmtClock(h.at)})`).join("<br>")}</div>` : holds.length ? `${holds.length} on hold` : "Holds shelf (empty)"; }
@@ -7587,6 +8123,7 @@ canvas.addEventListener("mousedown", e => {
     if (tvMenu) { tvMenu = false; return; }                // an open picture menu closes from anywhere...
     if (tvScreenHit()) { tvMenu = true; return; }          // ...but only opens with the crosshair on the screen
     if (bagCarry.length) { bagsSetDown(); return; }       // trash bags: down at your feet
+    if (postitHeld) { postitPutBack(); return; }          // a peeled-off post-it: back by the phone
     if (held && held === peek) {                           // only still-being-looked-at tapes go back
       if (peekSrc === "bin") { returnBin.push(held); releaseFromHand(); refreshReturnsBin(); } else putBack();
       peek = null;
@@ -7885,7 +8422,7 @@ function libUnlock(tier) {                       // -> tapes put out
 // you're with someone costs nothing (they'll call back), but pick up while
 // someone's waiting at the counter and they notice. Dana takes calls too, but
 // only when nobody in the store needs her
-const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null };   // next: the game hour of the next call
+const phone = { next: SAVE?.phone?.next ?? null, ring: null, call: null, out: null };   // next: the game hour of the next call; out: a call you're making (see post-its)
 const holds = [];                                // promised holds: { member, title, at (game hour they come in), day, copy (on the shelf) | null, by, alert }
 const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === titleOfCopy(copy));   // a POS alert on a promised hold: the next return of it goes on the holds shelf
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
@@ -7951,7 +8488,8 @@ function phoneCaller() {                          // mostly a member asking afte
 }
 function phoneTick(dt) {                          // (runs with the clock)
   if (phone.next == null) phone.next = Math.max(shift.h, SHIFT.open) + 1 + Math.random() * 1.5;
-  if (!phone.ring && !phone.call && shiftOpen() && shift.h >= phone.next) {
+  phoneOutTick(dt);
+  if (!phone.ring && !phone.call && !phone.out && shiftOpen() && shift.h >= phone.next) {
     phone.next = shift.h + 2 + Math.random() * 1.5;   // semi-infrequent: every two to three and a half hours
     const c = phoneCaller(); if (c) { phone.ring = { ...c, t: 0, rang: 0 }; logAct("The phone's ringing (behind the counter)"); }
   }
@@ -8017,6 +8555,156 @@ function callHud() {
   }
   el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${tapeName(c.title)}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
     `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
+  el.style.display = "block";
+}
+
+// ---------------- post-its by the phone: the overdue calls ----------------
+// Look up an overdue member on the register (the message center) and it goes down on a post-it, stuck on the cabinet
+// by the phone. E on one makes the call (the phone's own line: while you're on it, nobody else gets through); what
+// came of it is written on the note, and on their record. Hold E to peel one off; a wastebasket takes it.
+// Who picks up depends on when you ring: working people aren't home on a weekday afternoon (the machine gets it),
+// weekend mornings people sleep in, and the later in the evening the less they like it. Past their bedtime you'll
+// wake them, and they'll let you know
+const postits = [];                               // { m (member), result: null | what came of it, at: the hour it was written, mesh }
+let postitHeld = null;                            // the one you've peeled off
+const POSTIT_W = 0.076;
+const postitSpot = i => ({ x: -6.22 + (i % 8 % 4) * 0.09, z: PHONE_AT.z - 0.075 + Math.floor(i % 8 / 4) * 0.15, y: PHONE_AT.y - 0.0785 + Math.floor(i / 8) * 0.0015 });   // two rows of four by the phone, then on top
+function postitDraw(n) {                          // handwritten, on the yellow square
+  const c = n.cv ||= Object.assign(document.createElement("canvas"), { width: 256, height: 256 }), g = c.getContext("2d");
+  g.fillStyle = "#ffea6e"; g.fillRect(0, 0, 256, 256);
+  g.fillStyle = "#f3d750"; g.fillRect(0, 0, 256, 26);                       // the sticky strip
+  const hand = px => `${px}px "Bradley Hand", "Segoe Print", "Comic Sans MS", cursive`;
+  g.fillStyle = "#1b2f8c"; g.textBaseline = "top";
+  g.font = hand(30); g.fillText("CALL:", 14, 34);
+  g.font = hand(32); g.fillText(memberName(n.m), 14, 70, 228);
+  g.font = hand(28); g.fillText(n.m.phone, 14, 108);
+  g.font = hand(22); g.fillText(posTerm.lateSummary(n.m).toLowerCase() || "tape's back!", 14, 144, 228);
+  if (n.result) {
+    g.fillStyle = "#b3261e"; g.font = hand(20);
+    const words = n.result.split(" "), lines = [""];
+    for (const w of words) { const t = (lines.at(-1) + " " + w).trim(); if (g.measureText(t).width > 228) lines.push(w); else lines[lines.length - 1] = t; }
+    lines.slice(0, 3).forEach((l, k) => g.fillText(l, 14, 178 + k * 24));
+    g.strokeStyle = "#b3261e"; g.lineWidth = 3; g.beginPath(); g.moveTo(12, 64); g.lineTo(240, 60); g.stroke();   // crossed off
+  }
+  if (n.tex) n.tex.needsUpdate = true;
+}
+function postitMesh(n) {
+  postitDraw(n);
+  n.tex = new THREE.CanvasTexture(n.cv); n.tex.colorSpace = THREE.SRGBColorSpace; n.tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  n.mesh = new THREE.Mesh(new THREE.PlaneGeometry(POSTIT_W, POSTIT_W), new THREE.MeshLambertMaterial({ map: n.tex }));
+  n.mesh.userData.postit = n; aimables.push(n.mesh); scene.add(n.mesh);
+  n.rz = n.rz ?? (Math.random() - 0.5) * 0.25;
+}
+function postitsLayout() {                       // stuck down flat on the cabinet top, read from where you stand
+  postits.filter(n => n !== postitHeld).forEach((n, i) => {
+    const p = postitSpot(i); if (n.mesh.parent !== scene) scene.add(n.mesh);
+    n.mesh.position.set(p.x, p.y, p.z); n.mesh.rotation.set(-Math.PI / 2, 0, n.rz); n.mesh.scale.setScalar(1);
+  });
+}
+function postitAdd(m, quiet = false) {            // the register: an overdue call looked up -> a note by the phone (one per member)
+  if (postits.some(n => n.m === m)) return null;
+  const n = { m, result: null, at: shift.h }; postitMesh(n); postits.push(n); postitsLayout();
+  if (!quiet) logAct(`Jotted down a post-it to call ${memberName(m)} (${m.phone}): it's by the phone`);
+  return n;
+}
+function postitPickUp(n) {                        // hold E: peeled off, in your hand
+  postitHeld = n; n.mesh.removeFromParent(); camera.add(n.mesh);
+  n.mesh.position.set(0.17, -0.15, -0.38); n.mesh.rotation.set(-0.35, 0.15, 0.08); n.mesh.scale.setScalar(1.15);
+  const i = aimables.indexOf(n.mesh); if (i >= 0) aimables.splice(i, 1);
+  postitsLayout();
+  toast("Peeled off the post-it · E on a wastebasket to toss it · right-click to stick it back", true);
+}
+function postitPutBack() {                        // stuck back down by the phone
+  const n = postitHeld; if (!n) return; postitHeld = null;
+  n.mesh.removeFromParent(); aimables.push(n.mesh); postitsLayout();
+}
+function postitToss(bin) {                        // into a wastebasket
+  const n = postitHeld; if (!n) return; postitHeld = null;
+  n.mesh.removeFromParent(); n.mesh.geometry.dispose(); n.mesh.material.dispose(); n.tex.dispose();
+  postits.splice(postits.indexOf(n), 1); postitsLayout();
+  trashAdd(bin, 1); toast(`Tossed the post-it for ${memberName(n.m)}`, true);
+}
+// how a member's day goes (from their member #, so the same person keeps the same habits)
+function memberHabits(m) {
+  const r = k => (Math.imul(m.num + k * 7919, 2654435761) >>> 0) / 4294967296;
+  return { works: r(1) < 0.68, nightOwl: r(2) < 0.15, sleepsIn: r(3) < 0.55 };
+}
+// -> { pick: "machine" | "noanswer" | "answer", mood: "ok" | "annoyed" | "angry", woke, why } for a call made right now
+function callOutcome(m, h = shift.h, day = weekday()) {
+  const H = h, hab = memberHabits(m), weekend = day === 0 || day === 6, R = Math.random;
+  const bed = hab.nightOwl ? 25 : day === 5 || day === 6 ? 23.5 : 22.5;      // lights out (Friday and Saturday nights, a bit later)
+  let home = 0.85;
+  if (!weekend && hab.works && H >= 8.5 && H < 17.5) home = 0.1;             // at work
+  else if (!weekend && H >= 17.5 && H < 18.5) home = 0.55;                    // on the way home
+  else if (weekend && H >= 11.5 && H < 18) home = 0.45;                       // out doing weekend things
+  if (R() > home) return { pick: R() < 0.85 ? "machine" : "noanswer", why: !weekend && hab.works && H < 17.5 ? "work" : "out" };
+  const asleep = H >= bed ? 0.85 : H >= bed - 0.75 ? 0.3 : weekend && hab.sleepsIn && H < 10.5 ? 0.7 : weekend && hab.sleepsIn && H < 11.5 ? 0.3 : 0;
+  if (R() < asleep) {                             // you woke them up
+    if (R() < 0.4) return { pick: R() < 0.7 ? "machine" : "noanswer", why: "asleep" };   // (slept through it)
+    const late = H >= bed - 0.75;
+    return { pick: "answer", woke: true, mood: late ? (H >= bed + 0.5 || R() < 0.6 ? "angry" : "annoyed") : R() < 0.75 ? "annoyed" : "ok", why: late ? "night" : "morning" };
+  }
+  const evening = H >= bed - 1.5, dinner = H >= 17.75 && H < 19;
+  return { pick: "answer", mood: evening ? (R() < 0.55 ? "annoyed" : "ok") : dinner && R() < 0.25 ? "annoyed" : "ok", why: evening ? "late" : dinner ? "dinner" : "" };
+}
+const CALL_SAY = {
+  ok: ["It's in the car: I'll drop it off.", "Oh no, I thought I'd returned that! I'll look for it.", "Sorry! I'll bring it in.", "The kid hid it in the toy box. I'll bring it by."],
+  okNo: ["Yeah, yeah. I'll get to it.", "Huh. I'll have to look for it.", "Is that still out? Weird."],
+  late: ["It's kind of late to be calling... fine, I'll bring it in.", "We were just going to bed. Yes, I'll return it."],
+  dinner: ["We're eating dinner. I'll bring it in, okay?", "Can this wait? We're in the middle of dinner."],
+  morning: ["Mmf... it's Saturday morning... yeah, okay. Later.", "You woke me up. I'll bring it in. Bye."],
+  night: ["Do you know what time it is?! <i>*click*</i>", "It's the middle of the night! Don't call here this late! <i>*click*</i>"],
+};
+const pickOne = a => a[Math.floor(Math.random() * a.length)];
+function postitCall(n) {                          // E on a post-it: dial
+  const m = n.m;
+  if (phone.ring) return toast("The phone's ringing: answer it first");
+  if (phone.call || phone.out) return toast("You're already on the phone");
+  if (!posTerm.needsCall(m)) { if (!n.result) { n.result = "TAPE CAME BACK. NO NEED TO CALL"; postitDraw(n); } return toast(`${memberName(m)}'s not overdue anymore: hold E to peel it off and toss it`); }
+  if (posTerm.calledToday(m)) return toast(`You've already called ${memberName(m)} today: try again tomorrow`);
+  const o = callOutcome(m);
+  phone.out = { n, m, o, t: 0, rings: o.pick === "answer" ? 1 + Math.floor(Math.random() * 3) : o.pick === "machine" ? 3 : 5, said: null };
+  callOutHud();
+}
+function phoneOutTick(dt) {                        // ringing out, then whoever (or whatever) picks up
+  const c = phone.out; if (!c) return;
+  if (c.said) { if ((c.t -= dt) <= 0) { phone.out = null; callOutHud(); } return; }   // what they said stays up a moment
+  if (Math.floor(c.t / 3) !== Math.floor((c.t + dt) / 3) || c.t === 0) ringBack();   // US ringback: 2 s on, 4 s off (heard every 3 s here: it's quick)
+  c.t += dt;
+  if (c.t < c.rings * 3) return;
+  const { m, o, n } = c, name = memberName(m), loy = (m.loyalty || 0) / 250, at = fmtClock(shift.h);
+  let promise = false, say, note, kind = "";
+  if (o.pick === "noanswer") { say = "<i>It rings and rings. Nobody's home, and no machine.</i>"; note = "NO ANSWER"; }
+  else if (o.pick === "machine") { promise = Math.random() < 0.25; say = `<i>“Hi, you've reached the ${m.last[0]}${m.last.slice(1).toLowerCase()}s. Leave a message at the beep.”</i> You leave one.`; note = "MACHINE. LEFT A MESSAGE"; }
+  else if (o.mood === "angry") {
+    promise = Math.random() < 0.1; say = `“${pickOne(CALL_SAY.night)}”`; note = o.woke ? "WOKE THEM UP. HUNG UP ON ME" : "HUNG UP ON ME";
+    posTerm.loyal(m, -15); shiftScore(-15, "you"); kind = "bad";
+  } else if (o.mood === "annoyed") {
+    promise = Math.random() < 0.45 + loy; posTerm.loyal(m, -6); kind = "bad";
+    say = `“${pickOne(CALL_SAY[o.why] || CALL_SAY.late)}”`; note = `${o.woke ? "WOKE THEM. " : ""}ANNOYED. ${promise ? "SAYS THEY'LL BRING IT" : "NO PROMISES"}`;
+  } else {
+    promise = Math.random() < 0.8 + loy; posTerm.loyal(m, 1);
+    say = `“${pickOne(promise ? CALL_SAY.ok : CALL_SAY.okNo)}”`; note = promise ? "SPOKE TO THEM. BRINGING IT IN" : "SPOKE TO THEM. NO PROMISES";
+  }
+  n.result = `${at} - ${note}`; postitDraw(n);
+  posTerm.recordCall(m, { promise, result: `${at} ${note}` });
+  gainXp("you", "cha", 6);
+  if (!promise) logAct(`Called ${name} about their overdue tape: ${note.toLowerCase()}`, kind, null, kind ? (o.mood === "angry" ? -15 : null) : null);
+  c.said = say; c.t = 4.5; callOutHud();
+}
+let ringBackAc = null;
+function ringBack() {                             // the ringback tone in the handset: 440 + 480 Hz, quietly
+  try {
+    const ac = ringBackAc ||= new AudioContext(), t = ac.currentTime + 0.02, out = ac.createGain(); out.gain.value = 0.025; out.connect(sfxOut(ac));
+    for (const f of [440, 480]) { const o = ac.createOscillator(); o.frequency.value = f; o.connect(out); o.start(t); o.stop(t + 1.6); }
+    out.gain.setValueAtTime(0.025, t + 1.5); out.gain.linearRampToValueAtTime(0, t + 1.6);
+  } catch {}
+}
+function callOutHud() {
+  const el = $("callPanel"), c = phone.out;
+  if (!c) { if (!phone.call) el.style.display = "none"; return; }
+  el.innerHTML = `<div class="h">CALLING · ${memberName(c.m)} #${c.m.num} · ${c.m.phone}</div>` +
+    (c.said ? `<div class="q">${c.said}</div>` : `<div class="q"><i>Ringing…</i> <span class="cat">(${posTerm.lateSummary(c.m).toLowerCase()})</span></div>`);
   el.style.display = "block";
 }
 function holdPull() {                            // E on the holds shelf, hands free: take down the one someone's at the counter for
@@ -8161,12 +8849,101 @@ function corkDraw() {
   if (show.title) note(470, 22, 290, 120, "#111", ["TONIGHT 8PM"], 28), g.fillStyle = "#ffd400", g.font = "bold 22px Arial", g.textAlign = "center", g.fillText(show.title.title.toUpperCase(), 615, 120, 270), g.textAlign = "left";
   // the flyers: four of them this week
   const fl = [...FLYERS].sort(() => rnd() - 0.5).slice(0, banned.length > 2 ? 3 : 4);
+  const dow = (shift.day - 1) % 7;                 // through the week, people tear the tabs off (more off the popular ones)
   [[790, 24], [200, 210], [430, 190], [30, 250]].slice(0, fl.length).forEach(([x, y], i) => {
     note(x, y, 210, 170, fl[i][0], fl[i][1]);
-    g.fillStyle = "#222"; for (let k = 0; k < 6; k++) { g.save(); g.translate(x + 20 + k * 32, y + 170); g.fillStyle = fl[i][0]; g.fillRect(0, 0, 24, 40); g.restore(); }   // tear-off tabs
+    const torn = Math.min(6, Math.floor(dow * (0.2 + rnd() * 0.8))), gone = new Set([0, 1, 2, 3, 4, 5].sort(() => rnd() - 0.5).slice(0, torn));
+    g.fillStyle = "#222"; for (let k = 0; k < 6; k++) { if (gone.has(k)) continue; g.save(); g.translate(x + 20 + k * 32, y + 170); g.fillStyle = fl[i][0]; g.fillRect(0, 0, 24, 40); g.restore(); }   // tear-off tabs
   });
+  if (dow >= 3) {                                 // somebody's put a card up since Monday
+    const cards = [["NEED A RIDE", "TO THE GAME SAT", "ASK JEN"], ["FOUND: KEYS", "ASK AT COUNTER"], ["FOR SALE", "SEGA GENESIS", "+ 6 GAMES $60"], ["ROOMMATE", "WANTED", "NO SMOKERS"], ["TUTORING", "MATH / SCIENCE", "555-0110"]];
+    note(650, 470, 170, 120, "#f4f1e6", cards[(wk * 3 + 1) % cards.length], 18);
+  }
   corkTex.needsUpdate = true;
 }
+
+// ---------------- decorations for the holidays ----------------
+// Up for the month (or the run-up): October's cobwebs, jack-o'-lanterns by the door and orange-and-purple bunting;
+// November's paper leaves and a cut-out turkey on the door; December's tree in the front corner, colored lights
+// along the windows and a wreath; paper hearts on the glass for Valentine's; red, white and blue for the Fourth
+const decor = { g: new THREE.Group(), key: null, blink: [], t: 0 };
+scene.add(decor.g);
+function decorDraw() {
+  const d = shiftDate(), mo = d.getMonth(), dd = d.getDate();
+  const key = mo === 9 ? "halloween" : mo === 10 ? "fall" : mo === 11 ? "xmas" : mo === 1 && dd <= 14 ? "valentine" : mo === 6 && dd <= 7 ? "fourth" : null;
+  if (key === decor.key) return; decor.key = key;
+  decor.g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.map?.dispose(); m.dispose(); }); } });
+  decor.g.clear(); decor.blink = []; for (const c of decor.cols || []) colliders.splice(colliders.indexOf(c), 1); decor.cols = [];
+  if (!key) return;
+  const G = decor.g, lam = c => new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide });
+  const add = (geo, m, x, y, z, parent = G) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+  const canvasMat = (w, h, draw, opts = {}) => { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return new THREE.MeshLambertMaterial({ map: t, transparent: true, side: THREE.DoubleSide, alphaTest: 0.05, ...opts }); };
+  const bunting = (cols, y = 2.6, z = 0.18) => {   // pennants on a string along the window header, sagging between ties
+    const tri = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.09, 0, 0), new THREE.Vector3(0.09, 0, 0), new THREE.Vector3(0, -0.2, 0)]); tri.computeVertexNormals();
+    const mats = cols.map(lam), x0 = WALL_L + 0.3, x1 = STORE.x - 0.3, span = 2.4;
+    for (let x = x0, i = 0; x < x1; x += 0.24, i++) { const k = ((x - x0) % span) / span, sag = 0.12 * Math.sin(k * Math.PI); add(tri, mats[i % mats.length], x, y - sag, z); }
+  };
+  const lights = (y = 2.62, z = 0.16) => {         // a string of colored bulbs, twinkling (two sets taking turns)
+    const geo = new THREE.SphereGeometry(0.022, 6, 5), cols = [0xff3030, 0x30ff60, 0x3070ff, 0xffd400, 0xff7ad9];
+    const sets = [new THREE.Group(), new THREE.Group()]; sets.forEach(s => G.add(s));
+    const x0 = WALL_L + 0.3, x1 = STORE.x - 0.3, span = 2.4;
+    for (let x = x0, i = 0; x < x1; x += 0.2, i++) { const k = ((x - x0) % span) / span; glow(add(geo, new THREE.MeshBasicMaterial({ color: cols[i % cols.length] }), x, y - 0.1 * Math.sin(k * Math.PI), z, sets[i % 2])); }
+    decor.blink.push(sets);
+  };
+  const glassCutout = (draw, x, y, s, z = 0.04) => { const m = add(new THREE.PlaneGeometry(s, s), canvasMat(128, 128, draw), x, y, z); return m; };
+  if (key === "halloween") {
+    bunting([0xff7a12, 0x5b2a86, 0x111111]);
+    const web = canvasMat(256, 256, (g, w) => { g.strokeStyle = "rgba(240,240,240,0.75)"; g.lineWidth = 1.6;
+      for (let a = 0; a <= 8; a++) { g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(a / 8 * Math.PI / 2) * w, Math.sin(a / 8 * Math.PI / 2) * w); g.stroke(); }
+      for (let r = 30; r < w; r += 34) { g.beginPath(); for (let a = 0; a <= 8; a++) { const t = a / 8 * Math.PI / 2, rr = r * (a % 2 ? 0.92 : 1); a ? g.lineTo(Math.cos(t) * rr, Math.sin(t) * rr) : g.moveTo(Math.cos(t) * rr, Math.sin(t) * rr); } g.stroke(); } });
+    for (const [x, z, ry] of [[WALL_L + 0.11, 0.21, 0], [STORE.x - 0.11, 0.21, Math.PI / 2], [WALL_L + 0.11, STORE.z - 0.15, -Math.PI / 2], [STORE.x - 0.11, STORE.z - 0.15, Math.PI]]) {
+      const w = add(new THREE.PlaneGeometry(0.9, 0.9), web, x, STORE.h - 0.02, z); w.rotation.set(Math.PI / 2, 0, ry); w.geometry.translate(0.45, -0.45, 0);   // across the corner, up at the ceiling
+    }
+    const face = canvasMat(128, 128, (g) => { g.fillStyle = "#ffcf3a"; for (const [x, y] of [[40, 50], [88, 50]]) { g.beginPath(); g.moveTo(x - 12, y + 10); g.lineTo(x + 12, y + 10); g.lineTo(x, y - 10); g.fill(); }
+      g.beginPath(); g.moveTo(30, 80); for (let i = 0; i <= 8; i++) g.lineTo(30 + i * 8.5, 80 + (i % 2 ? 14 : 0)); g.lineTo(98, 96); g.lineTo(30, 96); g.fill(); }, { transparent: true });
+    for (const [x, z, s] of [[-1.62, 0.5, 1], [1.62, 0.5, 0.85], [1.62, 0.95, 0.6]]) {   // either side of the doors, lit from inside at night
+      const p = new THREE.Group(); p.position.set(x, 0, z); p.scale.setScalar(s); G.add(p);
+      const body = add(new THREE.SphereGeometry(0.2, 14, 10), lam(0xe8741a), 0, 0.17, 0, p); body.scale.y = 0.82;
+      add(new THREE.CylinderGeometry(0.02, 0.025, 0.08, 6), lam(0x4a6a1e), 0, 0.36, 0, p);
+      glow(add(new THREE.PlaneGeometry(0.26, 0.26), new THREE.MeshBasicMaterial({ map: face.map, transparent: true, color: 0xffb030 }), 0, 0.17, 0.205, p));
+      decor.cols.push({ x0: x - 0.2 * s, x1: x + 0.2 * s, z0: z - 0.2 * s, z1: z + 0.2 * s, y1: 0.35 * s }); colliders.push(decor.cols.at(-1));
+    }
+  }
+  if (key === "fall") {
+    bunting([0xc8501e, 0xe0a020, 0x8a3a1a, 0xb87a2a]);
+    glassCutout(g => { g.fillStyle = "#7a4a22"; g.beginPath(); g.arc(64, 74, 26, 0, 7); g.fill();
+      ["#c8401e", "#e0a020", "#8a5a2a", "#d06a1e", "#b83a1e"].forEach((c, i) => { g.fillStyle = c; g.beginPath(); g.ellipse(64 + Math.cos(Math.PI + i * 0.6 + 0.3) * 30, 60 + Math.sin(Math.PI + i * 0.6 + 0.3) * 30, 10, 24, i * 0.6 - 1.1, 0, 7); g.fill(); });
+      g.fillStyle = "#8a5a2a"; g.beginPath(); g.arc(64, 52, 14, 0, 7); g.fill(); g.fillStyle = "#e0a020"; g.beginPath(); g.moveTo(64, 54); g.lineTo(74, 58); g.lineTo(64, 60); g.fill(); g.fillStyle = "#d02020"; g.fillRect(60, 60, 5, 9); g.fillStyle = "#111"; g.fillRect(59, 47, 3, 3); }, -2.6, 1.5, 0.55);
+  }
+  if (key === "xmas") {
+    lights();
+    const tx = STORE.x - 1.0, tz = 1.0, tree = new THREE.Group(); tree.position.set(tx, 0, tz); G.add(tree);
+    add(new THREE.CylinderGeometry(0.05, 0.06, 0.25, 8), lam(0x5a3a1e), 0, 0.12, 0, tree);
+    add(new THREE.CylinderGeometry(0.22, 0.26, 0.2, 10), lam(0xb02020), 0, 0.1, 0, tree);   // the stand, wrapped
+    [[0.62, 0.7, 0.55], [0.48, 0.6, 1.0], [0.34, 0.5, 1.38], [0.2, 0.42, 1.72]].forEach(([r, h, y]) => add(new THREE.ConeGeometry(r, h, 10), lam(0x1e5a2e), 0, y, 0, tree));
+    const star = glow(add(new THREE.OctahedronGeometry(0.07), new THREE.MeshBasicMaterial({ color: 0xffe066 }), 0, 1.97, 0, tree)); star.scale.y = 1.4;
+    const sets = [new THREE.Group(), new THREE.Group()]; sets.forEach(s => tree.add(s)); const bulb = new THREE.SphereGeometry(0.025, 6, 5);
+    for (let i = 0; i < 46; i++) { const y = 0.35 + (i / 46) * 1.5, r = 0.6 * (1 - (y - 0.25) / 1.75) + 0.03, a = i * 2.4; glow(add(bulb, new THREE.MeshBasicMaterial({ color: [0xff3030, 0x30ff60, 0x3070ff, 0xffd400][i % 4] }), Math.cos(a) * r, y, Math.sin(a) * r, sets[i % 2])); }
+    for (let i = 0; i < 18; i++) { const y = 0.4 + Math.random() * 1.3, r = 0.58 * (1 - (y - 0.25) / 1.75), a = Math.random() * 6.28; add(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshPhongMaterial({ color: [0xc81e1e, 0xd4af37, 0x2050c0, 0xe0e0e0][i % 4], shininess: 90 }), Math.cos(a) * r, y, Math.sin(a) * r, tree); }
+    for (let i = 0; i < 4; i++) { const b = add(new THREE.BoxGeometry(0.22, 0.16, 0.2), lam([0xc81e1e, 0x2050c0, 0x2b9348, 0xd4af37][i]), Math.cos(i * 1.6 + 0.4) * 0.45, 0.08, Math.sin(i * 1.6 + 0.4) * 0.45, tree); b.rotation.y = i; }   // presents
+    decor.blink.push(sets);
+    decor.cols.push({ x0: tx - 0.62, x1: tx + 0.62, z0: tz - 0.62, z1: tz + 0.62, y1: 2 }); colliders.push(decor.cols.at(-1));
+    const wreath = new THREE.Group(); wreath.position.set(-0.85, 1.85, 0.12); G.add(wreath);   // up on the glass over the left door leaf
+    add(new THREE.TorusGeometry(0.2, 0.06, 8, 20), lam(0x1e5a2e), 0, 0, 0, wreath);
+    for (let i = 0; i < 8; i++) add(new THREE.SphereGeometry(0.022, 6, 5), lam(0xc81e1e), Math.cos(i * 0.785) * 0.2, Math.sin(i * 0.785) * 0.2, 0.05, wreath);
+    add(new THREE.BoxGeometry(0.14, 0.08, 0.03), lam(0xc81e1e), 0, -0.2, 0.04, wreath);
+  }
+  if (key === "valentine") {
+    const heart = (c) => g => { g.fillStyle = c; g.beginPath(); g.moveTo(64, 108); g.bezierCurveTo(-10, 60, 30, 0, 64, 38); g.bezierCurveTo(98, 0, 138, 60, 64, 108); g.fill(); };
+    for (let i = 0; i < 12; i++) { const side = i % 2 ? 1 : -1, x = side * (2.4 + (i >> 1) * 1.35); if (x < WALL_L + 0.4 || x > STORE.x - 0.4) continue; glassCutout(heart(["#e8264f", "#ff8fb1", "#ffffff"][i % 3]), x, 1.1 + (i % 3) * 0.45, 0.32); }
+  }
+  if (key === "fourth") bunting([0xc81e1e, 0xf4f4f4, 0x1f3f9a]);
+}
+function decorTick(dt) {                          // the lights take turns
+  if (!decor.blink.length || (decor.t += dt) < 0.7) return; decor.t = 0;
+  for (const [a, b] of decor.blink) { a.visible = !a.visible; b.visible = !a.visible; }
+}
+decorDraw();
 
 // ---------------- the restroom's working parts ----------------
 function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
@@ -8199,7 +8976,7 @@ function counterItemsList() {
   if (counterItems) return counterItems;
   const reg = (id, name, g) => { const it = { id, name, g, fp: footprint(g) }; g.traverse(o => { if (o.isMesh) o.userData.movable = it; }); return it; };
   counterItems = [...rewinders.map((rw, i) => reg(`rewinder${i}`, "rewinder", rw.g)), reg("desens", "desensitizer", COUNTER.groups.desens), reg("printer", "receipt printer", COUNTER.groups.printer)];
-  counterItems.fixed = [{ g: COUNTER.groups.register, fp: footprint(COUNTER.groups.register) }];   // (the register and its keyboard stay put)
+  counterItems.fixed = [COUNTER.groups.register, COUNTER.groups.notepad].map(g => ({ g, fp: footprint(g) }));   // (the register and its keyboard, the post-its: they stay put)
   return counterItems;
 }
 function obb(fp, x, z, ry) {                     // that outline placed in the world: center, axes, half-sizes
@@ -8295,11 +9072,14 @@ function strayTake(s) {                          // off the shelf and into a han
 // theater. E cleans one up; Dana does too when things are quiet. A messy store
 // puts customers off
 const messes = [];                               // { kind, mesh, x, y, z }
-const MESS_TOOL = { spill: "mop", popcorn: "sweeper" };
+const MESS_TOOL = { spill: "mop", popcorn: "sweeper", puddle: "mop" };
 const messCan = o => !MESS_TOOL[o.kind] || MESS_TOOL[o.kind] === toolHeld;   // do you have what it takes, in hand?   // messes that want a tool from the janitor's closet (staff just see to it)
 const MESS = {
   spill: { label: "spilled soda", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0x4a2410, transparent: true, opacity: 0.85, depthWrite: false });
     for (let i = 0; i < 4; i++) { const d = new THREE.Mesh(new THREE.CircleGeometry(0.07 + Math.random() * 0.1, 18), m); d.rotation.x = -Math.PI / 2; d.position.set((Math.random() - 0.5) * 0.25, 0.002 + i * 0.0005, (Math.random() - 0.5) * 0.25); g.add(d); }
+    return g; } },
+  puddle: { label: "puddle by the door", make: () => { const g = new THREE.Group(), m = new THREE.MeshPhongMaterial({ color: 0x9fb0c2, transparent: true, opacity: 0.5, depthWrite: false, specular: 0xffffff, shininess: 90 });
+    for (let i = 0; i < 5; i++) { const d = new THREE.Mesh(new THREE.CircleGeometry(0.08 + Math.random() * 0.14, 18), m); d.rotation.x = -Math.PI / 2; d.position.set((Math.random() - 0.5) * 0.4, 0.002 + i * 0.0005, (Math.random() - 0.5) * 0.4); g.add(d); }
     return g; } },
   wrapper: { label: "candy wrapper", make: () => new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.006, 0.05), new THREE.MeshLambertMaterial({ color: [0xd23b3b, 0x3b7bd2, 0xe0b020][Math.floor(Math.random() * 3)] })) },
   popcorn: { label: "spilled popcorn", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0xf6e7a8 });
@@ -8603,7 +9383,7 @@ function empToChute() {
 function trashTick(dt) {
   if (shift.h < SHIFT.close && !paused) {          // the day's trash: the customers' through the lobby bin, the staff's lunches, paper towels
     const hrs = dt / SHIFT.hour, inStore = custs.length;
-    const rate = { lobby: 0.9 * inStore, breakroom: 0.15 + 0.25 * staff.length, restroom: 0.08 * inStore };
+    const rate = { lobby: 0.9 * inStore, breakroom: 0.15 + 0.25 * staff.length, restroom: 0.08 * inStore, counter: 0.06 + 0.04 * staff.length };
     for (const b of binList()) if ((b.acc += hrs * (rate[b.id] || 0)) >= 1) {
       b.acc -= 1; trashAdd(b);
       if (b.id === "lobby" && custs.some(k => k.c && Math.hypot(k.c.group.position.x - b.x, k.c.group.position.z - b.z) < 2)) trashFlapT = 0.5;   // somebody right there: the flap swings
@@ -8955,6 +9735,9 @@ function onE() {
   if (aimTool) { if (toolHeld === aimTool) toolReturn(); else if (toolHeld) toast(`Put the ${TOOLS[toolHeld].label} back first`); else toolTake(aimTool); return; }
   if (aimLadder) { if (ladder.state === "stored") ladderPickUp(); else ladderClimb(); return; }
   if (aimDead) { toast(ladder.state === "placed" ? "Set the step ladder up under it and climb up" : "You'll need the step ladder: it's in the janitor's closet"); return; }
+  if (postitHeld && (aimPhone || aimPostit || aimNotepad)) { postitPutBack(); return; }
+  if (aimPostit) { postitCall(aimPostit); return; }   // (a tap; the keyboard's hold-or-tap goes through keyup)
+  if (aimNotepad) { toast("Look up an overdue member on the register (messages) and it goes on a post-it by the phone", true); return; }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
   if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
@@ -8982,6 +9765,7 @@ function onE() {
   if (aimDoor) { toggleDoor(aimDoor); return; }
   if (aimCooler) { coolerOpen = !coolerOpen; return; }
   if (aimTrash) {
+    if (postitHeld) { postitToss(aimTrash); return; }
     if (heldSnack) dropSnack(true); else if (heldPopcorn) dropPopcorn(); else return;
     trashAdd(aimTrash, 1);
     if (aimTrash.id === "lobby") trashFlapT = 0.5; return;   // swing the flap
@@ -9187,6 +9971,7 @@ const posTerm = window.createPOS({
   replace(c) { deliveries.push({ tape: copyKey(c) }); logAct(`Ordered a replacement ${c.title}: arrives tomorrow morning`); },
   savedMessages: SAVE?.messages,
   lose(c) { const k = rentedCopies.indexOf(c); if (k >= 0) rentedCopies.splice(k, 1); setOnShelf(c, false); logAct(`Billed ${c.title} as lost: reorder it on the register (B)`); },
+  callNote: m => postitAdd(m),
   promised: m => logAct(`Called ${memberName(m)} about their overdue tape${m.rentals.length > 1 ? "s" : ""}: they'll bring ${m.rentals.length > 1 ? "them" : "it"} in`),
   supplies: () => stockProducts().map(e => ({ name: e.name, drink: e.drink, spots: e.units.length, out: e.units.filter(u => u.visible).length, back: backstock[e.name] || 0,
     ordered: deliveries.filter(d => d.name === e.name).reduce((a, d) => a + d.qty, 0) + boxes.filter(b => b.name === e.name).reduce((a, b) => a + b.qty, 0), caseCost: caseCost(e), caseQty: CASE_QTY })),
@@ -9277,16 +10062,13 @@ function clockOut() {
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
-  posTerm.setDate(shiftDate()); calendarDraw(); corkDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
+  posTerm.setDate(shiftDate()); calendarDraw(); corkDraw(); postersSwap(); decorDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   { const sn = season(); for (const h of sn.today) logAct(`It's circled on the calendar: ${h.label}. ${h.rush > 1 ? "Expect a crowd" : "Expect a quiet one"}`, h.rush > 1 ? "good" : "");
     if (sn.lean.length) logAct(`Seasonal: ${sn.lean.includes("Holiday") ? "the holiday shelf" : sn.lean.includes("Horror") ? "horror" : sn.lean.join(" and ").toLowerCase()} is renting more than usual`); }
   boxDeliver();                                // yesterday's orders, by the front door
-  for (const m of posTerm.members.filter(m => m.promise && (!posTerm.canVisit(m) || (m.loyalty || 0) <= -60))) {   // promised, but not welcome (or not coming in): the night drop
-    const late = m.rentals.filter(r => posTerm.dueIn(r) < 0).map(r => r.copy); delete m.promise; if (!late.length) continue;
-    for (const c of late) { posTerm.checkIn(c); const k = rentedCopies.indexOf(c); if (k >= 0) rentedCopies.splice(k, 1); returnBin.push(c); }
-    refreshReturnsBin(); logAct(`${memberName(m)}'s overdue tape${late.length > 1 ? "s were" : " was"} in the night drop this morning`);
-  }
+  // (a promise on the phone brings nobody's tape back by itself: they have to come in with it. One who's banned or fed
+  // up never does, and after two days they're back on the call list, then billed as lost)
   for (const h of holds) if (h.day < shift.day) { h.day = shift.day; h.at = 11 + Math.random() * 3; h.coming = false; }   // didn't make it in: they'll come today
   phone.next = null;
   if (SIM && growth.pending) {                 // word got around: people will be in today to sign up at the counter
@@ -9344,7 +10126,7 @@ function saveState() {
     : { kind: "popcorn", pop: e.ref };
   const data = {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.x, z: onStool ? stoodAt.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
-    phone: { next: phone.next }, holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
+    phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg,
     counterItems: Object.fromEntries(counterItemsList().map(it => { const f = cmove.item === it ? cmove.from : null; return [it.id, f ? [f.x, f.z, f.ry] : [+it.g.position.x.toFixed(3), +it.g.position.z.toFixed(3), +it.g.rotation.y.toFixed(3)]]; })), members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
@@ -9419,6 +10201,8 @@ function loadState(S) {
       if (m && t) { if (c) setOnShelf(c, false); holds.push({ member: m, title: t, at: h.at, day: h.day, copy: c || null, by: h.by, alert: h.alert }); }
     }
     holdsRender();
+    for (const p of S.postits || []) { const m = posTerm.members.find(m => m.num === p.m); if (m) { const n = { m, result: p.result, at: p.at, rz: p.rz }; postitMesh(n); postits.push(n); } }
+    postitsLayout();
     for (const [k, at] of S.strays || []) { const c = copyByKey(k), a = copyByKey(at); if (c && a?.pos) { setOnShelf(c, false); misshelve(c, null, a); } }
     for (const [kind, x, z, y] of S.messes || []) if (MESS[kind]) messAdd(kind, x, z, y);
     for (const i of S.deadLights || []) lightDie(i, 0);
@@ -9511,7 +10295,14 @@ function ambTick(dt) {
   camera.getWorldDirection(ambFwd);
   AMB_ZONES.forEach(z => z.level = zoneLvl[z.zone] ?? 0);
   VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
-    night: 1 - tod.level, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
+    night: 1 - tod.level, rain: WX.kind === "rain" ? WX.k : 0, snow: WX.kind === "snow" ? WX.k : 0, talk: ambTalkers(), active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
+}
+function ambTalkers() {                         // who's talking right now, for the murmur (positions, at most six; the nearest ones)
+  const t = [];
+  for (const k of custs) if (k.c && (k.chatting || (k.state === "tagAlong" && k.party) || co?.cust === k)) t.push(k.c.group.position);
+  for (const e of staff) if (e.c && (e.chatWith || co?.emp === e)) t.push(e.c.group.position);
+  t.sort((a, b) => Math.hypot(a.x - player.x, a.z - player.z) - Math.hypot(b.x - player.x, b.z - player.z));
+  return { at: t.slice(0, 6).map(p => ({ x: p.x, z: p.z })), crowd: custs.filter(k => k.c && k.c.group.position.z > 0.3).length };
 }
 let pausedDrawAt = 0, onFeetT = 0;
 renderer.setAnimationLoop(() => {
@@ -9541,7 +10332,7 @@ renderer.setAnimationLoop(() => {
     });
     m.mesh.instanceColor.needsUpdate = true;
   }
-  exteriorTick(dt);
+  exteriorTick(dt); weatherTick(dt); walkerTick(dt); decorTick(dt);
   const cloudSpan = (STORE.x + 20) - (WALL_L - 20);
   for (const c of exteriorClouds) {       // a slow drift so the sky doesn't feel static
     c.position.x += dt * 0.15;
@@ -9694,7 +10485,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { decorDraw, decor, postersSwap, posterFor, WX, weatherTick, wxPlan, walkers, walkerTick, pizzaRun, exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
@@ -9702,6 +10493,6 @@ window.__t = { exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
   stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
-  snackLane, stockSlotIn, snackSpots,
+  staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
