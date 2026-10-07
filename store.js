@@ -30,6 +30,7 @@ const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the 
 const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };
+const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 33.1], [11.1, 12.7, 27.9, 29.9], [-7.07, 1.33, 33.1, 46.6]] };   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
 // the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
 // (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
 // reaches), hand = the top grip [right, up, forward]; see toolTick).
@@ -613,9 +614,6 @@ const mat = {
   road: new THREE.MeshLambertMaterial({ color: 0x2b2d31 }),
   curb: new THREE.MeshLambertMaterial({ color: 0xb9bcc0 }),
   grass: new THREE.MeshLambertMaterial({ color: 0x3f7d3a }),
-  trunk: new THREE.MeshLambertMaterial({ color: 0x5b4327 }),
-  leaves: new THREE.MeshLambertMaterial({ color: 0x2e6b34 }),
-  leaves2: new THREE.MeshLambertMaterial({ color: 0x3a7d3f }),
   bench: new THREE.MeshLambertMaterial({ color: 0x2f5233 }),
   cloud: new THREE.MeshLambertMaterial({ color: 0xf2f4f6, emissive: 0x141b30, emissiveIntensity: 0.4 }), // dim emissive so they don't vanish to black under moonlight
   lineWhite: new THREE.MeshBasicMaterial({ color: 0xe8e8e8 }),
@@ -2164,38 +2162,10 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     nightLight(new THREE.PointLight(0xffcf7a, 0, 10, 1.5), 14).position.set(px, 3.15, pz);
   }
 
-  // two nicer tree shapes — a layered pine (stacked tapering cones) and a
-  // round broadleaf (a cluster of lumpy icosahedra so the canopy isn't a
-  // perfect sphere) — over a few staggered rows so the treeline reads as
-  // an actual thicket, not a single thin row of cutouts
-  const pine = (x, z, s, leafMat) => {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * s, 0.12 * s, 1.0 * s, 6), mat.trunk);
-    trunk.position.set(x, 0.5 * s, z); ea(trunk);
-    [[0.8, 1.3, 0.8], [1.55, 1.05, 0.62], [2.2, 0.8, 0.44]].forEach(([y0, h, r]) => {
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(r * s, h * s, 8), leafMat);
-      cone.position.set(x, (y0 + h / 2) * s, z); ea(cone);
-    });
-  };
-  const round = (x, z, s, leafMat) => {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * s, 0.13 * s, 1.1 * s, 6), mat.trunk);
-    trunk.position.set(x, 0.55 * s, z); ea(trunk);
-    [[0, 1.7, 0.62], [0.34, 1.5, 0.5], [-0.32, 1.55, 0.48], [0.04, 1.98, 0.46]].forEach(([ox, y, r]) => {
-      const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 0), leafMat);
-      puff.position.set(x + ox * s, y * s, z + (Math.random() - 0.5) * 0.3 * s); ea(puff);
-    });
-  };
-  const rows = [treesNear, (treesNear + treesFar) / 2, treesFar];
-  for (const rz of rows) {
-    const spacing = 1.9 + Math.random() * 0.4;
-    const n = Math.round(w / spacing);
-    for (let i = 0; i < n; i++) {
-      const x = x0 + (i + 0.5) * (w / n) + (Math.random() - 0.5) * 0.7;
-      const z = rz + (Math.random() - 0.5) * 1.6;
-      const s = 0.8 + Math.random() * 0.6;
-      const leafMat = Math.random() < 0.5 ? mat.leaves : mat.leaves2;
-      (Math.random() < 0.6 ? pine : round)(x, z, s, leafMat);
-    }
-  }
+  // the trees: a layered pine (stacked tapering cones) and a round broadleaf (lumpy icosahedra), the treeline
+  // across the road and now groves and a treeline all round, swaying, and the broadleaf ones through the seasons (trees.js)
+  VaultTrees.build({ scene, layer: EXTERIOR_LAYER, rows: [treesNear, (treesNear + treesFar) / 2, treesFar], x0, x1, avoid: ROOF.rects });
+
   // fills any gaps above/between the trees. Unlit and exempt from fog: the
   // scene background itself is never fogged, so a fogged plane read as a
   // slightly different blue and its corners showed against the open sky
@@ -10450,6 +10420,7 @@ renderer.setAnimationLoop(() => {
   if (!playing) updateScreensaver(dt);
   if (playing || tvMenu) updateVideoFrame();
   rewinderTick(dt);
+  VaultTrees.tick(dt, { date: shiftDate(), h: shift.h, wind: WX.wind || 0, gust: WX.gust || 0, cover: WX.cover, night: 1 - tod.level, grass: WX_GROUND.find(g => g.m === mat.grass) });   // the trees outside: sway, season, leaves
   tvPowerLed.material.color.set(tvLight.base ? 0x3dff6a : 0x551008);   // green while a tape plays, dim red standby
   {                                            // VCR clock: blinking 12:00 (nobody ever set it), PLAY while a tape runs
     const txt = playing ? (video.paused ? "PAUSE" : "PLAY") : (Math.floor(clockT * 1.6) % 2 ? "12:00" : "");
