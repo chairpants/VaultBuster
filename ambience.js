@@ -65,7 +65,7 @@ window.VaultAudio = (() => {
 
 window.VaultAmbience = (() => {
   let carSeen = null, lastNight = false;
-  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null;   // vol: the settings' store-sounds volume
+  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null, windG = null;   // vol: the settings' store-sounds volume
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
   const noise = { white: null, pink: null, brown: null };
 
@@ -120,6 +120,15 @@ window.VaultAmbience = (() => {
       bp.type = "bandpass"; bp.frequency.value = 3800; bp.Q.value = 0.8; lfo.type = "sawtooth"; lfo.frequency.value = 13; lg.gain.value = 0.4; am.gain.value = 0.6; lfo.connect(lg).connect(am.gain); lfo.start();
       g2.gain.value = 0; pat.connect(bp).connect(am).connect(g2).connect(p).connect(bed);
       rainG = { roof: g, pat: g2 };
+    }
+    // wind: a low rumble round the building and a howl whose pitch wanders with the gusts. Faint through the walls,
+    // all of it out on the roof
+    {
+      const rum = loop(noise.brown, 0.7), lp = ac.createBiquadFilter(), how = loop(noise.pink), bp = ac.createBiquadFilter(), lfo = ac.createOscillator(), lg = ac.createGain(), hg = ac.createGain(), g = ac.createGain();
+      lp.type = "lowpass"; lp.frequency.value = 260; bp.type = "bandpass"; bp.frequency.value = 520; bp.Q.value = 2.2;
+      lfo.frequency.value = 0.09; lg.gain.value = 240; lfo.connect(lg).connect(bp.frequency); lfo.start();
+      hg.gain.value = 0.55; g.gain.value = 0;
+      rum.connect(lp).connect(g); how.connect(bp).connect(hg).connect(g); g.connect(bed); windG = g;
     }
     // the crowd: a faint general murmur (voiced noise in the speech band, slowly breathing) that grows with the number of people in
     {
@@ -205,6 +214,7 @@ window.VaultAmbience = (() => {
     while (hums.length < s.zones.length) { const z = s.zones[hums.length]; hums.push(hum(z.x, z.y, z.z)); }
     s.zones.forEach((z, i) => hums[i].gain.setTargetAtTime(z.level * 0.0045, t, 0.08));   // follows the switch (and the flicker as it strikes)
     bed.traffic.gain.setTargetAtTime((0.05 + 0.08 * (1 - s.night)) * (1 - 0.6 * (s.snow || 0)), t, 1);   // (snow hushes the road)
+    const wind = (s.wind || 0) * (0.55 + 0.9 * (s.gust || 0)); windG.gain.setTargetAtTime(wind * (s.outdoors ? 0.11 : 0.012), t, 0.35);
     const rain = s.rain || 0; rainG.roof.gain.setTargetAtTime(0.05 * rain, t, 0.8); rainG.pat.gain.setTargetAtTime(0.02 * rain * rain, t, 0.8);
     const tk = s.talk || { at: [], crowd: 0 };
     crowdG.gain.setTargetAtTime(Math.min(0.012, Math.max(0, tk.crowd - 1) * 0.0022), t, 1.5);
