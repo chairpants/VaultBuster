@@ -20,7 +20,9 @@
 //                         hip height (couch: 0.5) and extra knee bend to pull the feet back (a stool's footring)
 //     lookAt(yaw|null),   turn the head relative to the body
 //     holdTape(n),        how many tapes in hand, 0-3
-//     holdProp(name),     "card" / "cash" / "receipt" / "form" in the other hand, or null
+//     holdProp(name),     "card" / "cash" / "receipt" / "form" / "umbrella" (open, held up overhead) in the other hand, or null
+//     sigh(),             a one-off: shoulders lift and drop, the head sags (waiting in line)
+//                         poses also: read (a tape held up to read the back), watch (a glance at the wristwatch), lean (forearms on the counter)
 //     setPantsDown(bool), for sitting on the toilet: bare legs, pants round the ankles
 //     holdItem(obj|null), something real in the other hand (a snack off the rack), sized to the world; null empties it
 //     reachTo(point|null, arm, {lean}),  put a hand on a world point (eased); null lets go
@@ -33,33 +35,58 @@
 // }
 window.VaultCustomers = (() => {
   // ---- wardrobe: every outfit is picked from these ----
+  // The 90s were loud: neon and jewel tones, color-blocking, prints, tie-dye, with some grunge flannel and denim
+  // for balance. Boys and girls draw from their own racks (tops, bottoms, sleeves, trims, hats), so the cuts read
+  // differently even in the same colors
   const SKIN = ["#f1c9a5", "#e3b48b", "#c98d62", "#9a6440", "#6b4128"];
   const PHOSPHOR_M = ["#7dff9a", "#8fe8ff", "#ffc86a", "#f2f2f2"];   // green, cyan, amber, white
   const PHOSPHOR_F = ["#ff9ce6", "#ff8fb1", "#c9a8ff", "#ffb58a"];   // pink, rose, lavender, peach
-  const TOPS = ["tee", "tee", "flannel", "stripes", "windbreaker", "varsity", "sweater"];
-  const BRIGHT = ["#1f7a8c", "#d1495b", "#edae49", "#00798c", "#6a4c93", "#2b9348", "#f25c54", "#3d5a80", "#e76f51", "#264653", "#8338ec", "#ff006e", "#118ab2"];
-  const DULL = ["#3a3a3a", "#5b4636", "#2f4858", "#7d6b58", "#4a5d23", "#6d2e46", "#1d3557"];
-  const PANTS = [["jeans", "#3b5b8c"], ["jeans", "#243650"], ["acid", "#8aa6c9"], ["khaki", "#b9a27a"], ["black", "#222428"], ["shorts", "#b9a27a"], ["shorts", "#3b5b8c"]];
-  const SHOES = ["#eeeeee", "#eeeeee", "#1e1e1e", "#b3242c", "#2d4fa3"];
+  const NEON = ["#ff2e88", "#00c2d1", "#7a3cff", "#9be22e", "#ffd23f", "#ff6b1a", "#1fd1a1", "#e01e5a", "#2d7dff", "#ff4fd8", "#00e5ff", "#c6ff00"];
+  const JEWEL = ["#1f7a8c", "#6a4c93", "#2b9348", "#d1495b", "#118ab2", "#8338ec", "#b5179e", "#3a0ca3", "#f77f00", "#06d6a0"];
+  const PASTEL = ["#ffb3d9", "#b5ead7", "#c7ceea", "#ffdac1", "#e2f0cb", "#a0e7e5", "#fbe7c6", "#d4a5ff"];
+  const GRUNGE = ["#3a3a3a", "#5b4636", "#2f4858", "#7d6b58", "#4a5d23", "#6d2e46", "#1d3557", "#7a1f2b"];
+  const DENIM = ["#3b5b8c", "#243650", "#4f73a8", "#1d2a44"];
+  const RACK = {
+    m: {
+      tops: ["tee", "tee", "hoodie", "jersey", "windbreaker", "flannel", "rugby", "hawaiian", "varsity", "colorblock"],
+      bottoms: [["baggy", DENIM], ["baggy", DENIM], ["acid", ["#8aa6c9", "#9fb6d4"]], ["cargo", ["#b9a27a", "#4b5320", "#222428", "#6b6f3a"]],
+        ["track", ["#1d2a6b", "#222428", "#0b6e4f", "#7a1f2b", "#3a0ca3"]], ["khaki", ["#b9a27a"]], ["black", ["#222428"]]],
+      shoes: ["#eeeeee", "#eeeeee", "#1e1e1e", "#b3242c", "#2d4fa3", "#ff6b1a", "#9be22e"],
+    },
+    f: {
+      tops: ["babytee", "babytee", "crop", "tiedye", "memphis", "windbreaker", "cardigan", "overalls", "flannel", "colorblock"],
+      bottoms: [["jeans", DENIM], ["acid", ["#8aa6c9", "#b8c9e0"]], ["leggings", [...NEON.slice(0, 6), "#1c1c1e", "#7a3cff"]], ["bike", ["#1c1c1e", "#ff2e88", "#00c2d1", "#9be22e"]],
+        ["mini", ["plaid", "denim", "#1c1c1e", "#ff2e88", "#7a3cff"]], ["skirt", ["floral", "#6a4c93", "#d1495b", "#1f7a8c", "plaid"]]],
+      shoes: ["#eeeeee", "#eeeeee", "#1e1e1e", "#ff9ce6", "#a0e7e5", "#d4a5ff", "#ffd23f"],
+    },
+  };
   const CASES = [["wood", "#6b4424"], ["black", "#1c1c1e"], ["beige", "#cfc6a8"], ["silver", "#9aa0a6"], ["red", "#a8262b"], ["white", "#e4e2dc"]];
+  const SLEEVE = { tee: "baggy", jersey: "baggy", hawaiian: "baggy", colorblock: "short", babytee: "cap", crop: "cap", tiedye: "short", memphis: "short", overalls: "short" };   // the rest: long
 
   const SHOULDER_X = 0.255, SHOULDER_X_F = 0.235;   // shoulder joints off center (body-space): the sleeves just overlap the torso (hers is narrower)
   const pick = (a, rnd) => a[Math.floor(rnd() * a.length)];
-  // female: true / false, or left out to roll it (after everything else, so a
-  // given rnd still dresses a person the same way either way)
+  // female: true / false, or left out to roll it. Her rack or his, then the colors
   function randomOutfit(rnd = Math.random, female) {
-    const top = pick(TOPS, rnd), [pants, pantsColor] = pick(PANTS, rnd), [tvKind, tvColor] = pick(CASES, rnd);
+    const fem = female ?? rnd() < 0.5, R = RACK[fem ? "f" : "m"];
+    const top = pick(R.tops, rnd), [pants, pcols] = pick(R.bottoms, rnd), [tvKind, tvColor] = pick(CASES, rnd);
+    const loud = fem && rnd() < 0.35 ? PASTEL : rnd() < 0.6 ? NEON : JEWEL;
     const o = {
       skin: pick(SKIN, rnd), height: 0.93 + rnd() * 0.14, build: 0.9 + rnd() * 0.25,
-      top, topA: pick(BRIGHT, rnd), topB: rnd() < 0.5 ? pick(DULL, rnd) : pick(BRIGHT, rnd),
-      longSleeves: top !== "tee" || rnd() < 0.2,
-      pants, pantsColor, shoes: pick(SHOES, rnd),
-      hat: rnd() < 0.3 ? { color: pick(BRIGHT.concat(DULL), rnd), back: rnd() < 0.5 } : null,
+      top, topA: pick(top === "flannel" ? GRUNGE.concat(JEWEL) : loud, rnd), topB: pick(rnd() < 0.3 ? GRUNGE : NEON.concat(JEWEL), rnd), topC: pick(NEON, rnd),
+      sleeve: SLEEVE[top] || "long", graphic: Math.floor(rnd() * 4), number: 1 + Math.floor(rnd() * 98),
+      pants, pantsColor: pick(pcols, rnd), pantsB: pick(NEON, rnd), shoes: pick(R.shoes, rnd), hightop: !fem && rnd() < 0.4,
+      tights: fem && rnd() < 0.3 ? pick(["#1c1c1e", "#ff9ce6", "#7a3cff"], rnd) : null,
+      hat: null,
       tv: { kind: tvKind, color: tvColor, w: 0.42 + rnd() * 0.12, h: 0.32 + rnd() * 0.08, d: 0.3 + rnd() * 0.12, antenna: rnd() < 0.4, knobs: rnd() < 0.6 },
-      phosphor: pick(PHOSPHOR_M, rnd),
+      phosphor: pick(PHOSPHOR_M, rnd), female: fem,
+      umbrella: pick(["#1c1c1e", "#1c1c1e", "#7a1f2b", "#1d3557", "#2b9348", "#ffd23f", "#ff2e88", "#3a3a3a"], rnd),
     };
-    o.female = female ?? rnd() < 0.5;
-    if (o.female) {
+    const h = rnd(), hc = pick(NEON.concat(JEWEL, GRUNGE), rnd);
+    o.hat = fem ? (h < 0.18 ? { kind: "bow", color: hc } : h < 0.36 ? { kind: "band", color: hc } : h < 0.44 ? { kind: "bucket", color: hc } : null)
+      : (h < 0.3 ? { kind: "cap", color: hc, back: rnd() < 0.5 } : h < 0.4 ? { kind: "bucket", color: hc } : null);
+    if (top === "overalls") { o.pants = "jeans"; o.pantsColor = pick(DENIM, rnd); }   // the bib's legs
+    o.longSleeves = o.sleeve === "long";
+    if (fem) {
       o.phosphor = PHOSPHOR_F[PHOSPHOR_M.indexOf(o.phosphor)];   // same roll, her palette
       o.bust = 0.75 + (o.build - 0.9) * 2;          // 0.75..1.25, fuller on a broader build
     }
@@ -67,7 +94,7 @@ window.VaultCustomers = (() => {
   }
 
   // ---- shared geometry + a material cache keyed by what it looks like ----
-  let BOX, CYL, SPH, BALL, SOFT, ROUND, CASE, TORSO, TORSO_F, SHADOW, SHEEN, GRILLE;
+  let UMB, BOX, CYL, SPH, BALL, SOFT, ROUND, CASE, TORSO, TORSO_F, SHADOW, SHEEN, GRILLE;
   const mats = new Map();
   // a unit box with its edges rounded off (r = corner radius, in unit-box
   // terms): each vertex is pulled onto a rounded shell around a smaller core.
@@ -92,6 +119,7 @@ window.VaultCustomers = (() => {
     SPH = new THREE.SphereGeometry(0.5, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2);   // a dome (cap crown)
     BALL = new THREE.SphereGeometry(0.5, 10, 8);
     SOFT = roundBox(0.3);                          // limbs, hands: very soft
+    UMB = new THREE.ConeGeometry(0.56, 0.2, 10, 1, true);    // an umbrella canopy (open underneath)
     ROUND = roundBox(0.18);                        // shoes, hips
     CASE = roundBox(0.08, 3);                      // TV cabinets: molded plastic / veneer edges
     TORSO = roundBox(0.2, 4, 0.22);                // shoulders broader than the waist
@@ -116,72 +144,172 @@ window.VaultCustomers = (() => {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = THREE.NearestFilter;
     const m = new THREE.MeshLambertMaterial({ map: t }); mats.set(key, m); return m;
   }
-  // the shirt/jacket: torso and sleeve materials for an outfit
+  // the shirt/jacket -> { front, back, side, sleeve, trim, hood }. The torso takes a material per face, so what's
+  // printed on the front (a name tag, a graphic, a number) stays on the front: the back gets its own (a jersey's big
+  // number, overall straps), the sides and shoulders just the cloth
   function topMats(o) {
-    const { top, topA: a, topB: b } = o;
-    const key = `${top}|${a}|${b}`;
-    if (top === "flannel") {
-      const m = patterned(key, (g, n) => {
-        g.fillStyle = a; g.fillRect(0, 0, n, n);
-        g.fillStyle = b; g.globalAlpha = 0.55;
-        for (let i = 0; i < n; i += 16) { g.fillRect(i, 0, 7, n); g.fillRect(0, i, n, 7); }
-        g.globalAlpha = 0.35; g.fillStyle = "#fff"; for (let i = 10; i < n; i += 16) { g.fillRect(i, 0, 1, n); g.fillRect(0, i, n, 1); }
-      });
-      return [m, m];
-    }
-    if (top === "stripes") {
-      const m = patterned(key, (g, n) => { g.fillStyle = a; g.fillRect(0, 0, n, n); g.fillStyle = b; for (let y = 0; y < n; y += 12) g.fillRect(0, y, n, 5); });
-      return [m, m];
-    }
-    if (top === "windbreaker") {                  // loud 90s color-block panels
-      const m = patterned(key, (g, n) => {
-        g.fillStyle = a; g.fillRect(0, 0, n, n);
-        g.fillStyle = b; g.beginPath(); g.moveTo(0, n * 0.55); g.lineTo(n, n * 0.2); g.lineTo(n, n * 0.5); g.lineTo(0, n * 0.85); g.fill();
-        g.fillStyle = "#f5f5f5"; g.beginPath(); g.moveTo(0, n * 0.85); g.lineTo(n, n * 0.5); g.lineTo(n, n * 0.6); g.lineTo(0, n * 0.95); g.fill();
-      });
-      return [m, m];
-    }
-    if (top === "varsity") {                      // body color, cream sleeves, a chenille letter
-      const body = patterned(key, (g, n) => {
-        g.fillStyle = a; g.fillRect(0, 0, n, n);
-        g.fillStyle = "#f3ead3"; g.font = "bold 26px Georgia, serif"; g.textAlign = "center"; g.fillText("V", n * 0.7, n * 0.55);
-        g.fillStyle = b; g.fillRect(0, n - 6, n, 6);
-      });
-      return [body, solid("#f3ead3")];
-    }
-    if (top === "sweater") {                      // solid with a zigzag band across the chest
-      const m = patterned(key, (g, n) => {
-        g.fillStyle = a; g.fillRect(0, 0, n, n);
-        g.strokeStyle = b; g.lineWidth = 5; g.beginPath();
-        for (let x = 0; x <= n; x += 8) g.lineTo(x, n * 0.35 + (x / 8 % 2 ? 6 : -6));
-        g.stroke();
-      });
-      return [m, m];
-    }
-    if (top === "uniform") {                      // store polo: VaultBuster blue, yellow collar band, a name tag (if it has one)
-      const tagHere = o.nameTag && !o.female;       // with a bust in the way, the tag's pinned on higher up instead (see build)
-      const body = patterned(`${key}|${tagHere ? o.nameTag : ""}`, (g, n) => {
-        g.fillStyle = a; g.fillRect(0, 0, n, n);
-        g.fillStyle = b; g.fillRect(0, 0, n, 7);
-        if (tagHere) {                              // no nameTag: a plain polo
+    const { top, topA: a, topB: b } = o, c = o.topC || "#ffffff", key = `${top}|${a}|${b}|${c}|${o.graphic ?? 0}|${o.number ?? 0}|${o.skin}`;
+    const mk = (name, draw) => patterned(`${key}|${name}`, (g, n) => { draw(g, n); if (top === "crop") { g.fillStyle = o.skin; g.fillRect(0, n * 0.8, n, n * 0.2); } });   // (a crop top: a bare midriff all round)
+    const flat = (fill, name = "cloth") => mk(name, fill);
+    const res = (front, back, side, sleeve, trim, extra = {}) => ({ front, back: back || side, side, sleeve: sleeve || side, trim: trim || sleeve || side, ...extra });
+    const fillA = (g, n) => { g.fillStyle = a; g.fillRect(0, 0, n, n); };
+    const graphic = (g, n, col) => {              // a chest print: his (bolt, smiley, splatter, a wordmark), hers (heart, star, smiley, flower)
+      const k = o.graphic ?? 0, cx = n * 0.5, cy = n * 0.42; g.fillStyle = col; g.strokeStyle = col;
+      const star = (r) => { g.beginPath(); for (let i = 0; i < 10; i++) { const t = i * Math.PI / 5 - Math.PI / 2, rr = i % 2 ? r * 0.45 : r; g.lineTo(cx + Math.cos(t) * rr, cy + Math.sin(t) * rr); } g.fill(); };
+      const smiley = () => { g.beginPath(); g.arc(cx, cy, 11, 0, 7); g.fill(); g.fillStyle = "#111"; g.fillRect(cx - 5, cy - 5, 3, 4); g.fillRect(cx + 2, cy - 5, 3, 4); g.lineWidth = 2; g.strokeStyle = "#111"; g.beginPath(); g.arc(cx, cy + 1, 6, 0.2, Math.PI - 0.2); g.stroke(); };
+      if (o.female) {
+        if (k === 0) { g.beginPath(); g.moveTo(cx, cy + 10); g.bezierCurveTo(cx - 16, cy - 2, cx - 6, cy - 14, cx, cy - 5); g.bezierCurveTo(cx + 6, cy - 14, cx + 16, cy - 2, cx, cy + 10); g.fill(); }
+        else if (k === 1) star(12); else if (k === 2) smiley();
+        else { for (let i = 0; i < 5; i++) { const t = i * 1.2566; g.beginPath(); g.arc(cx + Math.cos(t) * 6, cy + Math.sin(t) * 6, 5, 0, 7); g.fill(); } g.fillStyle = "#ffd23f"; g.beginPath(); g.arc(cx, cy, 4, 0, 7); g.fill(); }
+      } else {
+        if (k === 0) { g.beginPath(); g.moveTo(cx + 3, cy - 14); g.lineTo(cx - 8, cy + 2); g.lineTo(cx - 1, cy + 2); g.lineTo(cx - 4, cy + 14); g.lineTo(cx + 9, cy - 3); g.lineTo(cx + 2, cy - 3); g.fill(); }
+        else if (k === 1) smiley();
+        else if (k === 2) { for (let i = 0; i < 14; i++) { const t = i * 2.4, r = 3 + (i * 7 % 9); g.beginPath(); g.arc(cx + Math.cos(t) * r, cy + Math.sin(t) * r * 0.8, 2 + (i % 3), 0, 7); g.fill(); } }
+        else { g.font = "bold 13px Impact, Arial Black, sans-serif"; g.textAlign = "center"; g.fillText("RAD", cx, cy + 5); g.fillRect(cx - 14, cy + 8, 28, 2); }
+      }
+    };
+    switch (top) {
+      case "uniform": {                           // store polo: VaultBuster blue, yellow collar band, a name tag on the front (if it has one)
+        const tagHere = o.nameTag && !o.female;     // with a bust in the way, the tag's pinned on higher up instead (see build)
+        const plain = patterned(`${top}|${a}|${b}|plain`, (g, n) => { fillA(g, n); g.fillStyle = b; g.fillRect(0, 0, n, 7); });
+        const front = tagHere ? patterned(`${top}|${a}|${b}|${o.nameTag}`, (g, n) => {
+          fillA(g, n); g.fillStyle = b; g.fillRect(0, 0, n, 7);
           g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.56, 16, 22, 9);
           g.fillStyle = "#1a1a1a"; g.font = "bold 7px Arial"; g.textAlign = "center"; g.fillText(o.nameTag, n * 0.56 + 11, 23);
-        }
-      });
-      return [body, solid(a)];
+        }) : plain;
+        return res(front, plain, plain, solid(a), solid(b));
+      }
+      case "flannel": {
+        const m = flat((g, n) => {
+          fillA(g, n); g.fillStyle = b; g.globalAlpha = 0.55;
+          for (let i = 0; i < n; i += 16) { g.fillRect(i, 0, 7, n); g.fillRect(0, i, n, 7); }
+          g.globalAlpha = 0.35; g.fillStyle = "#fff"; for (let i = 10; i < n; i += 16) { g.fillRect(i, 0, 1, n); g.fillRect(0, i, n, 1); } g.globalAlpha = 1;
+        });
+        const front = mk("front", (g, n) => {      // buttoned up the middle over a tee
+          fillA(g, n); g.fillStyle = b; g.globalAlpha = 0.55; for (let i = 0; i < n; i += 16) { g.fillRect(i, 0, 7, n); g.fillRect(0, i, n, 7); } g.globalAlpha = 1;
+          g.fillStyle = c; g.fillRect(n * 0.44, 0, n * 0.12, n * 0.3); g.fillStyle = "#222"; for (let y = 14; y < n; y += 12) g.fillRect(n * 0.5 - 1, y, 2, 2);
+        });
+        return res(front, m, m);
+      }
+      case "stripes": case "rugby": {             // wide bands, a white collar (rugby)
+        const m = flat((g, n) => { fillA(g, n); g.fillStyle = b; for (let y = 0; y < n; y += 16) g.fillRect(0, y, n, 8); });
+        return res(m, m, m, m, top === "rugby" ? solid("#f4f1e6") : m);
+      }
+      case "windbreaker": case "colorblock": {     // loud color-block panels, three colors and a white slash
+        const m = flat((g, n) => {
+          fillA(g, n);
+          g.fillStyle = b; g.beginPath(); g.moveTo(0, n * 0.5); g.lineTo(n, n * 0.15); g.lineTo(n, n * 0.48); g.lineTo(0, n * 0.83); g.fill();
+          g.fillStyle = "#f5f5f5"; g.beginPath(); g.moveTo(0, n * 0.83); g.lineTo(n, n * 0.48); g.lineTo(n, n * 0.56); g.lineTo(0, n * 0.91); g.fill();
+          g.fillStyle = c; g.fillRect(0, n * 0.91, n, n * 0.09);
+        });
+        const front = top === "windbreaker" ? mk("front", (g, n) => { g.drawImage(m.map.image, 0, 0); g.fillStyle = "#d8d8d8"; g.fillRect(n * 0.49, 0, 2, n); }) : m;   // the zipper
+        return res(front, m, m, top === "windbreaker" ? m : solid(b), solid(c));
+      }
+      case "varsity": {                           // body color, cream sleeves, a chenille letter on the front, a stripe at the hem
+        const back = flat((g, n) => { fillA(g, n); g.fillStyle = b; g.fillRect(0, n - 6, n, 6); });
+        const front = mk("front", (g, n) => { g.drawImage(back.map.image, 0, 0); g.fillStyle = "#f3ead3"; g.font = "bold 26px Georgia, serif"; g.textAlign = "center"; g.fillText("V", n * 0.7, n * 0.55); });
+        return res(front, back, back, solid("#f3ead3"), solid(b));
+      }
+      case "sweater": case "cardigan": {          // a geometric 90s knit: zigzag bands (a cardigan: buttons down the front)
+        const m = flat((g, n) => {
+          fillA(g, n);
+          for (const [y, col] of [[n * 0.3, b], [n * 0.5, c], [n * 0.7, b]]) { g.strokeStyle = col; g.lineWidth = 5; g.beginPath(); for (let x = 0; x <= n; x += 8) g.lineTo(x, y + (x / 8 % 2 ? 5 : -5)); g.stroke(); }
+        });
+        const front = top === "cardigan" ? mk("front", (g, n) => { g.drawImage(m.map.image, 0, 0); g.fillStyle = "#f4f1e6"; for (let y = 10; y < n; y += 12) { g.beginPath(); g.arc(n * 0.5, y, 2, 0, 7); g.fill(); } }) : m;
+        return res(front, m, m, m, solid(b));
+      }
+      case "hoodie": {                            // a kangaroo pocket and drawstrings on the front, a hood behind
+        const back = flat(fillA);
+        const front = mk("front", (g, n) => {
+          fillA(g, n); graphic(g, n, b);
+          g.fillStyle = "rgba(0,0,0,.18)"; g.fillRect(n * 0.22, n * 0.66, n * 0.56, n * 0.26);
+          g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.42, 0, 2, n * 0.22); g.fillRect(n * 0.56, 0, 2, n * 0.2);
+        });
+        return res(front, back, back, back, solid(b), { hood: back });
+      }
+      case "jersey": {                            // a sports jersey: its number small on the front, big on the back, panels down the sides
+        const N = String(o.number ?? 23), side = flat((g, n) => { fillA(g, n); g.fillStyle = b; g.fillRect(n * 0.3, 0, n * 0.4, n); });
+        const num = (big) => (g, n) => {
+          fillA(g, n); g.fillStyle = b; g.fillRect(0, 0, n, 5);
+          g.fillStyle = "#f4f4f4"; g.strokeStyle = b; g.lineWidth = 2; g.textAlign = "center"; g.font = `bold ${big ? 34 : 18}px Impact, Arial Black, sans-serif`;
+          g.strokeText(N, n * 0.5, big ? n * 0.66 : n * 0.5); g.fillText(N, n * 0.5, big ? n * 0.66 : n * 0.5);
+        };
+        return res(mk("front", num(false)), mk("back", num(true)), side, side, solid(b));
+      }
+      case "hawaiian": {                          // a loud print button-up: flowers and leaves, a placket down the front
+        const m = flat((g, n) => {
+          fillA(g, n);
+          for (let i = 0; i < 7; i++) { const x = (i * 23) % n, y = (i * 37) % n; g.fillStyle = "#2b9348"; g.beginPath(); g.ellipse(x + 6, y + 4, 7, 3, 0.7, 0, 7); g.fill();
+            g.fillStyle = i % 2 ? b : c; for (let k = 0; k < 5; k++) { const t = k * 1.2566; g.beginPath(); g.arc(x + Math.cos(t) * 4, y + Math.sin(t) * 4, 3.2, 0, 7); g.fill(); } g.fillStyle = "#fff59a"; g.fillRect(x - 1, y - 1, 2, 2); }
+        });
+        const front = mk("front", (g, n) => { g.drawImage(m.map.image, 0, 0); g.fillStyle = "rgba(0,0,0,.25)"; g.fillRect(n * 0.49, 0, 2, n); });
+        return res(front, m, m);
+      }
+      case "tiedye": {                            // rings swirling out from the middle, rainbow
+        const cols = [a, b, c, "#ffd23f", "#00c2d1"];
+        const m = flat((g, n) => { for (let r = n; r > 0; r -= 4) { g.fillStyle = cols[(r / 4) % cols.length | 0]; g.beginPath(); for (let t = 0; t <= 6.3; t += 0.2) { const rr = r * (1 + 0.15 * Math.sin(t * 5 + r * 0.2)); g.lineTo(n / 2 + Math.cos(t) * rr, n / 2 + Math.sin(t) * rr); } g.fill(); } });
+        return res(m, m, m, solid(a));
+      }
+      case "memphis": {                           // Memphis print: squiggles, triangles and dots on a bright ground
+        const m = flat((g, n) => {
+          fillA(g, n);
+          for (let i = 0; i < 9; i++) {
+            const x = (i * 29) % n, y = (i * 17 + 7) % n, col = [b, c, "#111"][i % 3]; g.fillStyle = g.strokeStyle = col;
+            if (i % 3 === 0) { g.beginPath(); g.moveTo(x, y); g.lineTo(x + 8, y + 2); g.lineTo(x + 3, y + 9); g.fill(); }
+            else if (i % 3 === 1) { g.lineWidth = 2; g.beginPath(); for (let k = 0; k < 4; k++) g.quadraticCurveTo(x + k * 4 + 2, y + (k % 2 ? 4 : -4), x + k * 4 + 4, y); g.stroke(); }
+            else { g.beginPath(); g.arc(x, y, 2, 0, 7); g.fill(); }
+          }
+        });
+        return res(m, m, m, solid(b));
+      }
+      case "overalls": {                          // a denim bib and straps over a tee (the straps cross on the back)
+        const den = o.pantsColor || "#3b5b8c";
+        const front = patterned(`${key}|${den}|front`, (g, n) => {
+          g.fillStyle = a; g.fillRect(0, 0, n, n);
+          g.fillStyle = den; g.fillRect(n * 0.24, n * 0.3, n * 0.52, n); g.fillRect(0, n * 0.62, n, n);
+          g.fillRect(n * 0.24, 0, 6, n * 0.3); g.fillRect(n * 0.76 - 6, 0, 6, n * 0.3);
+          g.fillStyle = "#d9c27a"; g.fillRect(n * 0.24 + 1, n * 0.3, 4, 4); g.fillRect(n * 0.76 - 5, n * 0.3, 4, 4);
+          g.fillStyle = "rgba(0,0,0,.2)"; g.fillRect(n * 0.38, n * 0.42, n * 0.24, n * 0.12);   // the bib pocket
+        });
+        const back = patterned(`${key}|${den}|back`, (g, n) => {
+          g.fillStyle = a; g.fillRect(0, 0, n, n); g.fillStyle = den; g.fillRect(0, n * 0.62, n, n);
+          g.strokeStyle = den; g.lineWidth = 6; g.beginPath(); g.moveTo(n * 0.24, 0); g.lineTo(n * 0.7, n * 0.64); g.moveTo(n * 0.76, 0); g.lineTo(n * 0.3, n * 0.64); g.stroke();
+        });
+        const side = patterned(`${key}|${den}|side`, (g, n) => { g.fillStyle = a; g.fillRect(0, 0, n, n); g.fillStyle = den; g.fillRect(0, n * 0.62, n, n); });
+        return res(front, back, side, solid(a), solid(a));
+      }
+      default: {                                  // a tee (his, boxy) / a baby tee or crop top (hers, fitted): the print on the front only
+        const back = flat(fillA), print = top === "tee" || top === "babytee" || top === "crop";
+        const front = print && !(o.female && o.bust > 1.1) ? mk("front", (g, n) => { fillA(g, n); graphic(g, n, b); }) : back;   // (not under a full bust)
+        return res(front, back, back, solid(a), solid(o.female ? b : a));
+      }
     }
-    const tee = patterned(o.female ? key + "|plain" : key, (g, n) => {   // tee: solid, with a small chest graphic (not under a bust)
-      g.fillStyle = a; g.fillRect(0, 0, n, n);
-      if (!o.female) { g.fillStyle = b; g.beginPath(); g.arc(n * 0.5, n * 0.4, 9, 0, Math.PI * 2); g.fill(); }
-    });
-    return [tee, solid(a)];
   }
+  // the bottoms -> { legs: material or a per-face array (a track-pant stripe down the sides), seat, skirt }
   function pantsMat(o) {
-    if (o.pants !== "acid") return solid(o.pantsColor);
-    return patterned(`acid|${o.pantsColor}`, (g, n) => {
-      g.fillStyle = o.pantsColor; g.fillRect(0, 0, n, n);
-      for (let i = 0; i < 90; i++) { g.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.3})`; g.beginPath(); g.arc(Math.random() * n, Math.random() * n, 1 + Math.random() * 3, 0, 7); g.fill(); }
-    });
+    const k = o.pants, col = o.pantsColor;
+    const plaid = (bg, l1, l2) => patterned(`plaid|${bg}`, (g, n) => { g.fillStyle = bg; g.fillRect(0, 0, n, n); g.globalAlpha = 0.6; g.fillStyle = l1; for (let i = 0; i < n; i += 16) { g.fillRect(i, 0, 5, n); g.fillRect(0, i, n, 5); } g.globalAlpha = 0.8; g.fillStyle = l2; for (let i = 9; i < n; i += 16) { g.fillRect(i, 0, 1, n); g.fillRect(0, i, n, 1); } g.globalAlpha = 1; });
+    const fabric = c => c === "plaid" ? plaid("#e8c42a", "#1d1d1d", "#ffffff")   // the yellow plaid
+      : c === "floral" ? patterned("floral", (g, n) => { g.fillStyle = "#2a1f3d"; g.fillRect(0, 0, n, n); for (let i = 0; i < 10; i++) { const x = (i * 27) % n, y = (i * 19) % n; g.fillStyle = ["#ff9ce6", "#ffd23f", "#ffffff"][i % 3]; for (let j = 0; j < 5; j++) { const t = j * 1.2566; g.beginPath(); g.arc(x + Math.cos(t) * 3, y + Math.sin(t) * 3, 2.2, 0, 7); g.fill(); } } })
+      : c === "denim" ? solid("#4f73a8") : solid(c);
+    if (k === "mini" || k === "skirt") { const m = fabric(col); return { legs: o.tights ? solid(o.tights) : null, seat: m, skirt: m }; }
+    if (k === "acid") { const m = patterned(`acid|${col}`, (g, n) => {
+      g.fillStyle = col; g.fillRect(0, 0, n, n);
+      for (let i = 0; i < 90; i++) { g.fillStyle = `rgba(255,255,255,${0.15 + (i * 37 % 30) / 100})`; g.beginPath(); g.arc((i * 47) % n, (i * 29) % n, 1 + i % 3, 0, 7); g.fill(); }
+    }); return { legs: m, seat: m }; }
+    if (k === "track") {                          // a stripe down each outside seam
+      const plain = solid(col), side = patterned(`track|${col}|${o.pantsB}`, (g, n) => { g.fillStyle = col; g.fillRect(0, 0, n, n); g.fillStyle = "#f4f4f4"; g.fillRect(n * 0.38, 0, 5, n); g.fillStyle = o.pantsB || "#ff2e88"; g.fillRect(n * 0.38 + 6, 0, 4, n); });
+      return { legs: [side, side, plain, plain, plain, plain], seat: plain };
+    }
+    const m = solid(col); return { legs: m, seat: m };
+  }
+  // a skirt: a soft block flaring out toward the hem
+  let SKIRT;
+  function skirtGeo() {
+    if (SKIRT) return SKIRT;
+    SKIRT = roundBox(0.15, 4); const p = SKIRT.attributes.position;
+    for (let i = 0; i < p.count; i++) { const f = 1 + 0.45 * (0.5 - p.getY(i)); p.setX(i, p.getX(i) * f); p.setZ(i, p.getZ(i) * f); }
+    SKIRT.computeVertexNormals(); return SKIRT;
   }
 
   // ---- the face: a small canvas redrawn ~15 fps, only while it changes ----
@@ -258,25 +386,41 @@ window.VaultCustomers = (() => {
     const pivot = (parent, x, y, z) => { const p = new THREE.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     const parts = [];
     const group = new THREE.Group(), body = pivot(group, 0, 0, 0);
-    const skin = solid(o.skin), pants = pantsMat(o), shoe = solid(o.shoes), [torsoM, sleeveM] = topMats(o);
+    const skin = solid(o.skin), P = pantsMat(o), shoe = solid(o.shoes), T = topMats(o), sleeveM = T.sleeve;
+    const torsoM = [T.side, T.side, T.side, T.side, T.front, T.back];   // (box faces: +x -x +y -y, front, back)
     const H = o.height, W = o.build;
     body.scale.set(W, H, 1);                          // taller/shorter, broader/slimmer: one scale, no new parts
 
-    const collarM = o.top === "uniform" ? solid(o.topB) : sleeveM, sole = solid(o.shoes === "#eeeeee" ? "#d9d4c8" : "#f2f0ea");
-    // legs: hip -> thigh -> knee -> shin -> sneaker (upper + a contrasting sole)
+    const collarM = T.trim, sole = solid(o.shoes === "#eeeeee" ? "#d9d4c8" : "#f2f0ea");
+    // legs: hip -> thigh -> knee -> shin -> sneaker (upper + a contrasting sole). The cut sets the widths and where
+    // the cloth stops: his baggy jeans and long cargo shorts, her slim jeans, leggings, bike shorts, skirts
+    const kind = o.pants, skirt = kind === "mini" || kind === "skirt";
+    const CUT = { baggy: [0.175, 0.165], cargo: [0.17, 0.16], jeans: [0.145, 0.125], leggings: [0.135, 0.115], bike: [0.14, 0.12], acid: o.female ? [0.145, 0.125] : [0.16, 0.145] }[kind] || [0.155, 0.135];
+    const shorts = kind === "shorts" || kind === "cargo" || kind === "bike";
+    const legM = P.legs || skin;                     // (a skirt: bare legs, or tights)
     const trousers = [], bunched = [];                // (setPantsDown: the legs go bare, the pants gather at the ankles)
     const legs = [-1, 1].map(s => {
       const hip = pivot(body, s * 0.1, 0.9, 0);
-      trousers.push(part(hip, SOFT, pants, 0.155, 0.5, 0.175, 0, -0.23, 0));
+      const thigh = part(hip, SOFT, legM, CUT[0], 0.5, CUT[0] + 0.02, 0, -0.23, 0); if (P.legs) trousers.push(thigh);
       const knee = pivot(hip, 0, -0.45, 0);
-      const shin = part(knee, SOFT, o.pants === "shorts" ? skin : pants, 0.135, 0.46, 0.15, 0, -0.2, 0); if (o.pants !== "shorts") trousers.push(shin);
-      if (o.pants === "shorts") trousers.push(part(knee, SOFT, pants, 0.15, 0.1, 0.165, 0, -0.02, 0));   // the hem, just past the knee
-      const b = part(knee, SOFT, pants, 0.19, 0.1, 0.2, 0, -0.33, 0.01); b.visible = false; bunched.push(b);   // around the ankle
-      part(knee, ROUND, shoe, 0.14, 0.085, 0.27, 0, -0.395, 0.045);
-      part(knee, ROUND, sole, 0.15, 0.035, 0.285, 0, -0.43, 0.045);
+      const shin = part(knee, SOFT, shorts ? skin : legM, CUT[1], 0.46, CUT[1] + 0.015, 0, -0.2, 0); if (P.legs && !shorts) trousers.push(shin);
+      if (kind === "shorts") trousers.push(part(knee, SOFT, legM, 0.15, 0.1, 0.165, 0, -0.02, 0));                  // the hem, just past the knee
+      if (kind === "cargo") {                          // long and loose, to mid-shin, a pocket on each thigh
+        trousers.push(part(knee, SOFT, legM, CUT[1] + 0.02, 0.2, CUT[1] + 0.035, 0, -0.07, 0));
+        trousers.push(part(hip, ROUND, legM, 0.03, 0.12, 0.13, s * (CUT[0] / 2 + 0.008), -0.28, 0));
+      }
+      if (kind === "baggy") trousers.push(part(knee, SOFT, legM, CUT[1] + 0.03, 0.08, CUT[1] + 0.045, 0, -0.36, 0.01));   // pooled over the sneaker
+      const b = part(knee, SOFT, P.legs || skin, 0.19, 0.1, 0.2, 0, -0.33, 0.01); b.visible = false; if (P.legs) bunched.push(b);   // around the ankle
+      const hi = o.hightop;                            // his high-tops: up over the ankle
+      part(knee, ROUND, shoe, o.female ? 0.13 : 0.14, hi ? 0.15 : 0.085, o.female ? 0.25 : 0.27, 0, hi ? -0.365 : -0.395, 0.045);
+      part(knee, ROUND, sole, o.female ? 0.14 : 0.15, 0.035, o.female ? 0.265 : 0.285, 0, -0.43, 0.045);
       return { hip, knee };
     });
-    trousers.push(part(body, ROUND, pants, 0.35, 0.16, 0.22, 0, 0.93, 0));         // seat of the pants
+    const seat = part(body, ROUND, P.seat, 0.35, 0.16, 0.22, 0, 0.93, 0); if (!skirt) trousers.push(seat);          // seat of the pants
+    if (skirt) {                                       // a mini (mid-thigh) or a skirt (to the knee), flaring out
+      const len = kind === "mini" ? 0.24 : 0.42;
+      part(body, skirtGeo(), P.skirt, 0.37, len, 0.25, 0, 0.99 - len / 2, 0.005);
+    }
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
     const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
     const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
@@ -286,7 +430,7 @@ window.VaultCustomers = (() => {
       // across (each block mapping the whole pattern onto itself shrank plaids and miscolored prints)
       const b = o.bust, k = 0.9 + 0.1 * b, taper = 0.1, v = new THREE.Vector3();   // (TORSO_F's taper)
       for (const s of [-1, 1]) {
-        const m = part(upper, SOFT, torsoM, 0.145 * k, 0.15 * k, 0.15 * b, s * 0.074, 0.4, 0.08); m.rotation.set(-0.55, s * 0.25, 0); m.updateMatrix();
+        const m = part(upper, SOFT, T.front, 0.145 * k, 0.15 * k, 0.15 * b, s * 0.074, 0.4, 0.08); m.rotation.set(-0.55, s * 0.25, 0); m.updateMatrix();
         const g = SOFT.clone(), pos = g.attributes.position, uv = g.attributes.uv;
         for (let i = 0; i < pos.count; i++) {
           v.fromBufferAttribute(pos, i).applyMatrix4(m.matrix);          // into the torso's frame (both hang off the waist)
@@ -307,17 +451,26 @@ window.VaultCustomers = (() => {
         part(upper, BOX, mats.get(key), 0.085, 0.032, 0.004, 0.09, 0.553, 0.124);
       }
     }
-    part(upper, ROUND, solid("#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);           // belt
-    part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);         // buckle
+    if (!["leggings", "bike", "mini", "skirt", "track"].includes(kind) && o.top !== "overalls") {   // a belt, where there are belt loops
+      part(upper, ROUND, solid(o.female ? "#5a3a2a" : "#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);
+      part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);
+    }
+    if (T.hood) part(upper, ROUND, T.hood, 0.3, 0.13, 0.13, 0, 0.66, -0.12);          // a hoodie's hood, down behind the neck
     // arms: shoulder -> upper arm -> elbow -> forearm -> hand. Tucked in so the
     // sleeve overlaps the torso's rounded edge instead of hanging off beside it
     const arms = [-1, 1].map(s => {
-      const sh = pivot(upper, s * SX, SY, 0);
-      part(sh, SOFT, sleeveM, 0.125, 0.33, 0.135, 0, -0.13, 0);
+      const sh = pivot(upper, s * SX, SY, 0), sl = o.sleeve || (o.longSleeves ? "long" : "short");
+      if (sl === "cap") {                              // her cap sleeve: just over the shoulder, the arm bare below it, a contrast trim
+        part(sh, SOFT, skin, 0.11, 0.33, 0.12, 0, -0.13, 0);
+        part(sh, SOFT, sleeveM, 0.13, 0.13, 0.14, 0, -0.03, 0);
+        part(sh, SOFT, collarM, 0.135, 0.03, 0.145, 0, -0.1, 0);
+      } else if (sl === "baggy") {                     // his boxy tee sleeve: wide, down to the elbow
+        part(sh, SOFT, sleeveM, 0.145, 0.34, 0.155, 0, -0.14, 0);
+      } else part(sh, SOFT, sleeveM, 0.125, 0.33, 0.135, 0, -0.13, 0);
       const el = pivot(sh, 0, -0.29, 0);
-      part(el, SOFT, o.longSleeves ? sleeveM : skin, 0.105, 0.29, 0.115, 0, -0.12, 0);
-      if (o.longSleeves) part(el, SOFT, collarM, 0.115, 0.04, 0.125, 0, -0.255, 0);   // cuff
-      else part(sh, SOFT, collarM, 0.135, 0.04, 0.145, 0, -0.28, 0);                  // short-sleeve hem band
+      part(el, SOFT, sl === "long" ? sleeveM : skin, 0.105, 0.29, 0.115, 0, -0.12, 0);
+      if (sl === "long") part(el, SOFT, collarM, 0.115, 0.04, 0.125, 0, -0.255, 0);    // cuff
+      else if (sl === "short") part(sh, SOFT, collarM, 0.135, 0.04, 0.145, 0, -0.28, 0);   // short-sleeve hem band
       const hand = part(el, SOFT, skin, 0.1, 0.11, 0.08, 0, -0.32, 0.005);
       part(hand, SOFT, skin, 0.35, 0.5, 0.6, s * -0.55, 0.05, 0.25);                  // thumb, tucked in toward the body
       return { sh, el, hand };
@@ -356,10 +509,16 @@ window.VaultCustomers = (() => {
       part(a, BALL, solid("#d7dade"), 0.02, 0.02, 0.02, 0, 0.36, 0);                 // ball tip
       part(head, ROUND, dark, 0.05, 0.02, 0.05, s * 0.05, th + 0.005, -0.05);       // its base
     }
-    if (o.hat) {                                                                  // a ball cap on a TV — forwards or backwards
-      const hm = solid(o.hat.color), cap = pivot(head, 0, th, 0); cap.rotation.y = o.hat.back ? Math.PI : 0;
-      part(cap, SPH, hm, tw * 0.62, 0.16, td * 0.8, 0, 0, -0.02);
-      part(cap, BOX, hm, tw * 0.5, 0.015, 0.16, 0, 0.01, td * 0.4 + 0.06);
+    if (o.hat) {                                                                  // on top of the TV: a ball cap (forwards or back), a bucket hat, a big bow, a headband
+      const hm = solid(o.hat.color), k = o.hat.kind || "cap", cap = pivot(head, 0, th, 0); cap.rotation.y = o.hat.back ? Math.PI : 0;
+      if (k === "cap") { part(cap, SPH, hm, tw * 0.62, 0.16, td * 0.8, 0, 0, -0.02); part(cap, BOX, hm, tw * 0.5, 0.015, 0.16, 0, 0.01, td * 0.4 + 0.06); }
+      else if (k === "bucket") { part(cap, CYL, hm, tw * 0.62, 0.13, td * 0.78, 0, 0.065, -0.02); part(cap, CYL, hm, tw * 0.95, 0.012, td * 1.12, 0, 0.006, -0.02); }
+      else if (k === "band") part(cap, CASE, hm, tw * 0.9, 0.022, 0.05, 0, 0.004, td * 0.12);   // across the top, front to back
+      else {                                          // a bow up on one corner
+        const bow = pivot(cap, tw * 0.25, 0.04, td * 0.2); bow.rotation.z = -0.25;
+        for (const sx of [-1, 1]) part(bow, SOFT, hm, 0.09, 0.07, 0.03, sx * 0.05, 0, 0).rotation.z = sx * 0.35;
+        part(bow, SOFT, hm, 0.035, 0.04, 0.035, 0, 0, 0.005);
+      }
     }
     // the free hand's props at the counter: a membership card, or the cash they pay with
     const cardM = patterned("memberCard", (g, n) => { g.fillStyle = "#1b3fa0"; g.fillRect(0, 0, n, n); g.fillStyle = "#ffd400"; g.fillRect(0, n * 0.62, n, n * 0.14); g.fillStyle = "#fff"; g.fillRect(n * 0.08, n * 0.12, n * 0.5, n * 0.1); });
@@ -367,6 +526,14 @@ window.VaultCustomers = (() => {
     const props = { card: part(arms[0].el, BOX, cardM, 0.006, 0.054, 0.086, 0, -0.37, 0.05), cash: part(arms[0].el, BOX, cashM, 0.004, 0.066, 0.156, 0, -0.37, 0.07),
       receipt: part(arms[0].el, BOX, solid("#f4f1e6"), 0.003, 0.15, 0.056, 0, -0.4, 0.06),
       form: part(arms[0].el, BOX, solid("#fbfbf4"), 0.003, 0.21, 0.15, 0, -0.42, 0.08) };   // a filled-out membership form
+    {                                                 // an umbrella: kept upright in the world whatever the arm does (see tick)
+      const um = new THREE.Group(); um.position.set(0, -0.36, 0.05); arms[0].el.add(um);
+      const uk = "umb|" + (o.umbrella || "#1c1c1e"), umC = mats.get(uk) || mats.set(uk, new THREE.MeshLambertMaterial({ color: o.umbrella || "#1c1c1e", side: THREE.DoubleSide })).get(uk);
+      part(um, CYL, solid("#2a2a2a"), 0.012, 0.95, 0.012, 0, 0.47, 0);
+      part(um, UMB, umC, 1, 1, 1, 0, 0.92, 0);
+      part(um, BALL, solid("#2a2a2a"), 0.025, 0.025, 0.025, 0, 1.06, 0);
+      props.umbrella = um;
+    }
     for (const m of Object.values(props)) m.visible = false;
     const item = new THREE.Group(); item.position.set(0, -0.4, 0.07); arms[0].el.add(item);   // holdItem's slot, in the same hand
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
@@ -377,7 +544,7 @@ window.VaultCustomers = (() => {
     let talking = false;
     const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, reach2 = { target: new THREE.Vector3(), on: false, w: 0, arm: 0 }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
-    let t = 0, phase = 0, pose = "idle", look = null, sitAt = {};   // look: head yaw (relative to the body) someone asked for, or null
+    let t = 0, phase = 0, pose = "idle", look = null, sitAt = {}, sighT = 0;   // look: head yaw (relative to the body) someone asked for, or null
     const g2 = fc.getContext("2d");
     drawFace(g2, face, 0); ftex.needsUpdate = true;
     const lerp = (obj, k, v, r) => { obj[k] += (v - obj[k]) * r; };
@@ -391,7 +558,9 @@ window.VaultCustomers = (() => {
       setPose(p, opts = {}) { pose = p; sitAt = opts; },
       lookAt(yaw) { look = yaw == null ? null : Math.max(-1.45, Math.min(1.45, yaw)); },   // turn the head (radians, + = her left); null = back to normal
       holdTape(n) { tapes.forEach((m, i) => m.visible = i < +n); },   // how many (true = 1)
-      holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },   // "card" | "cash" | "receipt" | null, in the free (left) hand
+      holdProp(name) { for (const [k, m] of Object.entries(props)) m.visible = k === name; },
+      get prop() { return Object.keys(props).find(k => props[k].visible) || null; },
+      sigh() { sighT = 1.3; },   // "card" | "cash" | "receipt" | null, in the free (left) hand
       setPantsDown(on) {                                // (the toilet) legs and seat go to skin; the pants bunch at the ankles
         for (const m of trousers) { m.userData.pantsM ??= m.material; m.material = on ? skin : m.userData.pantsM; }
         for (const b of bunched) b.visible = on;
@@ -450,7 +619,8 @@ window.VaultCustomers = (() => {
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
         body.position.y = st.y - crouch * 0.4 - squat * 0.6;
         body.position.z = step;
-        upper.rotation.x = lean;
+        const sg = sighT > 0 ? Math.sin((1 - (sighT -= dt) / 1.3) * Math.PI) : 0;    // a sigh: up, then a long sag
+        upper.rotation.x = lean + (pose === "lean" ? 0.28 : 0) + Math.max(0, sg) * 0.08;
         torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
         body.rotation.y = ease("ry", walking ? swU * 0.06 : 0, soft);                            // shoulders counter-twist the stride, a beat behind
         body.rotation.z = ease("rz", walking || sit ? 0 : Math.sin(t * 0.45) * 0.018, r * 0.3);  // idle weight shift, hip to hip
@@ -461,6 +631,10 @@ window.VaultCustomers = (() => {
         if (pose === "hold") { rx = walking ? -0.35 : -0.45; re = -1.0; }
         if (sit) { lx = rx = face.mood === "shock" ? -1.1 : -0.45; le = re = face.mood === "shock" ? -0.9 : -0.8; }   // hands in the lap (up when startled)
         if (pose === "wait") { lx = -0.25; le = -1.2; if (!tapes[0].visible) { rx = -0.25; re = -1.25; } }   // hands up on the counter
+        if (pose === "lean") { lx = rx = -0.55; le = re = -1.05; }                  // forearms down on the counter, weight on them
+        if (pose === "read") { rx = -1.05; re = -1.45; }                              // the tape up in front, turned to read the back
+        if (pose === "watch") { lx = -0.45; le = -1.55; }                             // wrist up across the chest
+        if (props.umbrella.visible) { lx = -0.35; le = -1.25; }                       // the umbrella held up, the hand at the chest
         const ar = walking ? soft : r;                    // arms carry some momentum while walking; poses (reach, hold) still settle promptly
         const pose2 = [[ease("ax0", lx, ar), ease("ae0", le, ar)], [ease("ax1", rx, ar), ease("ae1", re, ar)]];
         arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0], 0, i ? -0.06 : 0.06); el.rotation.x = pose2[i][1]; });
@@ -482,9 +656,15 @@ window.VaultCustomers = (() => {
         lerp(head.rotation, "y", yaw + (talking ? Math.sin(t * 0.9) * 0.06 : 0), r * 0.6);
         lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : talking ? Math.sin(t * 1.3) * 0.05 : 0, r * 0.5);
         head.rotation.x = ease("nod", walking ? Math.cos(phase * 2 - 0.8) * 0.008 : face.mood === "watch" ? -0.06 : talking ? Math.max(0, Math.sin(t * 2.4)) * 0.05 : 0, soft)   // talking: little agreeing nods   // eyes-level: only a whisper of nod, lagging the step; tips up at the screen
-          + lean * 0.85;                                  // plus bowing with the upper body (added after easing, so it never feeds back)
+          + lean * 0.85                                   // plus bowing with the upper body (added after easing, so it never feeds back)
+          + (pose === "read" ? 0.3 : pose === "watch" ? 0.35 : 0) + Math.max(0, sg) * 0.2;   // looking down at it / sagging
         upper.updateMatrixWorld(true);                    // the head rides the top of the neck, wherever the waist has put it
         head.position.copy(group.worldToLocal(upper.localToWorld(tmp.set(0, 0.73, HEAD_Z / H))));
+        if (props.umbrella.visible) {                     // straight up in the world, over the head
+          const um = props.umbrella; um.parent.updateWorldMatrix(true, false);
+          um.parent.getWorldQuaternion(qIK).invert(); um.quaternion.copy(qIK);
+          um.parent.getWorldScale(tmp2); um.scale.set(1 / tmp2.x, 1 / tmp2.y, 1 / tmp2.z);
+        }
 
         // face: blink now and then, redraw at ~15 fps while animating
         if (t > face.next) { face.blink = !face.blink; face.next = t + (face.blink ? 0.12 : 2 + Math.random() * 3); face.drawnAt = -1; }

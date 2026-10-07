@@ -105,6 +105,26 @@ await ev(() => {                                 // a store saved in 2026 (befor
 await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
 check("an old 2026 save moves to 1996, rentals with it", await ev(() => __t.shiftDate().getFullYear() === 1996 && __t.posTerm.members.flatMap(m => m.rentals).every(r => r.due.getFullYear() < 1998)));
 
+check("calling: weekday afternoons get the machine, past bedtime gets you yelled at", await ev(() => {
+  const m = __t.posTerm.members.find(m => { const h = __t.memberHabits(m); return h.works && !h.nightOwl; }), N = 400, run = (h, d) => Array.from({ length: N }, () => __t.callOutcome(m, h, d));
+  const work = run(13, 3).filter(o => o.pick !== "answer").length / N, night = run(23.8, 3), angry = night.filter(o => o.mood === "angry").length / N;
+  const noon = run(12.5, 6).filter(o => o.mood === "ok").length, eve = run(13 + 6.5, 3).filter(o => o.pick === "answer").length / N;
+  return work > 0.7 && angry > 0.3 && eve > 0.6 && noon > 0; }));
+check("calling: a post-it by the phone, the call, the result on it, peeled off and tossed", await ev(() => {
+  __t.phone.ring = __t.phone.call = __t.phone.out = null;
+  const m = __t.posTerm.members.find(m => m.rentals.length && !__t.posTerm.calledToday(m) && !m.promise), calls = m.calls || 0;
+  m.rentals[0].due = new Date(+m.rentals[0].due - 12 * 86400000);   // (12 days later than it was: overdue enough to call)
+  const n = __t.postitAdd(m, true); __t.postitCall(n); const ringing = !!__t.phone.out;
+  for (let i = 0; i < 80 && __t.phone.out; i++) __t.phoneOutTick(0.5);
+  const done = !!n.result && m.calls === calls + 1 && __t.posTerm.calledToday(m) && !!m.lastResult;
+  const b = __t.trashBins.counter, b0 = b.n; __t.postitPickUp(n); const held = __t.postitHeld() === n; __t.postitToss(b);
+  return ringing && done && held && !__t.postits.includes(n) && b.n === b0 + 1; }));
+check("calling: a promise alone brings nothing back (they have to come in)", await ev(() => {
+  const m = __t.posTerm.members.find(m => m.rentals.length && !m.promise), r = m.rentals[0], copy = r.copy, bin0 = __t.returnBin.length;
+  r.due = new Date(+r.due - 9 * 86400000); __t.posTerm.recordCall(m, { promise: true, result: "test" }); __t.posTerm.setStatus(m, "banned", 30);
+  __t.beginShift();
+  const still = m.rentals.includes(r) && copy.rental === r && !__t.returnBin.includes(copy) && __t.returnBin.length === bin0;
+  __t.posTerm.setStatus(m, null); return still; }));
 check("trash: a full bin spills, bag it, down the chute", await ev(() => { const b = __t.trashBins.lobby, m0 = __t.messes.length; __t.trashAdd(b, b.cap + 1);
   const spilled = __t.messes.length > m0; __t.binBag(b); const bagged = __t.bagCarry.length === 1 && b.n === 0; const s0 = __t.shift.stats.score; __t.chuteDrop();
   return spilled && bagged && !__t.bagCarry.length && __t.shift.stats.score === s0 + 10; }));
