@@ -189,6 +189,9 @@ check("members come on their own rhythm (nobody who was just in)", await ev(() =
   ms.forEach(m => m.lastVisit = now); const none = [0, 1, 2, 3, 4].every(() => !__t.custPickMember());
   ms.forEach((m, i) => m.lastVisit = was[i]); return none && !!__t.custPickMember(true); }));
 check("day goals: two of them", await ev(() => __t.shift.goals?.length === 2));
+check("the trees' year: bare in winter, budding in April, full in summer, turned in late Oct, bare again by December", await ev(() => {
+  const s = d => VaultTrees.leafState(d);
+  return s(30).L === 0 && s(115).L > 0.1 && s(115).L < 0.9 && s(200).L === 1 && s(200).turn === 0 && s(300).turn === 1 && s(300).L > 0.3 && s(340).L === 0; }));
 check("the closet: carry the ladder out, set it up under a dead light, climb, swap the tube, put it back", await ev(() => {
   const L = __t.ladder, p = __t.player, tr = __t.TROFFERS[0];
   __t.lightDie(0, 0); const dead = __t.deadLights.length === 1;
