@@ -43,6 +43,26 @@
 //
 // window.VaultAmbience = { start(), tick(state), chime(x, y, z, vol), step(x, z, tile, weight), door(kind, action, x, y, z),
 //   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted(), onCarPass(fn), drive(dir, v) }
+// One AudioContext for the whole game (this ambience, every sound effect, the TV), out through a limiter so
+// sounds piling up can't clip into crackle. And kept running: a browser suspends a context made outside a
+// click, or after the audio device hiccups, so any key, click or touch (or coming back to the tab) wakes it
+window.VaultAudio = (() => {
+  let ac = null, bus = null;
+  const wake = () => { if (ac && ac.state !== "running" && ac.state !== "closed") ac.resume().catch(() => {}); };
+  for (const e of ["pointerdown", "keydown", "touchstart"]) addEventListener(e, wake, true);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) wake(); });
+  const ctx = () => {
+    if (!ac) {
+      ac = new AudioContext(); bus = ac.createDynamicsCompressor();
+      bus.threshold.value = -6; bus.knee.value = 6; bus.ratio.value = 12; bus.attack.value = 0.003; bus.release.value = 0.2;
+      bus.connect(ac.destination);
+      ac.onstatechange = () => { if (!document.hidden) setTimeout(wake, 250); };   // knocked off by the device: try to get back on
+    }
+    wake(); return ac;
+  };
+  return { ctx, out: () => (ctx(), bus) };
+})();
+
 window.VaultAmbience = (() => {
   let carSeen = null, lastNight = false;
   let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null;   // vol: the settings' store-sounds volume
@@ -83,9 +103,9 @@ window.VaultAmbience = (() => {
 
   function start() {
     if (ac) { ac.resume(); return; }
-    try { ac = new AudioContext(); } catch { return; }
+    try { ac = VaultAudio.ctx(); } catch { return; }
     noiseBuffers();
-    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    master = ac.createGain(); master.gain.value = 0; master.connect(VaultAudio.out());
     bed = ac.createGain(); bed.gain.value = 1; bed.connect(master);          // things in the room
     const verb = reverb(), verbOut = ac.createGain(); verbOut.gain.value = 0.35; verbIn = ac.createGain();
     verbIn.connect(verb).connect(verbOut).connect(master);
