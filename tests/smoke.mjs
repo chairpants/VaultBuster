@@ -90,7 +90,7 @@ const drive = await ev(() => {                   // a member with a car: it come
   out.push(car.phase, JSON.stringify(__t.posTerm.recordsAll()[m.num]?.car)); return out.join(); });
 check("a customer's own car: drives in, parks, they get out; leaving, it drives off; the car's on their record", drive === 'drivingIn,true,parked,arrive,true,true,gone,{"s":1,"c":2050614}', drive);
 check("sound effects follow mute (M) and the volume setting", await ev(() => {
-  const ac = new AudioContext(), was = VaultAmbience.muted(); VaultAmbience.setMuted(true); const off = __t.sfxOut(ac).gain.value;
+  const ac = VaultAudio.ctx(), was = VaultAmbience.muted(); VaultAmbience.setMuted(true); const off = __t.sfxOut(ac).gain.value;
   VaultAmbience.setMuted(false); const on = __t.sfxOut(ac).gain.value; VaultAmbience.setMuted(was); return off === 0 && on > 0; }));
 check("move the desensitizer along the counter", await ev(() => { __t.player.x = -4.9; __t.player.z = 3; const it = __t.counterItemsList().find(i => i.id === "desens");
   __t.moveStart(it); __t.cmove.spot = { x: -3.4, z: 3.85 }; __t.cmove.ok = true; __t.movePlace(); return Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && !__t.cmove.item; }));
