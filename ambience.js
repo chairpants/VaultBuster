@@ -33,6 +33,11 @@
 //   rumble), the gurgle of air bubbles (each one a pitch rising as it
 //   collapses, as bubbles do), then the tank refilling (a thin hiss). A
 //   running tap: a steady mid-band pour with a brighter splash on the basin.
+// - Rain on the roof and the glass: a dark wash of pink noise overhead and a brighter patter at the front, both
+//   following how hard it's coming down. Snow mostly hushes the road.
+// - People talking, with no words in it: each talker is a voice (a buzz at a speaking pitch, through two formant
+//   band-passes that wander between vowels, gated into syllables with pauses between phrases), muffled and placed
+//   where they stand; plus a faint general murmur that grows with the crowd.
 // Everything placed in the room is HRTF-panned from where the camera is, and
 // the chime, steps and doors get a little of a generated room reverb.
 //
@@ -40,7 +45,7 @@
 //   swing(key, x, y, z, speed), compressor(x, y, z, on), flush(x, y, z), water(key, x, y, z, on), setMuted(bool), muted(), onCarPass(fn), drive(dir, v) }
 window.VaultAmbience = (() => {
   let carSeen = null, lastNight = false;
-  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1;   // vol: the settings' store-sounds volume
+  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null;   // vol: the settings' store-sounds volume
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
   const noise = { white: null, pink: null, brown: null };
 
@@ -87,6 +92,22 @@ window.VaultAmbience = (() => {
     // outside: everything through the storefront glass (the thin, heavy-low-mids sound of a street heard indoors)
     glass = ac.createBiquadFilter(); glass.type = "lowpass"; glass.frequency.value = 650; glass.Q.value = 0.5;
     const glassG = ac.createGain(); glassG.gain.value = 0.45; glass.connect(glassG).connect(bed);
+    // rain: a dark wash on the roof (overhead, everywhere) and a brighter patter on the storefront glass
+    {
+      const roof = loop(noise.pink), lp = ac.createBiquadFilter(), g = ac.createGain(); lp.type = "lowpass"; lp.frequency.value = 900; g.gain.value = 0;
+      roof.connect(lp).connect(g).connect(bed);
+      const pat = loop(noise.white), bp = ac.createBiquadFilter(), am = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain(), g2 = ac.createGain(), p = panner(1.5, 1.6, -0.3, 3, 0.8);
+      bp.type = "bandpass"; bp.frequency.value = 3800; bp.Q.value = 0.8; lfo.type = "sawtooth"; lfo.frequency.value = 13; lg.gain.value = 0.4; am.gain.value = 0.6; lfo.connect(lg).connect(am.gain); lfo.start();
+      g2.gain.value = 0; pat.connect(bp).connect(am).connect(g2).connect(p).connect(bed);
+      rainG = { roof: g, pat: g2 };
+    }
+    // the crowd: a faint general murmur (voiced noise in the speech band, slowly breathing) that grows with the number of people in
+    {
+      const s = loop(noise.pink, 0.9), f1 = ac.createBiquadFilter(), f2 = ac.createBiquadFilter(), am = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain(), g = ac.createGain();
+      f1.type = "bandpass"; f1.frequency.value = 520; f1.Q.value = 1.4; f2.type = "lowpass"; f2.frequency.value = 1400;
+      lfo.frequency.value = 0.9; lg.gain.value = 0.35; am.gain.value = 0.65; lfo.connect(lg).connect(am.gain); lfo.start();
+      g.gain.value = 0; s.connect(f1).connect(f2).connect(am).connect(g).connect(bed); g.connect(verbIn); crowdG = g;
+    }
     // room tone: air from the vents, drifting slowly
     {
       const s = loop(noise.brown), lp = ac.createBiquadFilter(), g = ac.createGain(), lfo = ac.createOscillator(), lg = ac.createGain();
@@ -112,6 +133,27 @@ window.VaultAmbience = (() => {
     const g = ac.createGain(); g.gain.value = 0; const p = panner(x, y, z, 1.5, 1.4);
     o.connect(g); rasp.connect(bp).connect(am).connect(raspG).connect(g); g.connect(p).connect(bed);
     return g;
+  }
+  // one talker: a buzz at a speaking pitch through two wandering formants, gated into syllables (no words: just talk)
+  function voice() {
+    const f0 = 95 + Math.random() * 140, src = ac.createOscillator(); src.type = "sawtooth"; src.frequency.value = f0; src.start();
+    const vib = ac.createOscillator(), vg = ac.createGain(); vib.frequency.value = 4 + Math.random() * 2; vg.gain.value = f0 * 0.02; vib.connect(vg).connect(src.frequency); vib.start();
+    const a = ac.createBiquadFilter(), b = ac.createBiquadFilter(); a.type = b.type = "bandpass"; a.Q.value = 5; b.Q.value = 7; a.frequency.value = 600; b.frequency.value = 1500;
+    const sum = ac.createGain(), lp = ac.createBiquadFilter(), env = ac.createGain(), out = ac.createGain(), p = panner(0, 1.55, 0, 1.6, 1.3);
+    lp.type = "lowpass"; lp.frequency.value = 1700; env.gain.value = 0; out.gain.value = 0;
+    src.connect(a).connect(sum); src.connect(b).connect(sum); sum.connect(lp).connect(env).connect(out).connect(p); p.connect(bed); p.connect(verbIn);
+    return { f0, src, a, b, env, out, p, next: 0, on: false };
+  }
+  const VOWELS = [[730, 1090], [530, 1840], [270, 2290], [570, 840], [300, 870], [660, 1720], [490, 1350]];
+  function talk(v, t, x, z, gain) {               // keep this talker going: the next syllable, or a breath between phrases
+    v.p.positionX.setTargetAtTime(x, t, 0.05); v.p.positionZ.setTargetAtTime(z, t, 0.05); v.out.gain.setTargetAtTime(gain, t, 0.2);
+    if (t < v.next) return;
+    if (Math.random() < 0.12) { v.env.gain.setTargetAtTime(0, t, 0.04); v.next = t + 0.35 + Math.random() * 1.1; return; }   // a pause
+    const [f1, f2] = VOWELS[Math.floor(Math.random() * VOWELS.length)], len = 0.09 + Math.random() * 0.17;
+    v.a.frequency.setTargetAtTime(f1 * (v.f0 > 170 ? 1.15 : 1), t, 0.03); v.b.frequency.setTargetAtTime(f2 * (v.f0 > 170 ? 1.15 : 1), t, 0.03);
+    v.src.frequency.setTargetAtTime(v.f0 * (0.88 + Math.random() * 0.3), t, 0.06);   // the pitch rising and falling with the phrase
+    v.env.gain.setTargetAtTime(0.7 + Math.random() * 0.3, t, 0.02); v.env.gain.setTargetAtTime(0.08, t + len * 0.7, 0.03);
+    v.next = t + len;
   }
   // a car going by on the road out front, left to right or right to left
   function car(night, o) {                        // (a random one tells store.js, so it can drive one past: onCarPass; o: store.js's own, { dir, v })
@@ -142,7 +184,12 @@ window.VaultAmbience = (() => {
     if (want !== fade) { fade = want; master.gain.setTargetAtTime(want * 0.9 * vol, t, 0.4); }
     while (hums.length < s.zones.length) { const z = s.zones[hums.length]; hums.push(hum(z.x, z.y, z.z)); }
     s.zones.forEach((z, i) => hums[i].gain.setTargetAtTime(z.level * 0.0045, t, 0.08));   // follows the switch (and the flicker as it strikes)
-    bed.traffic.gain.setTargetAtTime(0.05 + 0.08 * (1 - s.night), t, 1);
+    bed.traffic.gain.setTargetAtTime((0.05 + 0.08 * (1 - s.night)) * (1 - 0.6 * (s.snow || 0)), t, 1);   // (snow hushes the road)
+    const rain = s.rain || 0; rainG.roof.gain.setTargetAtTime(0.05 * rain, t, 0.8); rainG.pat.gain.setTargetAtTime(0.02 * rain * rain, t, 0.8);
+    const tk = s.talk || { at: [], crowd: 0 };
+    crowdG.gain.setTargetAtTime(Math.min(0.012, Math.max(0, tk.crowd - 1) * 0.0022), t, 1.5);
+    while (voices.length < tk.at.length) voices.push(voice());
+    voices.forEach((v, i) => { const w = tk.at[i]; if (w) talk(v, t, w.x, w.z, 0.012); else { v.out.gain.setTargetAtTime(0, t, 0.3); v.env.gain.setTargetAtTime(0, t, 0.1); } });
     if (!s.active) return;
     lastNight = s.night > 0.6;
     if ((carT += s.dt) >= nextCar) { carT = 0; nextCar = s.night > 0.6 ? 25 + Math.random() * 50 : 5 + Math.random() * 14; car(s.night > 0.6); }
