@@ -77,7 +77,7 @@ window.VaultTrees = (() => {
 
     // the parts, counted up front
     const pines = trees.filter(t => t.pine), rounds = trees.filter(t => !t.pine);
-    const PUFFS = [[0, 1.7, 0.62], [0.34, 1.5, 0.5], [-0.32, 1.55, 0.48], [0.04, 1.98, 0.46]];
+    const PUFFS = [[0, 1.4, 0.62], [0.34, 1.2, 0.5], [-0.32, 1.25, 0.48], [0.04, 1.68, 0.46]];   // (sat down onto the trunk: the low-poly puffs read smaller than their radius)
     const inst = (geo, m, n) => {
       geo.setAttribute("aTree", new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4));
       const o = new THREE.InstancedMesh(geo, m, n); o.layers.set(layer); o.frustumCulled = false; scene.add(o); return o;
@@ -124,7 +124,7 @@ window.VaultTrees = (() => {
     for (let i = 0; i < NL; i++) {
       let x, y, z;
       if (i % 7 === 0 || !rounds.length) { x = -30 + R() * 66; z = -16 + R() * 14; y = 3 + R() * 3.5; }   // strays, blown over the road and the lot
-      else { const t = rounds[Math.floor(R() * rounds.length)], a = R() * 6.28, d = R() * 0.6 * t.s; x = t.x + Math.cos(a) * d; z = t.z + Math.sin(a) * d; y = (1.4 + R() * 0.6) * t.s; }
+      else { const t = rounds[Math.floor(R() * rounds.length)], a = R() * 6.28, d = R() * 0.6 * t.s; x = t.x + Math.cos(a) * d; z = t.z + Math.sin(a) * d; y = (1.1 + R() * 0.6) * t.s; }
       lp.set([x, y, z], i * 3); lc.set(cols[Math.floor(R() * cols.length)].toArray(), i * 3);
       ls.set([R(), 0.55 + R() * 0.6, R(), 1.5 + R() * 3], i * 4);   // phase, fall speed, when it shows (vs the rate), tumble
     }
