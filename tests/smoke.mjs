@@ -135,7 +135,8 @@ await ev(() => { const d = __t.doors.find(d => !d.push && Math.abs(d.c - 9.65) <
 await page.waitForFunction(() => document.getElementById("tvHint").textContent.includes("toilet"), null, { timeout: 120000 }).catch(() => {});
 await page.keyboard.press("KeyE"); await page.waitForTimeout(1500);
 check("sit on the toilet: seated, pants down", await ev(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return __t.seated() && !!__t.seatAt()?.toilet && hip.material !== hip.userData.pantsM; }));
-await page.keyboard.press("KeyE"); await page.waitForTimeout(800);
+await page.keyboard.press("KeyE");
+await page.waitForFunction(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return !__t.seated() && hip.material === hip.userData.pantsM; }, null, { timeout: 10000 }).catch(() => {});   // (a frame or two: slow on the software renderer)
 check("stand back up: pants up", await ev(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return !__t.seated() && hip.material === hip.userData.pantsM; }));
 
 console.log("\nsimulation: starts bare");
