@@ -4975,8 +4975,7 @@ const WX_GROUND = [[mat.pavement, 0x55595e, 0x2e3237, 1], [mat.road, 0x2b2d31, 0
   .map(([m, dry, wet, snow]) => ({ m, dry: new THREE.Color(dry), wet: new THREE.Color(wet), snow }));
 const WX_SNOW = new THREE.Color(0xe6ebf0);
 const wxFall = (() => {                           // the rain (streaks) and the snow (flakes): one buffer each, falling in the shader
-  const X0 = -30, X1 = 38, Z0 = -32, Z1 = -0.45, H = 12;
-  const mk = (n, lines) => {
+  const mk = (n, lines, [X0, X1, Z0, Z1, H] = [-30, 38, -32, -0.45, 12]) => {
     const pos = new Float32Array(n * (lines ? 6 : 3)), end = new Float32Array(n * (lines ? 2 : 1)), seed = new Float32Array(n * (lines ? 2 : 1));
     for (let i = 0; i < n; i++) {
       const x = X0 + Math.random() * (X1 - X0), y = Math.random() * H, z = Z0 + Math.random() * (Z1 - Z0), r = Math.random();
@@ -4986,35 +4985,107 @@ const wxFall = (() => {                           // the rain (streaks) and the 
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3((X0 + X1) / 2, H / 2, (Z0 + Z1) / 2), 60);
     return g;
   };
-  const uni = { uT: { value: 0 }, uK: { value: 0 }, uNight: { value: 0 }, uH: { value: H } };
-  const rain = new THREE.LineSegments(mk(4500, true), new THREE.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false,
+  const uni = { uT: { value: 0 }, uK: { value: 0 }, uNight: { value: 0 }, uH: { value: 12 } };
+  const rainMat = u => new THREE.ShaderMaterial({ uniforms: u, transparent: true, depthWrite: false,
     vertexShader: `attribute float end; attribute float seed; uniform float uT, uH; varying float vE;
       void main() { vec3 p = position; p.y = mod(position.y - uT * (9.0 + seed * 3.0), uH) + end * 0.45; p.x += end * 0.06; vE = end;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
-    fragmentShader: `uniform float uK, uNight; varying float vE; void main() { gl_FragColor = vec4(vec3(0.78, 0.82, 0.9) * (1.0 - 0.55 * uNight), (0.12 + 0.3 * vE) * uK); }` }));
+    fragmentShader: `uniform float uK, uNight; varying float vE; void main() { gl_FragColor = vec4(vec3(0.78, 0.82, 0.9) * (1.0 - 0.55 * uNight), (0.12 + 0.3 * vE) * uK); }` });
+  const rain = new THREE.LineSegments(mk(4500, true), rainMat(uni));
+  // and close in, right outside the glass and only as tall as you can see through it: the far box alone thins out to nothing up close
+  const rainNear = new THREE.LineSegments(mk(2600, true, [-12, 16, -6, -0.3, 4.5]), rainMat({ ...uni, uH: { value: 4.5 } }));
   const snow = new THREE.Points(mk(3500, false), new THREE.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false,
     vertexShader: `attribute float seed; uniform float uT, uH; varying float vS;
       void main() { vec3 p = position; float t = uT * (0.7 + seed * 0.5); p.y = mod(position.y - t, uH); p.x += sin(t * 0.9 + seed * 40.0) * 0.35; p.z += cos(t * 0.7 + seed * 30.0) * 0.25; vS = seed;
         vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = clamp((2.0 + seed * 3.0) * 40.0 / -mv.z, 1.0, 7.0); gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `uniform float uK, uNight; varying float vS; void main() { vec2 d = gl_PointCoord - 0.5; float a = smoothstep(0.5, 0.2, length(d)); gl_FragColor = vec4(vec3(1.0) * (1.0 - 0.5 * uNight), a * 0.85 * uK); }` }));
-  for (const o of [rain, snow]) { o.layers.set(EXTERIOR_LAYER); o.frustumCulled = false; o.visible = false; scene.add(o); }
-  return { rain, snow, uni };
+  for (const o of [rain, rainNear, snow]) { o.layers.set(EXTERIOR_LAYER); o.frustumCulled = false; o.visible = false; scene.add(o); }
+  return { rain, rainNear, snow, uni };
 })();
-const wxGlass = (() => {                          // drops on the outside of the storefront glass, running down (either side of the doors)
-  const c = document.createElement("canvas"); c.width = 256; c.height = 512; const g = c.getContext("2d");
-  for (let i = 0; i < 160; i++) {
-    const x = Math.random() * 256, y = Math.random() * 512, r = 1 + Math.random() * 2.6;
-    g.fillStyle = "rgba(220,230,245,0.55)"; g.beginPath(); g.ellipse(x, y, r, r * 1.25, 0, 0, 7); g.fill();
-    g.fillStyle = "rgba(255,255,255,0.8)"; g.fillRect(x - r * 0.4, y - r * 0.6, 1, 1);
-    if (Math.random() < 0.3) { g.strokeStyle = "rgba(220,230,245,0.25)"; g.lineWidth = r * 0.8; g.beginPath(); g.moveTo(x, y - r); g.lineTo(x + (Math.random() - 0.5) * 3, y - r - 20 - Math.random() * 50); g.stroke(); }   // a run
-  }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0, depthWrite: false });
+const wxGlass = (() => {                          // rain on the outside of the storefront glass (either side of the doors):
+  // drops clinging all over it (as wet as the glass is), and drops that grow heavy and run down, leaving a trail
+  // and a few beads behind them; two sets of those, running at different speeds, so they don't move as one sheet
+  const W = 256, H = 512, tex = draw => {
+    const c = document.createElement("canvas"); c.width = W; c.height = H; draw(c.getContext("2d"));
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; return t;
+  };
+  const bead = (g, x, y, r) => {                  // a drop as a lens: the bright sky above shows in its bottom, the dark ground below in its top, a glint
+    for (const dy of [-H, 0, H]) {
+      const yy = y + dy; if (yy < -r * 2 || yy > H + r * 2) continue;
+      const gr = g.createLinearGradient(0, yy - r, 0, yy + r * 1.2);
+      gr.addColorStop(0, "rgba(40,48,58,0.45)"); gr.addColorStop(0.55, "rgba(170,185,205,0.3)"); gr.addColorStop(1, "rgba(235,242,255,0.65)");
+      g.fillStyle = gr; g.beginPath(); g.ellipse(x, yy, r, r * 1.12, 0, 0, 7); g.fill();
+      g.strokeStyle = "rgba(25,30,38,0.3)"; g.lineWidth = Math.max(0.5, r * 0.18); g.stroke();
+      if (r > 1.2) { g.fillStyle = "rgba(255,255,255,0.9)"; g.beginPath(); g.arc(x - r * 0.35, yy - r * 0.4, Math.max(0.5, r * 0.22), 0, 7); g.fill(); }
+    }
+  };
+  const beads = tex(g => {
+    for (let i = 0; i < 900; i++) bead(g, Math.random() * W, Math.random() * H, 0.6 + 4.2 * Math.random() ** 3.5);   // mostly mist-fine, a few fat ones
+  });
+  const runners = n => tex(g => {
+    for (let i = 0; i < n; i++) {
+      const x = 8 + Math.random() * (W - 16), y = Math.random() * H, r = 2.2 + Math.random() * 1.8, len = 60 + Math.random() * 240, ph = Math.random() * 6, wob = 1 + Math.random() * 3;
+      const at = k => [x + Math.sin(ph + k * 0.05) * wob + Math.sin(ph * 3 + k * 0.17) * 0.6, y - k];   // the trail above the head, wandering a little
+      for (const dy of [-H, 0, H]) {
+        g.lineCap = "round";
+        for (let k = 0; k < len; k += 2) {        // tapering, fading streak: the glass wiped clearer where it ran
+          const f = 1 - k / len, [px, py] = at(k), [qx, qy] = at(k + 2);
+          g.strokeStyle = `rgba(200,215,235,${0.28 * f})`; g.lineWidth = r * (0.35 + 0.5 * f);
+          g.beginPath(); g.moveTo(px, py + dy); g.lineTo(qx, qy + dy); g.stroke();
+        }
+      }
+      for (let k = 12; k < len; k += 18 + Math.random() * 30) { const [px, py] = at(k); bead(g, px + (Math.random() - 0.5) * 2, py, 0.6 + Math.random() * 1.2); }   // left behind on the way down
+      bead(g, at(0)[0], y + r * 0.3, r);         // the head, heavy at the front
+    }
+  });
+  const layers = [[beads, 0], [runners(9), 0.05], [runners(6), 0.11]].map(([t, speed], i) => ({ t, speed, m: new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0, depthWrite: false }), dz: i * 0.002 }));
   for (const [x0, x1] of [[WALL_L + 0.1, -1.95], [1.95, STORE.x - 0.1]]) {
-    const w = x1 - x0, p = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.24), m); p.position.set((x0 + x1) / 2, 1.55, -0.045); scene.add(p);
-    t.repeat.set(w / 1.6, 2.24 / 3.2);
+    const w = x1 - x0;
+    const geo = new THREE.PlaneGeometry(w, 2.24), uv = geo.attributes.uv;   // a tile is 1.6 x 3.2 m of glass, whatever the pane's width
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * w / 1.6, uv.getY(i) * 2.24 / 3.2);
+    for (const L of layers) { const p = new THREE.Mesh(geo, L.m); p.position.set((x0 + x1) / 2, 1.55, -0.045 - L.dz); scene.add(p); }
   }
-  return { m, t };
+  return {
+    tick(dt, wet, raining) {                       // beads: as wet as the glass is; runners: while it's actually coming down. Running down = offset up
+      layers[0].m.opacity = Math.min(0.95, wet);
+      for (const L of layers.slice(1)) { L.m.opacity = Math.min(1, raining * 1.6); L.t.offset.y += dt * L.speed * (0.5 + raining); }
+    },
+  };
+})();
+// Snow drifting where it would: banked against both sides of the lot's curb, along the far edge of the road, at the
+// foot of the storefront and round the lamp footings. Lumps, not a strip: each starts at its own point (the shelter
+// gets it first) and they grow over hours of snowing, then slump away slowly once it stops (faster in rain)
+const wxDrifts = (() => {
+  const spots = [], rnd = Math.random, add = (x, z, rx, rz, h) => spots.push({ x, z, rx, rz, h, at: rnd() * 0.55, ry: (rnd() - 0.5) * 0.3 });
+  const run = (xa, xb, z, side, rz, h) => { for (let x = xa; x < xb; x += 0.35 + rnd() * 0.5) add(x, z + side * rz * 0.5 * rnd(), 0.35 + rnd() * 0.45, rz * (0.6 + rnd() * 0.6), h * (0.4 + rnd() * 0.6)); };
+  const X0 = WALL_L - 20, X1 = STORE.x + 20, CURB = -9.8, ROAD_FAR = -13.8;   // (as the lot's laid out: see the exterior)
+  run(X0, X1, CURB + 0.09, 1, 0.22, 0.1);          // the lot side of the curb
+  run(X0, X1, CURB - 0.09, -1, 0.18, 0.07);        // the road side, in the gutter
+  run(X0, X1, ROAD_FAR + 0.05, 1, 0.3, 0.06);      // the road's far edge, against the grass
+  run(WALL_L, -2.1, -0.06, -1, 0.2, 0.09); run(2.1, STORE.x, -0.06, -1, 0.2, 0.09);   // the foot of the storefront, not across the doors
+  for (const k of [4, 9, 14, 19]) for (let a = 0; a < 7; a++) { const t = a / 7 * 6.28 + rnd() * 0.4; add(X0 + 2.6 * (k + 1) + Math.cos(t) * 0.36, CURB + 0.35 + Math.sin(t) * 0.36, 0.16 + rnd() * 0.08, 0.12, 0.08 + rnd() * 0.06); }   // round the lamp footings
+  const geo = new THREE.SphereGeometry(1, 12, 5, 0, Math.PI * 2, 0, Math.PI / 2);
+  const mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xe9eef3 }), spots.length);
+  mesh.layers.set(EXTERIOR_LAYER); mesh.frustumCulled = false; scene.add(mesh);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3();
+  let amt = 0, shown = -1;
+  const draw = () => {
+    spots.forEach((s, i) => {
+      const g = Math.max(0, Math.min(1, (amt - s.at) / (1 - s.at)));   // this lump's own share: none until the snow's been at it a while
+      q.setFromAxisAngle(up, s.ry); p.set(s.x, -0.01, s.z); sc.set(s.rx * (0.3 + 0.7 * Math.sqrt(g)), s.h * g + 1e-4, s.rz * (0.3 + 0.7 * Math.sqrt(g)));
+      mesh.setMatrixAt(i, m4.compose(p, q, sc));
+    });
+    mesh.instanceMatrix.needsUpdate = true; mesh.visible = amt > 0; shown = amt;
+  };
+  draw();
+  return {
+    tick(dt, snowing) {                           // ~3 hours of hard snow to full; a day or so to go (a few hours in rain)
+      const hrs = dt / SHIFT.hour;
+      amt = Math.max(0, Math.min(1, amt + (snowing > 0.15 ? hrs * 0.33 * snowing : -hrs * (WX.kind === "rain" && WX.k > 0.1 ? 0.5 : 0.06))));
+      if (Math.abs(amt - shown) > 0.004 || (amt === 0 && shown > 0)) draw();
+    },
+    get amt() { return amt; }, set amt(v) { amt = v; draw(); },
+  };
 })();
 // ponytail: temporary weather test kit; delete this block, its two key hooks (WX_KIT) and the bar goes with it.
 // A bar of weathers over the inventory: with nothing in your hands, 1-5 picks one and E sets it for the rest of the day,
@@ -5042,8 +5113,8 @@ function weatherTick(dt) {
   WX.cover = Math.max(0, Math.min(1, WX.cover + (snowing > 0.15 ? hrs * 0.6 * snowing : -hrs * (WX.kind === "rain" ? 0.6 : 0.12))));
   for (const g of WX_GROUND) g.m.color.copy(g.dry).lerp(g.wet, WX.wet).lerp(WX_SNOW, WX.cover * g.snow * 0.85);
   const F = wxFall; F.uni.uT.value += dt; F.uni.uK.value = WX.k; F.uni.uNight.value = 1 - tod.level;
-  F.rain.visible = raining > 0.01; F.snow.visible = snowing > 0.01;
-  wxGlass.m.opacity = Math.min(0.9, WX.wet * 0.9) * (WX.kind === "rain" || WX.wet > 0.3 ? 1 : 0); wxGlass.t.offset.y -= dt * 0.015 * raining;
+  F.rain.visible = F.rainNear.visible = raining > 0.01; F.snow.visible = snowing > 0.01;
+  wxGlass.tick(dt, WX.kind === "rain" || WX.wet > 0.3 ? WX.wet : 0, raining); wxDrifts.tick(dt, snowing);
   const now = WX.k > 0.15 ? WX.kind : "clear";     // what to say about it
   if (now !== WX.said && WX.said !== null && !(WX.said === "clear" && now === "clear")) logAct(now === "rain" ? "It's started raining" : now === "snow" ? "It's snowing!" : WX.said === "rain" ? "The rain's let up" : "It's stopped snowing");
   WX.said = now;
@@ -10523,7 +10594,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   renderWithBloom();
 });
-window.__t = { decorDraw, decor, postersSwap, posterFor, WX, weatherTick, wxPlan, walkers, walkerTick, pizzaRun, exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, pizzaRun, exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
