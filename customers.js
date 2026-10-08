@@ -451,10 +451,11 @@ window.VaultCustomers = (() => {
       // a wide soft swell across the chest; from the side a long slope down from high on the chest to a rounded fullest
       // point (lower the more drop she has), then a shorter underside back in. Nothing at the edges, rising from it
       // gently, so it grows out of the chest with no outline; a faint dip down the middle where the cloth bridges
-      const Wh = Math.min(0.17, gap + 0.062 * k * bw), D = 0.07 * b + 0.005;
+      const D = 0.07 * b + 0.005;
       const yA = by - 0.01 - drop * 0.03, yT = yA + (0.15 + 0.02 * k), yB = yA - (0.06 + 0.03 * drop) * k;
       const sstep = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
       const tq = torso.position, ts = torso.scale, TR = 0.3, TC = 0.2;           // (TORSO_F: rounded 0.3, tapered 0.1)
+      const Wh = ts.x / 2 * (1 - taper * (0.5 - (yA - tq.y) / ts.y)) * (0.86 + 0.1 * Math.max(0, Math.min(1, (bw - 0.85) / 0.35)));   // nearly the torso's width there (a bit more or less on her)
       const front = (x, y) => {                                                   // the torso's front surface (z) at x, y, in the waist's frame
         const yu = (y - tq.y) / ts.y, xu = Math.abs(x) / (ts.x * (1 - taper * (0.5 - yu)));
         const dx = Math.max(0, xu - TC), dy = Math.max(0, Math.abs(yu) - TC);
