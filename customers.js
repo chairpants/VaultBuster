@@ -652,16 +652,26 @@ window.VaultCustomers = (() => {
         const crouch = ease("crouch", Math.max(0, Math.min(1, (low - 0.35) / 0.5)), Math.min(1, dt * 5)) * w;   // really low: bend the knees too
         const reachFar = ik ? Math.max(0, ik.flat - 0.4) : 0;   // a half step in is fine even when bowing isn't
         const step = ease("step", Math.max(0, Math.min(0.2, reachFar - (bend ? 0.35 : 0.2))), Math.min(1, dt * 5)) * w;   // really far: a half step in
+        // the gait cycle, per leg (p: 0..1 from its heel strike): a stance of ~60% (less running) — heel strike, the knee
+        // giving a little to take the weight, the body vaulting over the planted foot, heel off, toe off — then the swing:
+        // hip and knee fold to clear the foot, it pendulums through, the knee straightening ahead of the next heel strike.
+        // The two legs half a cycle apart, so there's always a foot down (double support at each changeover), walking
+        const stanceF = 0.6 - 0.22 * run, cyc = phase / (Math.PI * 2) - 0.25;
+        const legAt = p => {                            // -> [thigh forward (-1..1, of the stride), knee bend (rad, before the gait's lift), in stance]
+          if (p < stanceF) { const k = p / stanceF; return [Math.cos(Math.PI * k), 0.32 * Math.exp(-(((k - 0.2) / 0.13) ** 2)) + 0.55 * Math.max(0, (k - 0.65) / 0.35) ** 2, Math.sin(Math.PI * k)]; }   // loading response, then heel off into toe off
+          const k = (p - stanceF) / (1 - stanceF);
+          return [-Math.cos(Math.PI * Math.min(1, k / 0.8)), 0.55 + 0.55 * Math.sin(Math.PI * Math.min(1, k / 0.75)) - 0.55 * Math.min(1, k / 0.75) ** 2, 0];   // fold up, swing through, straighten (reaching full extension at ~80%, then held for the strike)
+        };
+        const gl = [legAt(((cyc % 1) + 1) % 1), legAt((((cyc + 0.5) % 1) + 1) % 1)];
+        const kneeK = (G.knee * (1 - run) + 1.6 * run) * (1 - 0.4 * hunch) * Math.min(1, 0.55 + 0.35 * speed);
         legs.forEach(({ hip, knee }, i) => {
-          const s = i ? -sw : sw;
-          const lift = 0.55 * (G.knee * (1 - run) + 2.1 * run) * (1 - 0.4 * hunch);
-          const hx = (sit ? -Math.PI / 2 : -s * stride) - (i ? 0 : slipK * 0.6), kx = sit ? Math.PI / 2 + (sitAt.tuck ?? 0) : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * lift : 0;   // knee lifts as the leg swings through (and a foot shoots out on a slip)
-          hip.rotation.x = ease("h" + i, hx) - crouch * 1.05 - squat * 1.6;
+          const hx = sit ? -Math.PI / 2 : walking ? -gl[i][0] * stride * 1.2 : 0, kx = sit ? Math.PI / 2 + (sitAt.tuck ?? 0) : walking ? gl[i][1] * kneeK : 0;   // (thigh forward is -x; 1.2: the planted foot sweeps back over 60% of the cycle, not half)
+          hip.rotation.x = ease("h" + i, hx - (i ? 0 : slipK * 0.6)) - crouch * 1.05 - squat * 1.6;   // (and a foot shoots out on a slip)
           knee.rotation.x = ease("k" + i, kx) + crouch * 1.9 + squat * 2.4;
         });
         const seatY = sit ? (sitAt.hipY ?? 0.5) - 0.9 * o.height : 0;   // hips down to the seat
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
-        const bob = walking ? Math.abs(Math.cos(phase)) * 0.022 * (G.bob * (1 - run) + 2.4 * run) + (G.hop && !run ? Math.max(0, Math.sin(phase)) ** 2 * 0.06 : 0) : 0;   // (a skip: a little hop off every other step)
+        const bob = walking ? Math.max(gl[0][2], gl[1][2]) * 0.024 * (G.bob * (1 - run) + 2.4 * run) + (G.hop && !run ? Math.max(0, Math.sin(phase)) ** 2 * 0.06 : 0) : 0;   // highest vaulting over the planted foot, lowest in double support (a skip: a little hop off every other step)
         const bodyY = seatY + jolt + bob - slipK * 0.08;   // hips rise over each planted foot
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
         body.position.y = st.y - crouch * 0.4 - squat * 0.6;
@@ -670,7 +680,9 @@ window.VaultCustomers = (() => {
         const sg = sighT > 0 ? Math.sin((1 - (sighT -= dt) / 1.3) * Math.PI) : 0;    // a sigh: up, then a long sag
         upper.rotation.x = lean + (pose === "lean" ? 0.28 : 0) + Math.max(0, sg) * 0.08 + ease("hu", hunch * 0.16 + head_ * 0.12, Math.min(1, dt * 3)) + (walking ? G.lean : 0);   // hunched against it
         torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
-        body.rotation.y = ease("ry", walking ? swU * 0.06 * G.twist * (1 - run) : 0, soft) + shakeK * Math.sin(t * 38) * 0.16;   // shoulders counter-twist the stride, a beat behind (rolling, on a swagger); a shake: twisting it off
+        const pelvis = ease("ry", walking ? (gl[0][0] - gl[1][0]) * 0.5 * 0.08 * G.twist * (1 - 0.6 * run) : 0, soft);   // the pelvis turns with the leg going forward (more on a swagger)
+        body.rotation.y = pelvis + shakeK * Math.sin(t * 38) * 0.16;   // (a shake: twisting it off)
+        upper.rotation.y = -pelvis * 1.7;                // the shoulders counter it, with the arms
         const windZ = Math.max(-0.16, Math.min(0.16, wl * 0.022));                                // leaning into a crosswind (wind to their left: they lean right, into it)
         body.rotation.z = ease("rz", (walking || sit ? 0 : Math.sin(t * 0.45) * 0.018) + (walking ? G.sway * (1 - run) * Math.sin(phase) : 0) + (sit ? 0 : windZ), r * 0.3)   // idle weight shift, hip to hip; a hip sway; the wind
           - stagK * 0.2 * fx.sdir + slipK * Math.sin(t * 17) * 0.12;
