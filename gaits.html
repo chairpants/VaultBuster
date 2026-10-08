@@ -16,6 +16,7 @@
   <label>Speed <input id="spd" type="range" min="0.4" max="3.2" step="0.05" value="1.3"> <span id="spdV"></span> m/s</label>
   <label>Time <input id="ts" type="range" min="0.05" max="1" step="0.05" value="1"> <span id="tsV"></span>×</label>
   <label><input id="same" type="checkbox"> Same outfit on everyone</label>
+  <label><input id="skin" type="checkbox"> Seamless bodies (skinned trial)</label>
   <button id="pause">Pause</button><button id="step">Step ⟶</button><button id="side">Side view</button><button id="front">Front view</button>
   <div id="list"></div>
 </div>
@@ -44,7 +45,7 @@
     const same = document.getElementById("same").checked;
     NAMES.forEach((gait, i) => {
       const o = VC.randomOutfit(seeded(same ? 1985 : 100 + i * 7));
-      const c = VC.build({ ...o, gait, height: same ? 1 : o.height, build: same ? 1 : o.build });
+      const c = VC.build({ ...o, gait, height: same ? 1 : o.height, build: same ? 1 : o.build, skinned: document.getElementById("skin").checked });
       c.group.position.set((i - (NAMES.length - 1) / 2) * LANE, 0, (i % 2 ? 1 : -1) * LEN / 2 * 0.3);
       const tag = document.body.appendChild(Object.assign(document.createElement("div"), { className: "tag", textContent: `${i + 1} · ${gait}` }));
       scene.add(c.group); walkers.push({ c, gait, dir: 1, tag });
@@ -52,7 +53,7 @@
     document.getElementById("list").innerHTML = NAMES.map((g, i) => `${i + 1} — ${g}`).join("<br>");
   }
   build(); window.__g = { camera, controls, walkers };   // (for tests: framing a close-up)
-  document.getElementById("same").onchange = build;
+  document.getElementById("same").onchange = document.getElementById("skin").onchange = build;
 
   const view = (side) => { if (side) camera.position.set(W / 2 + 7, 1.6, 0); else camera.position.set(0, 2.6, LEN / 2 + 13); controls.target.set(0, 0.9, 0); controls.update(); };
   view(false);
