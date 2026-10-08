@@ -114,15 +114,17 @@ window.VaultCustomers = (() => {
   // Built once and shared, then scaled per part, so a limb reads as a soft
   // pill and a TV case as a molded cabinet — at no per-character cost
   function roundBox(r, seg = 4, taper = 0) {       // taper: how much narrower (x) the bottom is than the top
-    const g = new THREE.BoxGeometry(1, 1, 1, seg, seg, seg), p = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
+    const g = new THREE.BoxGeometry(1, 1, 1, seg, seg, seg), p = g.attributes.position, nr = g.attributes.normal, v = new THREE.Vector3(), c = new THREE.Vector3();
     for (let i = 0; i < p.count; i++) {
       v.fromBufferAttribute(p, i);
       c.set(Math.max(-0.5 + r, Math.min(0.5 - r, v.x)), Math.max(-0.5 + r, Math.min(0.5 - r, v.y)), Math.max(-0.5 + r, Math.min(0.5 - r, v.z)));
-      v.sub(c); if (v.lengthSq() > 0) v.setLength(r); v.add(c);
+      v.sub(c); if (v.lengthSq() > 0) v.setLength(r);
+      nr.setXYZ(i, v.x / r, v.y / r, v.z / r);   // the shell's own normal: the same on both sides of the box's face edges, so no seams there
+      v.add(c);
       if (taper) v.x *= 1 - taper * (0.5 - v.y);
       p.setXYZ(i, v.x, v.y, v.z);
     }
-    g.computeVertexNormals(); return g;
+    return g;
   }
   const canvasTex = (w, h, draw) => { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
   function geo() {
@@ -131,7 +133,7 @@ window.VaultCustomers = (() => {
     CYL = new THREE.CylinderGeometry(0.5, 0.5, 1, 14);
     SPH = new THREE.SphereGeometry(0.5, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2);   // a dome (cap crown)
     BALL = new THREE.SphereGeometry(0.5, 10, 8);
-    SOFT = roundBox(0.3);                          // limbs, hands: very soft
+    SOFT = roundBox(0.3, 6);                       // limbs, hands: very soft
     UMB = new THREE.ConeGeometry(0.56, 0.2, 10, 1, true);    // an umbrella canopy (open underneath)
     ROUND = roundBox(0.18);                        // shoes, hips
     CASE = roundBox(0.08, 3);                      // TV cabinets: molded plastic / veneer edges
