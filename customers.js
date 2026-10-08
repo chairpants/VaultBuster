@@ -63,6 +63,19 @@ window.VaultCustomers = (() => {
   const CASES = [["wood", "#6b4424"], ["black", "#1c1c1e"], ["beige", "#cfc6a8"], ["silver", "#9aa0a6"], ["red", "#a8262b"], ["white", "#e4e2dc"]];
   const SLEEVE = { tee: "baggy", jersey: "baggy", hawaiian: "baggy", colorblock: "short", babytee: "cap", crop: "cap", tiedye: "short", memphis: "short", overalls: "short" };   // the rest: long
 
+  // how someone walks (outfit.gait): stride (and so cadence: a shorter stride steps quicker), bounce, arm swing,
+  // shoulder roll, hip sway, slouch/lean, knee lift. "skip" is a kid's: a hop every other step
+  const GAITS = {
+    plain:   { stride: 1,    bob: 1,   arms: 1,   twist: 1,   sway: 0,     lean: 0,     knee: 1 },
+    bouncy:  { stride: 1,    bob: 2.4, arms: 1.2, twist: 1,   sway: 0,     lean: 0,     knee: 1.3 },
+    shuffle: { stride: 0.62, bob: 0.4, arms: 0.4, twist: 0.6, sway: 0,     lean: 0.07,  knee: 0.35 },
+    swagger: { stride: 1.1,  bob: 1.2, arms: 1.5, twist: 3,   sway: 0.045, lean: -0.03, knee: 1 },
+    brisk:   { stride: 1.15, bob: 0.9, arms: 1.4, twist: 1,   sway: 0,     lean: 0.05,  knee: 1.1 },
+    stroll:  { stride: 0.85, bob: 0.8, arms: 0,   twist: 1.5, sway: 0.015, lean: -0.02, knee: 0.9, behind: true },   // hands clasped behind the back
+    sway:    { stride: 0.95, bob: 1,   arms: 0.9, twist: 0.5, sway: 0.07,  lean: 0,     knee: 1 },
+    stomp:   { stride: 1.05, bob: 1.7, arms: 1.1, twist: 1,   sway: 0.02,  lean: 0.03,  knee: 1.5 },
+    skip:    { stride: 1.05, bob: 1.4, arms: 1.6, twist: 1,   sway: 0,     lean: 0,     knee: 1.8, hop: true },
+  };
   const SHOULDER_X = 0.255, SHOULDER_X_F = 0.235;   // shoulder joints off center (body-space): the sleeves just overlap the torso (hers is narrower)
   const pick = (a, rnd) => a[Math.floor(rnd() * a.length)];
   // female: true / false, or left out to roll it. Her rack or his, then the colors
@@ -530,7 +543,7 @@ window.VaultCustomers = (() => {
       const um = new THREE.Group(); um.position.set(0, -0.36, 0.05); arms[0].el.add(um);
       const uk = "umb|" + (o.umbrella || "#1c1c1e"), umC = mats.get(uk) || mats.set(uk, new THREE.MeshLambertMaterial({ color: o.umbrella || "#1c1c1e", side: THREE.DoubleSide })).get(uk);
       part(um, CYL, solid("#2a2a2a"), 0.012, 0.95, 0.012, 0, 0.47, 0);
-      part(um, UMB, umC, 1, 1, 1, 0, 0.92, 0);
+      um.userData.canopy = part(um, UMB, umC, 1, 1, 1, 0, 0.92, 0);
       part(um, BALL, solid("#2a2a2a"), 0.025, 0.025, 0.025, 0, 1.06, 0);
       props.umbrella = um;
     }
@@ -538,13 +551,29 @@ window.VaultCustomers = (() => {
     const item = new THREE.Group(); item.position.set(0, -0.4, 0.07); arms[0].el.add(item);   // holdItem's slot, in the same hand
     const tapes = [0, 1, 2].map(i => { const m = part(arms[1].el, BOX, solid("#151515"), 0.03, 0.19, 0.11, 0.035 * (i - 1), -0.36 - 0.012 * i, 0.07); m.visible = false; return m; });   // up to 3, side by side in one hand
 
+    // snow settling on top of the TV (or the hat) and the shoulders: grown by setSnow (not in parts: nothing to aim at)
+    const hatTop = o.hat ? ({ cap: 0.07, bucket: 0.13, band: 0.025 }[o.hat.kind || "cap"] || 0) : 0;
+    const snowM = mats.get("snow") || mats.set("snow", new THREE.MeshLambertMaterial({ color: 0xf4f7fb, emissive: 0x3c4148 })).get("snow")   // (a little of its own light: fresh snow reads white even in the overcast);
+    const snowHead = new THREE.Mesh(ROUND, snowM); snowHead.position.set(0, th + hatTop, -0.02); head.add(snowHead);
+    const snowSh = [-1, 1].map(s => { const m = new THREE.Mesh(ROUND, snowM); m.position.set(s * SX * 0.62, 0.665, -0.01); upper.add(m); return m; });
+    const setSnowK = k => {
+      const on = k > 0.02; snowHead.visible = on; snowSh.forEach(m => m.visible = on); if (!on) return;
+      snowHead.scale.set(tw * (0.6 + 0.3 * Math.min(1, k * 2)), 0.01 + 0.07 * k, td * (0.55 + 0.3 * Math.min(1, k * 2)));
+      snowSh.forEach(m => m.scale.set(0.1 + 0.06 * k, 0.008 + 0.035 * k, 0.12 + 0.06 * k));
+    };
+    setSnowK(0);
     const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.7 * W, 0.55), SHADOW); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.006; group.add(shadow);
     const face = { mood: "off", color: o.phosphor, since: 0, blink: false, next: 0, drawnAt: -1 };
     const UPPER = 0.29, FORE = 0.32;                   // shoulder->elbow, elbow->hand (body-space, before the height/build scale)
     let talking = false;
-    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, reach2 = { target: new THREE.Vector3(), on: false, w: 0, arm: 0 }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0 };
+    const reach = { target: new THREE.Vector3(), on: false, w: 0, arm: 1, lean: true }, reach2 = { target: new THREE.Vector3(), on: false, w: 0, arm: 0 }, st = { y: 0, squat: 0, nod: 0, lean: 0, crouch: 0, step: 0, ry: 0, rz: 0, rx: 0, ax0: 0, ae0: -0.12, ax1: 0, ae1: -0.12, h0: 0, h1: 0, k0: 0, k1: 0, hu: 0, hd: 0 };
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), qIK = new THREE.Quaternion();
     let t = 0, phase = 0, pose = "idle", look = null, sitAt = {}, sighT = 0;   // look: head yaw (relative to the body) someone asked for, or null
+    let gait = GAITS[o.gait] ? o.gait : "plain";
+    // the weather on them (see setWind etc.) and one-off moves: shake (snow/water off at the door), slip (a wet floor),
+    // feel (a palm out: is that rain?), stagger (shoved by a gust), flip (a gust turns the umbrella inside out)
+    const env = { wx: 0, wz: 0, hunch: 0, shield: false, snow: 0 }, fx = { shake: 0, slip: 0, feel: 0, stagger: 0, sdir: 1, flip: 0 };
+    const qTilt = new THREE.Quaternion(), eTilt = new THREE.Euler();
     const g2 = fc.getContext("2d");
     drawFace(g2, face, 0); ftex.needsUpdate = true;
     const lerp = (obj, k, v, r) => { obj[k] += (v - obj[k]) * r; };
@@ -576,14 +605,30 @@ window.VaultCustomers = (() => {
       reachTo(point, arm = 1, opts = {}) { if (point) { reach.target.copy(point); reach.on = true; reach.arm = arm; reach.lean = opts.lean !== false; } else reach.on = false; },
       reachAlso(point, arm = 0) { if (point) { reach2.target.copy(point); reach2.on = true; reach2.arm = arm; } else reach2.on = false; },
       talk(on) { talking = on; },                    // chatting across the counter: small nods and tilts
+      get gait() { return gait; }, set gait(g) { gait = GAITS[g] ? g : "plain"; },
+      setWind(wx, wz) { env.wx = wx; env.wz = wz; },  // the wind on them, world m/s (the way the air's going): they lean into it, and it leans on them
+      setHunch(k) { env.hunch = k; },                // cold / wet: shoulders up, arms in, head down, shorter steps
+      setShield(on) { env.shield = on; },            // a hand up over the head (caught in the rain, no umbrella)
+      setSnow(k) { k = Math.max(0, Math.min(1, k)); if (Math.abs(k - env.snow) > 0.004 || (k === 0) !== (env.snow === 0)) { env.snow = k; setSnowK(k); } },   // 0..1 settled on the head and shoulders
+      shake() { fx.shake = 1; }, slip() { fx.slip = 1.1; }, feelRain() { fx.feel = 1.8; },
+      stagger(dir = 1) { if (fx.stagger <= 0) { fx.stagger = 0.9; fx.sdir = dir; } },   // dir: +1 shoved to their left, -1 to their right
+      umbrellaFlip() { if (props.umbrella.visible && fx.flip <= 0) fx.flip = 1.6; },
+      get busy() { return fx.slip > 0 || fx.shake > 0.3; },   // mid-slip / shaking off: the store holds them in place
       tick(dt, speed = 0) {
         t += dt;
         // walk cycle: stride advances with ground speed, so feet don't skate
         // the legs lead: step rate follows ground speed, but a faster walker also
         // lengthens their stride, so cadence climbs slower than speed (feet still plant)
-        const stride = 0.34 + 0.12 * Math.min(1, Math.max(0, speed - 1));   // radians of hip swing
+        const G = GAITS[gait], run = Math.max(0, Math.min(1, (speed - 1.9) / 0.8));   // run: over ~2 m/s the walk turns into a run
+        for (const k in fx) if (k !== "sdir" && fx[k] > 0) fx[k] = Math.max(0, fx[k] - dt);
+        // the wind in their own frame: x to their left, z the way they face (the way the air is going)
+        const cy = Math.cos(group.rotation.y), sy = Math.sin(group.rotation.y), wl = env.wx * cy - env.wz * sy, wf = env.wx * sy + env.wz * cy;
+        const head_ = Math.max(0, Math.min(1, -wf / 8)), tail = Math.max(0, Math.min(1, wf / 8)), hunch = env.hunch;   // into it / with it behind them
+        const stride = (0.34 + 0.12 * Math.min(1, Math.max(0, speed - 1))) * (G.stride * (1 - run) + run) * (1 - 0.3 * hunch * (1 - run)) * (1 - 0.25 * head_) + 0.36 * run;   // radians of hip swing
         if (speed > 0.01) phase += dt * speed * 6 * (0.38 / (stride + 0.04));
         const walking = speed > 0.01, sw = walking ? Math.sin(phase) : 0, r = Math.min(1, dt * 10), sit = pose === "sit";
+        const slipK = fx.slip > 0 ? Math.sin(fx.slip / 1.1 * Math.PI) : 0, shakeK = fx.shake > 0 ? Math.sin(fx.shake * Math.PI) : 0;
+        const feelK = fx.feel > 0 ? Math.min(1, fx.feel * 2, (1.8 - fx.feel) * 3) : 0, stagK = fx.stagger > 0 ? Math.sin(fx.stagger / 0.9 * Math.PI) : 0;
         // upper body: the same rhythm, but trailing the legs by ~1/12 of a cycle and
         // eased, so arms swing through rather than snap, and the head stays level
         const swU = walking ? Math.sin(phase - 0.5) : 0, soft = Math.min(1, dt * 6);
@@ -609,24 +654,34 @@ window.VaultCustomers = (() => {
         const step = ease("step", Math.max(0, Math.min(0.2, reachFar - (bend ? 0.35 : 0.2))), Math.min(1, dt * 5)) * w;   // really far: a half step in
         legs.forEach(({ hip, knee }, i) => {
           const s = i ? -sw : sw;
-          const hx = sit ? -Math.PI / 2 : -s * stride, kx = sit ? Math.PI / 2 + (sitAt.tuck ?? 0) : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * 0.55 : 0;   // knee lifts as the leg swings through
+          const lift = 0.55 * (G.knee * (1 - run) + 2.1 * run) * (1 - 0.4 * hunch);
+          const hx = (sit ? -Math.PI / 2 : -s * stride) - (i ? 0 : slipK * 0.6), kx = sit ? Math.PI / 2 + (sitAt.tuck ?? 0) : walking ? Math.max(0, -Math.cos(phase + (i ? Math.PI : 0))) * lift : 0;   // knee lifts as the leg swings through (and a foot shoots out on a slip)
           hip.rotation.x = ease("h" + i, hx) - crouch * 1.05 - squat * 1.6;
           knee.rotation.x = ease("k" + i, kx) + crouch * 1.9 + squat * 2.4;
         });
         const seatY = sit ? (sitAt.hipY ?? 0.5) - 0.9 * o.height : 0;   // hips down to the seat
         const jolt = face.mood === "shock" && t - face.since < 0.35 ? Math.sin((t - face.since) / 0.35 * Math.PI) * 0.06 : 0;   // a little jump
-        const bodyY = seatY + jolt + (walking ? Math.abs(Math.cos(phase)) * 0.022 : 0);   // hips rise over each planted foot
+        const bob = walking ? Math.abs(Math.cos(phase)) * 0.022 * (G.bob * (1 - run) + 2.4 * run) + (G.hop && !run ? Math.max(0, Math.sin(phase)) ** 2 * 0.06 : 0) : 0;   // (a skip: a little hop off every other step)
+        const bodyY = seatY + jolt + bob - slipK * 0.08;   // hips rise over each planted foot
         st.y += (bodyY - st.y) * (Math.abs(bodyY - st.y) > 0.05 ? r : 1);   // eased sitting down / getting up, bob tracked directly
         body.position.y = st.y - crouch * 0.4 - squat * 0.6;
         body.position.z = step;
+        body.position.x = stagK * 0.12 * fx.sdir;         // a gust shoves them a step sideways
         const sg = sighT > 0 ? Math.sin((1 - (sighT -= dt) / 1.3) * Math.PI) : 0;    // a sigh: up, then a long sag
-        upper.rotation.x = lean + (pose === "lean" ? 0.28 : 0) + Math.max(0, sg) * 0.08;
+        upper.rotation.x = lean + (pose === "lean" ? 0.28 : 0) + Math.max(0, sg) * 0.08 + ease("hu", hunch * 0.16 + head_ * 0.12, Math.min(1, dt * 3)) + (walking ? G.lean : 0);   // hunched against it
         torso.scale.y = 0.56 * (1 + Math.sin(t * 1.7) * 0.012); torso.scale.z = 0.245 * (1 + Math.sin(t * 1.7) * 0.02);   // breathing
-        body.rotation.y = ease("ry", walking ? swU * 0.06 : 0, soft);                            // shoulders counter-twist the stride, a beat behind
-        body.rotation.z = ease("rz", walking || sit ? 0 : Math.sin(t * 0.45) * 0.018, r * 0.3);  // idle weight shift, hip to hip
-        body.rotation.x = ease("rx", walking && this.walkLean ? Math.min(0.08, speed * 0.05) : 0, r * 0.5);   // lean into the walk
-        let lx = walking ? swU * 0.3 : 0, rx = walking ? -swU * 0.3 : 0;                   // arms: smaller than the legs, trailing them
+        body.rotation.y = ease("ry", walking ? swU * 0.06 * G.twist * (1 - run) : 0, soft) + shakeK * Math.sin(t * 38) * 0.16;   // shoulders counter-twist the stride, a beat behind (rolling, on a swagger); a shake: twisting it off
+        const windZ = Math.max(-0.16, Math.min(0.16, wl * 0.022));                                // leaning into a crosswind (wind to their left: they lean right, into it)
+        body.rotation.z = ease("rz", (walking || sit ? 0 : Math.sin(t * 0.45) * 0.018) + (walking ? G.sway * (1 - run) * Math.sin(phase) : 0) + (sit ? 0 : windZ), r * 0.3)   // idle weight shift, hip to hip; a hip sway; the wind
+          - stagK * 0.2 * fx.sdir + slipK * Math.sin(t * 17) * 0.12;
+        body.rotation.x = ease("rx", (walking && this.walkLean ? Math.min(0.08, speed * 0.05) + 0.17 * run : 0) + (sit ? 0 : head_ * 0.2 - tail * 0.05), r * 0.5) - slipK * 0.3;   // lean into the walk (and the run, and a headwind); back on their heels in a slip
+        const aSw = 0.3 * (G.arms * (1 - run) + 2.3 * run) * (1 - 0.6 * hunch);
+        let lx = walking ? swU * aSw : 0, rx = walking ? -swU * aSw : 0;                   // arms: smaller than the legs, trailing them
         let le = walking ? -0.22 - Math.max(0, -swU) * 0.22 : -0.12, re = walking ? -0.22 - Math.max(0, swU) * 0.22 : -0.12;   // elbows bend on the forward swing
+        if (run) { le += (-1.45 - Math.max(0, -swU) * 0.25 - le) * run; re += (-1.45 - Math.max(0, swU) * 0.25 - re) * run; }   // running: elbows at right angles, pumping
+        const free = !["hold", "reach", "wait", "lean", "read", "watch", "sit"].includes(pose) && !tapes[0].visible && !Object.values(props).some(m => m.visible);
+        if (free && walking && G.behind && !run) { lx = rx = 0.42; le = re = -0.55; }   // a stroll: hands clasped behind
+        if (free && hunch > 0.05) { const k = Math.min(1, hunch * 1.3) * (1 - run); lx += (-0.4 - lx) * k; rx += (-0.4 - rx) * k; le += (-1.6 - le) * k; re += (-1.6 - re) * k; }   // hugging themselves
         if (pose === "reach") { rx = -1.45 - Math.sin(t * 3) * 0.05; re = -0.2; }
         if (pose === "hold") { rx = walking ? -0.35 : -0.45; re = -1.0; }
         if (sit) { lx = rx = face.mood === "shock" ? -1.1 : -0.45; le = re = face.mood === "shock" ? -0.9 : -0.8; }   // hands in the lap (up when startled)
@@ -634,10 +689,14 @@ window.VaultCustomers = (() => {
         if (pose === "lean") { lx = rx = -0.55; le = re = -1.05; }                  // forearms down on the counter, weight on them
         if (pose === "read") { rx = -1.05; re = -1.45; }                              // the tape up in front, turned to read the back
         if (pose === "watch") { lx = -0.45; le = -1.55; }                             // wrist up across the chest
-        if (props.umbrella.visible) { lx = -0.35; le = -1.25; }                       // the umbrella held up, the hand at the chest
+        if (props.umbrella.visible) { lx = -0.35; le = -1.25; if (fx.flip > 0) { lx -= Math.sin(t * 22) * 0.3; le -= 0.3; } }   // the umbrella held up, the hand at the chest (wrestling it, inside out)
+        else if (env.shield) { lx = -2.75; le = -0.95; }                              // a hand up over the head against the rain
+        if (feelK) { rx += (-1.15 - rx) * feelK; re += (-0.3 - re) * feelK; }          // palm out: is that rain?
+        if (shakeK) { const k = shakeK; lx += (-1.0 - lx) * k; le += (-1.75 + Math.sin(t * 24) * 0.25 - le) * k; }   // brushing it off the shoulders
         const ar = walking ? soft : r;                    // arms carry some momentum while walking; poses (reach, hold) still settle promptly
         const pose2 = [[ease("ax0", lx, ar), ease("ae0", le, ar)], [ease("ax1", rx, ar), ease("ae1", re, ar)]];
-        arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0], 0, i ? -0.06 : 0.06); el.rotation.x = pose2[i][1]; });
+        const flail = Math.max(slipK, stagK * 0.6);        // arms out for balance
+        arms.forEach(({ sh, el }, i) => { sh.rotation.set(pose2[i][0] - flail * 0.4, 0, (i ? -0.06 : 0.06) + flail * (i ? -1.2 : 1.2) * (1 + Math.sin(t * 15 + i) * 0.15)); el.rotation.x = pose2[i][1]; });
         const armIK = (armI, target, w) => {             // two-bone IK: elbow from the law of cosines, shoulder swung to aim the chain
           const { sh, el } = arms[armI];
           upper.updateMatrixWorld(true);
@@ -657,12 +716,17 @@ window.VaultCustomers = (() => {
         lerp(head.rotation, "z", face.mood === "impatient" ? 0.12 : talking ? Math.sin(t * 1.3) * 0.05 : 0, r * 0.5);
         head.rotation.x = ease("nod", walking ? Math.cos(phase * 2 - 0.8) * 0.008 : face.mood === "watch" ? -0.06 : talking ? Math.max(0, Math.sin(t * 2.4)) * 0.05 : 0, soft)   // talking: little agreeing nods   // eyes-level: only a whisper of nod, lagging the step; tips up at the screen
           + lean * 0.85                                   // plus bowing with the upper body (added after easing, so it never feeds back)
-          + (pose === "read" ? 0.3 : pose === "watch" ? 0.35 : 0) + Math.max(0, sg) * 0.2;   // looking down at it / sagging
+          + (pose === "read" ? 0.3 : pose === "watch" ? 0.35 : 0) + Math.max(0, sg) * 0.2   // looking down at it / sagging
+          + ease("hd", hunch * 0.14 + head_ * 0.16 - feelK * 0.4 + (walking && G.lean > 0.06 ? 0.08 : 0), Math.min(1, dt * 3)) - slipK * 0.25;   // head down into the weather (a shuffler watches their feet); up at the sky; thrown back in a slip
+        head.rotation.z += shakeK * Math.sin(t * 31) * 0.1;
         upper.updateMatrixWorld(true);                    // the head rides the top of the neck, wherever the waist has put it
         head.position.copy(group.worldToLocal(upper.localToWorld(tmp.set(0, 0.73, HEAD_Z / H))));
         if (props.umbrella.visible) {                     // straight up in the world, over the head
           const um = props.umbrella; um.parent.updateWorldMatrix(true, false);
           um.parent.getWorldQuaternion(qIK).invert(); um.quaternion.copy(qIK);
+          const wob = Math.sin(t * 7.3) * 0.04 * Math.min(1, Math.hypot(env.wx, env.wz) / 6);   // angled into the wind, shaking in it
+          eTilt.set(Math.max(-0.5, Math.min(0.5, -env.wz * 0.045)) + wob, 0, Math.max(-0.5, Math.min(0.5, env.wx * 0.045)) - wob); um.quaternion.multiply(qTilt.setFromEuler(eTilt));
+          um.userData.canopy.scale.y = fx.flip > 0 ? -0.7 : 1;    // blown inside out
           um.parent.getWorldScale(tmp2); um.scale.set(1 / tmp2.x, 1 / tmp2.y, 1 / tmp2.z);
         }
 
