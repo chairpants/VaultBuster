@@ -2320,11 +2320,12 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   };
 
   eb(w, 0.12, 0.15, mat.curb, cx, 0.06, lotFar);
-  ground(lotFar, roadFar, mat.road);                     // the road behind the lot
-  for (let x = x0 + 0.8; x < x1; x += 1.7) {              // dashed centerline
-    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.12), mat.lineYellow);
-    dash.rotation.x = -Math.PI / 2; dash.position.set(x, 0.002, (lotFar + roadFar) / 2); ea(dash);
-  }
+  const ROAD_X = 250;                                     // the road behind the lot, out both ways past where the eye (and the fog) gives out
+  { const r = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_X * 2, lotFar - roadFar), mat.road); r.rotation.x = -Math.PI / 2; r.position.set(0, 0, (lotFar + roadFar) / 2); ea(r); }
+  { const n = Math.floor(ROAD_X * 2 / 1.7), dg = new THREE.PlaneGeometry(0.9, 0.12); dg.rotateX(-Math.PI / 2);   // dashed centerline
+    const dash = new THREE.InstancedMesh(dg, mat.lineYellow, n), m4 = new THREE.Matrix4();
+    for (let i = 0; i < n; i++) dash.setMatrixAt(i, m4.makeTranslation(-ROAD_X + 0.8 + i * 1.7, 0.002, (lotFar + roadFar) / 2));
+    dash.frustumCulled = false; ea(dash); }
   ground(roadFar, grassFar, mat.grass);                  // a much deeper stretch of grass on the far side
   const benchZ = roadFar - 2.2;                          // a bench facing back toward the store, just past the road
   eb(1.3, 0.05, 0.4, mat.bench, 0, 0.42, benchZ);
@@ -9705,8 +9706,9 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
 
   // ---- around the building: grass all round, a paved apron at its sides and back with the dumpster, the pizza place next door ----
   const ground = (x0, x1, z0, z1, m, y = 0) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), m); g.rotation.x = -Math.PI / 2; g.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); scene.add(g); ext(g); };
-  for (const [x0, x1, z0, z1] of [[-60, -27.74, -24, 0], [31, 70, -24, 0], [-60, -7.84, 0, 90], [11.1, 70, 0, 27.9], [12.7, 70, 27.9, 29.9], [11.1, 70, 29.9, 90],
-    [-7.84, -7.07, 33.1, 46.6], [1.33, 11.1, 33.1, 46.6], [-7.84, 11.1, 46.6, 90]]) ground(x0, x1, z0, z1, mat.grass);
+  for (const [x0, x1, z0, z1] of [[-250, -27.74, -9.8, 0], [31, 250, -9.8, 0], [-250, -27.74, -250, -13.8], [31, 250, -250, -13.8], [-27.74, 31, -250, -23.8],   // (out front: round the road, which runs on out of sight)
+    [-250, -7.84, 0, 250], [11.1, 250, 0, 27.9], [12.7, 250, 27.9, 29.9], [11.1, 250, 29.9, 250],
+    [-7.84, -7.07, 33.1, 46.6], [1.33, 11.1, 33.1, 46.6], [-7.84, 11.1, 46.6, 250]]) ground(x0, x1, z0, z1, mat.grass);
   for (const [x0, x1, z0, z1] of [[-11.84, -7.84, 0, 50.6], [-7.84, -7.07, 33.1, 46.6], [11.1, 13, 0, 14], [11.1, 16.7, 14, 27.9], [12.7, 16.7, 27.9, 29.9], [11.1, 16.7, 29.9, 37.1],
     [1.33, 11.1, 33.1, 37.1], [1.33, 5.33, 37.1, 50.6], [-11.84, 5.33, 46.6, 50.6]]) ground(x0, x1, z0, z1, mat.pavement, 0.004);
   {                                                // the dumpster, out back by the closet: two plastic lids, forklift pockets, a bit of rust
