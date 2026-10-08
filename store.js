@@ -10421,11 +10421,30 @@ function trashAdd(b, k = 1, spill = true) {       // something into a bin; a ful
   binShow(b);
 }
 function makeBag(b, n) {                          // a tied-off liner (black from the lobby, white from the others): the knot at the origin, the bag hanging below it
-  const g = new THREE.Group(), r = (b.id === "lobby" ? 0.2 : b.id === "breakroom" ? 0.17 : 0.12) * (0.75 + 0.25 * Math.min(1, n / b.cap));
-  const m = new THREE.MeshPhongMaterial({ color: b.liner, specular: 0x777777, shininess: 55 });
-  const body = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), m); body.scale.set(1, 1.15, 0.9); body.position.y = -r * 1.2 - 0.05; g.add(body);
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.012, r * 0.4, 0.08, 10), m); neck.position.y = -0.055; g.add(neck);   // gathered up
-  for (const sx of [-1, 1]) { const ear = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.07, 6), m); ear.position.set(sx * 0.022, 0.005, 0); ear.rotation.z = -sx * 1.0; g.add(ear); }   // the tie
+  // V2: a pear of thin plastic, sagging wide at the bottom, lumpy with what's in it, pleated where it's gathered up
+  // into the neck, the corners tied in a knot (black) or the drawstring pulled into two loops (white kitchen bags)
+  const g = new THREE.Group(), f = Math.min(1, n / b.cap), r = (b.id === "lobby" ? 0.2 : b.id === "breakroom" ? 0.17 : 0.12) * (0.75 + 0.25 * f);
+  const m = new THREE.MeshPhongMaterial({ color: b.liner, specular: b.id === "lobby" ? 0x8a8a8a : 0x555555, shininess: b.id === "lobby" ? 70 : 35 });
+  const prof = [[0.02, 0], [0.55, 0.02], [0.86, 0.1], [1, 0.34], [1.03, 0.62], [0.96, 0.92], [0.78, 1.22], [0.5, 1.52], [0.24, 1.76], [0.09, 1.94], [0.06, 2.04]];   // (radius, height) in r
+  const geo = new THREE.LatheGeometry(prof.map(([x, y]) => new THREE.Vector2(x * r, (y - 2.04) * r - 0.03)), 22);
+  const bumps = Array.from({ length: 5 + Math.floor(f * 4) }, () => [Math.random() * 6.28, 0.15 + Math.random() * 0.75, 0.05 + Math.random() * 0.09]);   // (angle, height 0..1, size): boxes and cups pushing out
+  const pa = geo.attributes.position, top = -0.03, H = 2.04 * r;
+  for (let i = 0; i < pa.count; i++) {
+    const x = pa.getX(i), z = pa.getZ(i), y = pa.getY(i), a = Math.atan2(z, x), h = (y - top + H) / H;   // h: 0 at the bottom, 1 at the neck
+    let k = 1 + 0.16 * Math.cos(a * 9) * Math.min(1, Math.max(0, (h - 0.55) / 0.3));                     // pleats, drawn in toward the neck
+    for (const [ba, bh, bs] of bumps) { const d = Math.cos(a - ba), e = h - bh; k += bs * Math.max(0, d) ** 6 * Math.exp(-e * e * 30); }
+    pa.setX(i, x * k); pa.setZ(i, z * k);
+    if (h < 0.08) pa.setY(i, y + (Math.random() - 0.5) * 0.01);                                          // a slumped, uneven bottom
+  }
+  geo.computeVertexNormals();
+  g.add(new THREE.Mesh(geo, m));
+  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 6), m); knot.position.y = -0.015; g.add(knot);   // the knot
+  if (b.id === "lobby") for (const sx of [-1, 1]) {                                                  // the two tied corners, flopped over
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.085, 6), m); ear.scale.z = 0.35; ear.position.set(sx * 0.03, 0.012, 0); ear.rotation.z = -sx * 1.15; g.add(ear);
+  } else {
+    const tie = new THREE.MeshLambertMaterial({ color: 0xc8322c });                                      // the red drawstring, pulled up into two loops
+    for (const sx of [-1, 1]) { const l = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.0035, 4, 14, Math.PI * 1.2), tie); l.position.set(sx * 0.012, 0.005, 0); l.rotation.set(0, sx * 0.35, Math.PI * -0.1 + (sx > 0 ? 0 : Math.PI * 0.2)); g.add(l); }
+  }
   g.userData.r = r; return g;
 }
 function bagTie(b) {                              // -> the bag out of a bin (and a fresh liner in)
@@ -10433,10 +10452,32 @@ function bagTie(b) {                              // -> the bag out of a bin (an
   b.n = 0; b.acc = 0; b.spilled = false; binShow(b); window.VaultAmbience?.bag(b.x, 0.5, b.z);
   return bag;
 }
-function bagHandShow() {                          // carried low, one in each hand
-  if (!bagHand.parent) camera.add(bagHand);
+function bagHandShow() {                          // in your hands, hanging at your sides: one each side, a third in the right hand with the first
+  if (!bagHand.parent) me.group.add(bagHand);     // (the body's group: a mover, never filed into a room)
   bagHand.clear();
-  bagCarry.forEach((g, i) => { g.mesh.position.set([0.36, -0.36, 0][i], i > 1 ? -0.34 : -0.24, -0.62); g.mesh.rotation.set(0, 0, i ? 0.08 : -0.08); g.mesh.scale.setScalar(0.8); bagHand.add(g.mesh); });
+  bagCarry.forEach(g => { g.sw = { a: 0, va: 0, b: 0, vb: 0 }; bagHand.add(g.mesh); });
+}
+const bagHandW = new THREE.Vector3(), bagHandV = [new THREE.Vector3(), new THREE.Vector3()], bagHandWas = [new THREE.Vector3(), new THREE.Vector3()];
+function bagTick(dt) {                            // after the body's animated: each bag hangs from its hand, swinging (a damped pendulum) as the hand swings and you walk
+  if (!bagCarry.length || !dt) return;
+  const arms = me.rig.arms;
+  for (let i = 0; i < 2; i++) if (bagCarry.some((_, j) => j % 2 === i)) arms[i].sh.rotation.z += i ? 0.2 : -0.2;   // arms held out a little, to clear the legs
+  me.group.updateMatrixWorld(true);
+  const ry = me.group.rotation.y, c = Math.cos(ry), sn = Math.sin(ry);
+  const accs = [0, 1].map(i => {                  // each hand's acceleration, world (a jump, like picking them up, counts as none)
+    const p = arms[i].hand.getWorldPosition(bagHandW), v = p.clone().sub(bagHandWas[i]).divideScalar(dt);
+    if (v.length() > 12) v.set(0, 0, 0);
+    const acc = v.clone().sub(bagHandV[i]).divideScalar(dt); bagHandWas[i].copy(p); bagHandV[i].copy(v); return acc;
+  });
+  bagCarry.forEach((g, j) => {
+    const i = j % 2, acc = accs[i], hand = arms[i].hand.getWorldPosition(bagHandW);
+    const af = acc.x * sn + acc.z * c, as = acc.x * c - acc.z * sn;                                   // in the body's frame: forward (+z), to its left (+x)
+    const L = 0.3, sw = g.sw, lim = 0.6;
+    sw.va += (-9.8 / L * Math.sin(sw.a) - 3 * sw.va + Math.max(-30, Math.min(30, af)) / L) * dt; sw.a = Math.max(-lim, Math.min(lim, sw.a + sw.va * dt));   // pushed forward, it swings back
+    sw.vb += (-9.8 / L * Math.sin(sw.b) - 3 * sw.vb - Math.max(-30, Math.min(30, as)) / L) * dt; sw.b = Math.max(-lim, Math.min(lim, sw.b + sw.vb * dt));
+    me.group.worldToLocal(hand); g.mesh.position.set(hand.x + (j > 1 ? 0.05 : 0), hand.y - 0.03 - (j > 1 ? 0.04 : 0), hand.z + (j > 1 ? -0.04 : 0));
+    g.mesh.rotation.set(sw.a, j * 1.3, sw.b, "ZXY");
+  });
 }
 function binBag(b) {                              // E on a bin
   if (!b.n) { toast(`The ${b.name} is empty`); return; }
@@ -11531,7 +11572,7 @@ renderer.setAnimationLoop(() => {
   toolTick(dt);
   ladderTick(dt);
   roofTick(dt);
-  meTick(dt);
+  meTick(dt); bagTick(dt);
   if (roof.climb) camera.position.copy(roof.cam);
   else if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
   else if (ladder.on) {                          // up the steps: the eye where it always is, 21 cm ahead of your body (toward the ladder)
