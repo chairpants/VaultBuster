@@ -491,8 +491,9 @@ window.VaultCustomers = (() => {
         part(upper, BOX, mats.get(key), 0.085, 0.032, 0.004, 0.09, 0.553, 0.124);
       }
     }
+    let belt = null;
     if (!["leggings", "bike", "mini", "skirt", "track"].includes(kind) && o.top !== "overalls") {   // a belt, where there are belt loops
-      part(upper, ROUND, solid(o.female ? "#5a3a2a" : "#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);
+      belt = part(upper, ROUND, solid(o.female ? "#5a3a2a" : "#2a2320"), 0.37, 0.035, 0.23, 0, 0.105, 0);
       part(upper, ROUND, solid("#b8a46a"), 0.04, 0.03, 0.02, 0, 0.105, 0.115);
     }
     if (T.hood) part(upper, ROUND, T.hood, 0.3, 0.13, 0.13, 0, 0.66, -0.12);          // a hoodie's hood, down behind the neck
@@ -557,9 +558,49 @@ window.VaultCustomers = (() => {
           y => { const top = 0.5 * (1 - ss(hY + 0.04, hY - 0.14, y)), kn = ss(kY + 0.06, kY - 0.06, y); return [[0, top], [B, (1 - top) * (1 - kn)], [B + 1, (1 - top) * kn]]; },
           y => y > cut ? legM_ : skin, 2, stripe ? (hp.x > 0 ? 0.46 : -0.04) : 0);
       }
-      const hY = at(legs[0].hip).y;                                   // the hips: the seat of the pants, over the tops of both legs
-      tube(0, 0, [[hY + 0.13, 0.17 * W, 0.115], [hY + 0.05, 0.178 * W, 0.118], [hY - 0.03, 0.17 * W, 0.11], [hY - 0.075, 0.1 * W, 0.075]],
-        y => [[0, 1 - 0.5 * ss(hY + 0.02, hY + 0.13, y)], [1, 0.5 * ss(hY + 0.02, hY + 0.13, y)]], () => P.seat, 2.6);
+      // the torso and hips: one surface from the collar down to between the legs. Down to the waist it's the torso's own
+      // shape (so the bust, tags and hood still sit right), then it eases into the hips and closes between the legs; it
+      // bends at the waist. The shirt's front, back and side keep their own designs (each face of it projected flat, as
+      // on the box), the belt's a band painted round it, and the pants take over below
+      const hY = at(legs[0].hip).y, ts = torso.scale, tq = torso.position, fem = o.female, TAPER = fem ? 0.1 : 0.22, TC = 0.2, TR = 0.3;
+      const uY = yu => (0.9 + tq.y + ts.y * yu) * H;                                  // torso unit height -> the rest pose's
+      const waist = (0.9 + 0.105) * H, beltH = belt ? 0.0175 * H : 0;
+      const rings = [];                                                                 // [y, unit core, unit radius, x scale, z scale, dy (rounding)]
+      for (const ph of [0.15, 0.4, 0.65, 0.85, 1]) { const dy = 0.3 * Math.cos(ph * Math.PI / 2), yu = TC + dy; rings.push([uY(yu), TC, Math.sqrt(Math.max(0, TR * TR - dy * dy)), ts.x * W * (1 - TAPER * (0.5 - yu)), ts.z, dy]); }
+      for (const yu of [0.05, -0.1, -0.25]) rings.push([uY(yu), TC, TR, ts.x * W * (1 - TAPER * (0.5 - yu)), ts.z, 0]);
+      const tB = rings[rings.length - 1], pel = [0.356 * W, 0.236];                    // the hips' size (as the seat of the pants was)
+      for (const [y, k] of [[waist + 0.04, 0.3], [waist, 0.55], [hY + 0.04, 0.85], [hY - 0.02, 1]]) rings.push([y, TC, TR, tB[3] + (pel[0] - tB[3]) * k, tB[4] + (pel[1] - tB[4]) * k, 0]);
+      for (const [dy, k] of [[0.04, 0.8], [0.065, 0.5], [0.075, 0.2]]) rings.push([hY - 0.02 - dy, TC * k, TR * k, pel[0], pel[1], -dy / 0.075 * 0.3]);   // closing between the legs
+      const AN = 4, ringPts = (c, r) => { const pts = []; for (let q = 0; q < 4; q++) { const sx = q === 0 || q === 3 ? 1 : -1, sz = q < 2 ? 1 : -1; for (let t = 0; t <= AN; t++) { const a = (q + t / AN) * Math.PI / 2; pts.push([sx * c + r * Math.cos(a), sz * c + r * Math.sin(a), Math.cos(a), Math.sin(a)]); } } return pts; };
+      const verts = rings.map(([y, c, r, sx, sz, dy]) => ringPts(c, r).map(([ux, uz, nx, nz]) => {
+        const ru = Math.max(r, 1e-4), n = new THREE.Vector3(nx * ru, dy, nz * ru).normalize(); n.set(n.x / sx, n.y / H, n.z / sz).normalize();
+        const w1 = ss(waist - 0.05, waist + 0.06, y);                                    // the waist: hips with the body, chest with the upper half
+        return { p: [ux * sx, y, uz * sz], n, u: [ux, (y / H - 0.9 - tq.y) / ts.y, uz], w: [[0, 1 - w1], [1, w1]], top: dy > 0.15 };
+      }));
+      const topC = { p: [0, uY(0.5), 0], n: new THREE.Vector3(0, 1, 0), u: [0, 0.5, 0], w: [[1, 1]], top: true };
+      const botC = { p: [0, hY - 0.1, 0], n: new THREE.Vector3(0, -1, 0), u: [0, 0, 0], w: [[0, 1]], top: false };
+      const face = (a, b, c) => {                                                       // which of the shirt's faces (and its flat mapping), or the belt, or the pants
+        const y = (a.p[1] + b.p[1] + c.p[1]) / 3, nx = a.n.x + b.n.x + c.n.x, ny = a.n.y + b.n.y + c.n.y, nz = a.n.z + b.n.z + c.n.z;
+        if (belt && Math.abs(y - waist) < beltH) return [belt.material, v => [v.u[0] + 0.5, v.u[1] + 0.5]];
+        if (y < waist) return [P.seat, v => [v.u[0] + 0.5, v.u[1] + 0.5]];
+        if (Math.abs(ny) > Math.max(Math.abs(nx), Math.abs(nz))) return [torsoM[2], v => [v.u[0] + 0.5, -v.u[2] + 0.5]];
+        if (Math.abs(nx) > Math.abs(nz)) return nx > 0 ? [torsoM[0], v => [-v.u[2] + 0.5, v.u[1] + 0.5]] : [torsoM[1], v => [v.u[2] + 0.5, v.u[1] + 0.5]];
+        return nz > 0 ? [torsoM[4], v => [v.u[0] + 0.5, v.u[1] + 0.5]] : [torsoM[5], v => [-v.u[0] + 0.5, v.u[1] + 0.5]];
+      };
+      const tris = [], M = verts[0].length;
+      for (let i = 0; i < M; i++) tris.push([topC, verts[0][(i + 1) % M], verts[0][i]]);
+      for (let r = 0; r < verts.length - 1; r++) for (let i = 0; i < M; i++) { const a = verts[r][i], a2 = verts[r][(i + 1) % M], b2 = verts[r + 1][(i + 1) % M], bb = verts[r + 1][i]; tris.push([a, a2, bb], [a2, b2, bb]); }
+      const L = verts[verts.length - 1]; for (let i = 0; i < M; i++) tris.push([botC, L[i], L[(i + 1) % M]]);
+      const tm = new Map();
+      for (const t of tris) { const [m, uvf] = face(...t); if (!tm.has(m)) tm.set(m, []); tm.get(m).push([t, uvf]); }
+      const tp = [], tn = [], tu = [], tsi = [], tsw = [], tg = new THREE.BufferGeometry(), tmats = [];
+      for (const [m, list] of tm) {
+        tg.addGroup(tp.length / 3, list.length * 3, tmats.length); tmats.push(m);
+        for (const [t, uvf] of list) for (const v of t) { tp.push(...v.p); tn.push(v.n.x, v.n.y, v.n.z); tu.push(...uvf(v)); const w = [...v.w, [0, 0], [0, 0], [0, 0]].slice(0, 4); for (const [b2, x] of w) { tsi.push(b2); tsw.push(x); } }
+      }
+      tg.setAttribute("position", new THREE.Float32BufferAttribute(tp, 3)); tg.setAttribute("normal", new THREE.Float32BufferAttribute(tn, 3)); tg.setAttribute("uv", new THREE.Float32BufferAttribute(tu, 2));
+      tg.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(tsi, 4)); tg.setAttribute("skinWeight", new THREE.Float32BufferAttribute(tsw, 4));
+      const tmesh = new THREE.SkinnedMesh(tg, tmats); tmesh.frustumCulled = false; group.add(tmesh); parts.push(tmesh);
       const sl = o.sleeve || (o.longSleeves ? "long" : "short");
       for (const [ai, { sh, el }] of arms.entries()) {             // the arms: from the shoulder (inside the torso) to the wrist (inside the hand)
         const sp = at(sh), ep = at(el), sY = sp.y, eY = ep.y, wY = eY - 0.27 * H, B = 6 + ai * 2;
@@ -581,12 +622,12 @@ window.VaultCustomers = (() => {
       const nr = g.attributes.normal, v = new THREE.Vector3(), w2 = new THREE.Vector3();   // the u seam down each tube: both copies the same normal, so no crease there
       for (let i = 0; i < pos.length / 3; i += SEG + 1) { v.fromBufferAttribute(nr, i).add(w2.fromBufferAttribute(nr, i + SEG)).normalize(); nr.setXYZ(i, v.x, v.y, v.z); nr.setXYZ(i + SEG, v.x, v.y, v.z); }
       const mesh = new THREE.SkinnedMesh(g, mlist); mesh.frustumCulled = false; group.add(mesh); parts.push(mesh);
-      group.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones), mesh.matrixWorld);
+      group.updateMatrixWorld(true); const skel = new THREE.Skeleton(bones); mesh.bind(skel, mesh.matrixWorld); tmesh.bind(skel, tmesh.matrixWorld);
       // the blocks it stands in for
       const shoes = new Set([shoe, sole]);
       for (const { hip, knee } of legs) { hip.children.forEach(c => { if (c.isMesh) c.visible = false; }); knee.children.forEach(c => { if (c.isMesh && !shoes.has(c.material)) c.visible = false; }); }
       for (const { sh, el, hand } of arms) { sh.children.forEach(c => { if (c.isMesh) c.visible = false; }); el.children.forEach(c => { if (c.isMesh && c !== hand) c.visible = false; }); }
-      seat.visible = false;
+      seat.visible = false; torso.visible = false; if (belt) belt.visible = false;   // (the buckle stays, on the band)
     }
     const neck = part(upper, CYL, skin, 0.1, 0.09, 0.1, 0, 0.69, 0);                // neck
     part(upper, CYL, collarM, 0.15, 0.04, 0.15, 0, 0.65, 0);                         // collar
