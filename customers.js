@@ -503,7 +503,7 @@ window.VaultCustomers = (() => {
       const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
       // one tube down a joint chain (vertical in the rest pose): rings [y, rx, rz] top to bottom, rounded shut at both
       // ends; w(y) -> [[bone, weight], ...], m(y) -> its material there; ex: the cross-section's squareness (2 = an ellipse)
-      const tube = (cx, cz, rings, w, m, ex = 2) => {
+      const tube = (cx, cz, rings, w, m, ex = 2, uOff = 0) => {
         const R = [], cap = (r, dir) => [0.92, 0.7, 0.38, 0.02].map(k => [r[0] + dir * Math.sqrt(1 - k * k) * Math.min(r[1], r[2]) * 0.9, r[1] * k, r[2] * k]);
         R.push(...cap(rings[0], 1).reverse(), ...rings, ...cap(rings[rings.length - 1], -1));
         const y0 = R[0][0], y1 = R[R.length - 1][0], base = pos.length / 3;
@@ -513,7 +513,7 @@ window.VaultCustomers = (() => {
           for (let j = 0; j <= SEG; j++) {
             const a = j / SEG * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
             pos.push(cx + rx * Math.sign(c) * Math.abs(c) ** (2 / ex), y, cz + rz * Math.sign(s) * Math.abs(s) ** (2 / ex));
-            uvs.push(j / SEG, (y - y1) / (y0 - y1));
+            uvs.push(j / SEG + uOff, (y - y1) / (y0 - y1));
             for (const [b, x] of ws) { si.push(b); sw.push(x / tot); }
           }
         });
@@ -523,13 +523,14 @@ window.VaultCustomers = (() => {
           for (let j = 0; j < SEG; j++) ix.push(a + j, a + j + 1, b + j, a + j + 1, b + j + 1, b + j);   // (wound to face out)
         }
       };
-      const legM_ = P.legs || skin;
+      const stripe = Array.isArray(P.legs), legM_ = stripe ? P.legs[0] : P.legs || skin;   // (track pants: the face with the stripe, wrapped round so it runs down the outside seam)
+      if (stripe && legM_.map) { legM_.map.wrapS = THREE.RepeatWrapping; legM_.map.needsUpdate = true; }
       for (const [li, { hip, knee }] of legs.entries()) {          // the legs: from inside the hips down into the shoes
         const hp = at(hip), kp = at(knee), hY = hp.y, kY = kp.y, aY = kY - 0.37 * H, t0 = CUT[0] / 2, t1 = CUT[1] / 2, B = 2 + li * 2;
         const cut = kind === "shorts" ? kY - 0.02 : kind === "cargo" ? kY - 0.2 : kind === "bike" ? kY + 0.02 : -9;   // where bare leg starts
         tube(hp.x, 0.005, [[hY + 0.04, t0 * W * 1.02, t0 + 0.012], [hY - 0.2, t0 * W * 0.98, t0 + 0.01], [kY + 0.08, t0 * W * 0.86, t0 * 0.9 + 0.008], [kY, t1 * W * 1.02, t1 + 0.01], [kY - 0.12, t1 * W * 1.05, t1 + 0.012], [aY, t1 * W * 0.72, t1 * 0.75]],
           y => { const top = 0.5 * (1 - ss(hY + 0.04, hY - 0.14, y)), kn = ss(kY + 0.06, kY - 0.06, y); return [[0, top], [B, (1 - top) * (1 - kn)], [B + 1, (1 - top) * kn]]; },
-          y => y > cut ? legM_ : skin);
+          y => y > cut ? legM_ : skin, 2, stripe ? (hp.x > 0 ? 0.46 : -0.04) : 0);
       }
       const hY = at(legs[0].hip).y;                                   // the hips: the seat of the pants, over the tops of both legs
       tube(0, 0, [[hY + 0.13, 0.17 * W, 0.115], [hY + 0.05, 0.178 * W, 0.118], [hY - 0.03, 0.17 * W, 0.11], [hY - 0.075, 0.1 * W, 0.075]],
