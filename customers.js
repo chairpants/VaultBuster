@@ -105,6 +105,18 @@ window.VaultCustomers = (() => {
       o.bustW = 0.85 + rnd() * 0.35; o.bustGap = 0.064 + rnd() * 0.024; o.bustY = 0.375 + rnd() * 0.04;   // wide or narrow, close set or apart, high or low
       o.bustDrop = rnd(); o.bustSplay = 0.12 + rnd() * 0.22;                                               // round to teardrop; how far they point out
     }
+    // (rolled last, so everything above stays as it was for a given seed)
+    const tv = o.tv;                                  // the set: its build, finish, panels and controls
+    tv.style = pick(["classic", "classic", "portable", "boxy", "round"], rnd);
+    tv.finish = tv.kind === "wood" ? "wood" : tv.kind === "silver" ? "brushed" : rnd() < 0.55 ? "gloss" : "matte";
+    tv.woodSides = tv.kind !== "wood" && tv.kind !== "silver" && rnd() < 0.25;                          // vinyl wood-grain sides, the front its own color
+    tv.front = tv.kind === "wood" ? pick(["#c9ccd1", "#1c1c1e", "#2a1c12"], rnd) : rnd() < 0.35 ? pick(["#1c1c1e", "#c9ccd1"], rnd) : null;   // a front panel of its own (null: the case's)
+    tv.back = rnd() < 0.45 ? "#1a1a1c" : null;                                                          // a black back
+    tv.controls = tv.knobs ? pick(["knobs", "dial", "buttons"], rnd) : "none";
+    tv.grille = pick(["front", "front", "side"], rnd);
+    o.shoeStyle = o.hightop ? "hightop" : pick(fem ? ["sneaker", "sneaker", "platform", "maryjane", "boot", "flat"] : ["sneaker", "sneaker", "boot", "skate", "loafer"], rnd);
+    o.shoeAccent = pick(NEON.concat(JEWEL), rnd); o.lace = pick(["#f4f4f0", "#f4f4f0", "#1c1c1e", o.shoeAccent], rnd);
+    o.leather = pick(["#6b4226", "#a8743c", "#3b2a1e", "#1e1e1e", "#5a2a1a"], rnd);                     // boots, loafers
     return o;
   }
 
@@ -171,6 +183,73 @@ window.VaultCustomers = (() => {
   // the shirt/jacket -> { front, back, side, sleeve, trim, hood }. The torso takes a material per face, so what's
   // printed on the front (a name tag, a graphic, a number) stays on the front: the back gets its own (a jersey's big
   // number, overall straps), the sides and shoulders just the cloth
+  // ---- a loft of rounded-rectangle sections along z: TV cabinets, shoes. rings: [z, half width, half height, corner
+  // radius, center y], back to front; both ends closed. Smooth all round (one vertex per point, no seams); uv runs
+  // along z and up/across, so a wood grain or a brushed finish runs front to back on every face ----
+  function loftRR(rings, n = 4) {
+    const pos = [], uv = [], idx = [], M = 4 * (n + 1);
+    for (const [z, hw, hh, r0, yc] of rings) {
+      const r = Math.max(1e-4, Math.min(r0, hw - 1e-4, hh - 1e-4));
+      for (let q = 0; q < 4; q++) {
+        const sx = q === 0 || q === 3 ? 1 : -1, sy = q < 2 ? 1 : -1;
+        for (let t = 0; t <= n; t++) { const a = (q + t / n) * Math.PI / 2, x = sx * (hw - r) + r * Math.cos(a), y = yc + sy * (hh - r) + r * Math.sin(a); pos.push(x, y, z); uv.push(z * 2.5, (x + y) * 3); }
+      }
+    }
+    const R = rings.length, cB = pos.length / 3, cF = cB + 1;
+    pos.push(0, rings[0][4], rings[0][0], 0, rings[R - 1][4], rings[R - 1][0]); uv.push(rings[0][0] * 2.5, rings[0][4] * 3, rings[R - 1][0] * 2.5, rings[R - 1][4] * 3);   // (the end caps' centers mapped like the rest)
+    for (let k = 0; k < R - 1; k++) for (let i = 0; i < M; i++) { const a = k * M + i, a2 = k * M + (i + 1) % M; idx.push(a, a2, a + M, a2, a2 + M, a + M); }   // (wound to face out)
+    for (let i = 0; i < M; i++) { idx.push(cB, (i + 1) % M, i); idx.push(cF, (R - 1) * M + i, (R - 1) * M + (i + 1) % M); }
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals(); return g;
+  }
+  // the finishes a set's cabinet comes in: wood grain, brushed aluminum, glossy or matte plastic
+  function caseMat(finish, color) {
+    const key = `case|${finish}|${color}`; if (mats.has(key)) return mats.get(key);
+    let m;
+    if (finish === "wood") {
+      const t = canvasTex(128, 128, (g, w, h) => {
+        g.fillStyle = color; g.fillRect(0, 0, w, h);
+        for (let i = 0; i < 46; i++) { const y = Math.random() * h, a = 0.05 + Math.random() * 0.14; g.strokeStyle = `rgba(${Math.random() < 0.6 ? "30,15,5" : "255,220,170"},${a})`; g.lineWidth = 0.6 + Math.random() * 1.8; g.beginPath(); g.moveTo(0, y); for (let x = 0; x <= w; x += 8) g.lineTo(x, y + Math.sin(x * 0.05 + i) * 2.5); g.stroke(); }
+      });
+      t.wrapS = t.wrapT = THREE.RepeatWrapping; m = new THREE.MeshPhongMaterial({ map: t, specular: 0x2a2018, shininess: 25 });
+    } else if (finish === "brushed") {
+      const t = canvasTex(128, 64, (g, w, h) => { g.fillStyle = color; g.fillRect(0, 0, w, h); for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(${Math.random() < 0.5 ? "255,255,255" : "0,0,0"},${0.015 + Math.random() * 0.03})`; g.fillRect(0, Math.random() * h, w, 1); } });
+      t.wrapS = t.wrapT = THREE.RepeatWrapping; m = new THREE.MeshPhongMaterial({ map: t, specular: 0x9aa0a8, shininess: 70 });
+    } else if (finish === "gloss") m = new THREE.MeshPhongMaterial({ color, specular: 0x666666, shininess: 80 });
+    else m = new THREE.MeshLambertMaterial({ color });
+    mats.set(key, m); return m;
+  }
+  // ---- shoes (V2): each style built on a last: a narrow rounded heel, widest at the ball, a rounded toe; the upper
+  // rising to the ankle (or over it, on high-tops and boots) and falling along the instep to the toe; a sole shaped to
+  // it, thicker for platforms and skate shoes, a heel on loafers and Mary Janes, a little toe spring. Knee space: the
+  // ground at y -0.4475, the foot centered at z 0.045. Shared per style (and his size or hers) ----
+  const SHOE = {
+    sneaker:  { W: 1,    sole: 0.028, heel: 0,     H: 0.085, toe: 0.045, laces: [0.45, 0.72, 4], cap: true,  stripe: true },
+    hightop:  { W: 1.02, sole: 0.03,  heel: 0,     H: 0.15,  toe: 0.042, laces: [0.42, 0.72, 4], cap: true,  stripe: true, shaft: true, collar: true },
+    skate:    { W: 1.13, sole: 0.034, heel: 0,     H: 0.095, toe: 0.055, laces: [0.45, 0.72, 4], cap: true,  collar: true },
+    boot:     { W: 1.07, sole: 0.03,  heel: 0.014, H: 0.16,  toe: 0.056, laces: [0.42, 0.7, 4],  shaft: true, tab: true, soleW: 1.1 },
+    loafer:   { W: 0.92, sole: 0.012, heel: 0.022, H: 0.065, toe: 0.036, strap: 0.55, gloss: true },
+    platform: { W: 1,    sole: 0.066, heel: 0,     H: 0.075, toe: 0.045, laces: [0.47, 0.7, 3], cap: false },
+    maryjane: { W: 0.88, sole: 0.012, heel: 0.02,  H: 0.055, toe: 0.032, strap: 0.42, gloss: true },
+    flat:     { W: 0.88, sole: 0.01,  heel: 0,     H: 0.05,  toe: 0.03 },
+  };
+  const shoeShapes = new Map();
+  function shoeShape(style, fem) {
+    const key = style + (fem ? "|f" : "|m"); if (shoeShapes.has(key)) return shoeShapes.get(key);
+    const S = SHOE[style] || SHOE.sneaker, L = fem ? 0.25 : 0.27, z0 = 0.045 - L / 2, G = -0.4475, sz = fem ? 0.95 : 1;
+    const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const w0 = t => sz * S.W * (t < 0.3 ? 0.05 + 0.01 * t / 0.3 : t < 0.65 ? 0.06 + 0.012 * (t - 0.3) / 0.35 : 0.072 - 0.006 * (t - 0.65) / 0.2);   // half widths: heel, ball, toe (a touch wider than the leg above)
+    const w = t => (wS ? wS(t) : w0(t));
+    const wS = S.shaft ? t => Math.max(w0(t), sz * 0.078 * (1 - 0.6 * Math.max(0, (t - 0.42) / 0.2))) : null;   // a shaft wraps the ankle: as wide as the leg, down to the instep
+    const st = t => G + S.sole + S.heel * (1 - ss(0.2, 0.32, t)) + 0.007 * ss(0.86, 1, t);                     // the sole's top (the heel lifted, the toe sprung)
+    const h = t => S.toe + (S.H - S.toe) * (1 - ss(S.shaft ? 0.4 : 0.28, S.shaft ? 0.68 : 0.78, t));         // the upper's height over it
+    const z = t => z0 + t * L;
+    const T = [[-0.035, 0.55, 0.85], [0, 1, 1], [0.1, 1, 1], [0.2, 1, 1], [0.3, 1, 1], [0.4, 1, 1], [0.5, 1, 1], [0.6, 1, 1], [0.7, 1, 1], [0.8, 1, 1], [0.88, 0.97, 1], [0.94, 0.85, 0.9], [0.98, 0.6, 0.7], [1.0, 0.25, 0.4]];   // [t, width, height] (rounded off at both ends)
+    const upper = loftRR(T.map(([t, kw, kh]) => { const tt = Math.max(0, Math.min(1, t)), hh = h(tt) / 2 * kh; return [z(t), w(tt) * kw, hh, Math.min(w(tt) * kw, hh) * 0.85, st(tt) + h(tt) / 2 - 0.003 - (1 - kh) * h(tt) * 0.3]; }), 4);
+    const sole = loftRR(T.map(([t, kw]) => { const tt = Math.max(0, Math.min(1, t)), top = st(tt) + 0.002, sp = 0.006 * ss(0.9, 1, tt), hh = (top - G - sp) / 2; return [z(t) + (t > 0.99 ? 0.004 : t < 0 ? -0.004 : 0), w(tt) * Math.max(0.55, kw) * (S.soleW || 1.06), hh, 0.008, G + sp + hh]; }), 3);
+    const cap = S.cap ? loftRR([[z(0.76), w(0.76) * 1.02, 0.013, 0.012, st(0.76) + 0.011], [z(0.88), w(0.88) * 1.035, 0.015, 0.013, st(0.88) + 0.012], [z(0.95), w(0.95) * 0.9, 0.014, 0.012, st(0.95) + 0.012], [z(1.0) + 0.004, w(1) * 0.4, 0.008, 0.006, st(1) + 0.01]], 3) : null;   // the rubber toe
+    const out = { S, L, w, st, h, z, upper, sole, cap }; shoeShapes.set(key, out); return out;
+  }
   function topMats(o) {
     const { top, topA: a, topB: b } = o, c = o.topC || "#ffffff", key = `${top}|${a}|${b}|${c}|${o.graphic ?? 0}|${o.number ?? 0}|${o.skin}`;
     const mk = (name, draw) => patterned(`${key}|${name}`, (g, n) => { draw(g, n); if (top === "crop") { g.fillStyle = o.skin; g.fillRect(0, n * 0.8, n, n * 0.2); } });   // (a crop top: a bare midriff all round)
@@ -433,6 +512,27 @@ window.VaultCustomers = (() => {
     const shorts = kind === "shorts" || kind === "cargo" || kind === "bike";
     const legM = P.legs || skin;                     // (a skirt: bare legs, or tights)
     const trousers = [], bunched = [];                // (setPantsDown: the legs go bare, the pants gather at the ankles)
+    // a pair of shoes in their style (see SHOE): the upper, the sole, and what makes them those shoes: laces, a rubber
+    // toe, a stripe down the side, a padded collar, a pull tab, a penny strap or a Mary Jane's strap
+    const shoeStyle = o.shoeStyle || (o.hightop ? "hightop" : "sneaker"), SS = shoeShape(shoeStyle, o.female), SD = SS.S;
+    const leatherish = shoeStyle === "boot" || shoeStyle === "loafer";
+    const upperM = leatherish ? (SD.gloss ? caseMat("gloss", o.leather || "#3b2a1e") : solid(o.leather || "#6b4226")) : SD.gloss ? caseMat("gloss", o.shoes) : shoe;
+    const soleM = shoeStyle === "boot" ? solid("#2a221c") : ["loafer", "maryjane", "flat"].includes(shoeStyle) ? solid("#1e1a17") : shoeStyle === "platform" && o.shoes === "#1e1e1e" ? shoe : sole;
+    const laceM = solid(o.lace || "#f4f4f0"), accM = solid(o.shoeAccent || "#ff2e88");
+    const shoeOn = knee => {
+      const sp = (g, m) => { const p = new THREE.Mesh(g, m); p.userData.shoe = true; knee.add(p); parts.push(p); return p; };
+      const bar = (m, sx, sy, sz, x, y, z, rx = 0) => { const p = sp(BOX, m); p.scale.set(sx, sy, sz); p.position.set(x, y, z); p.rotation.x = rx; return p; };
+      sp(SS.upper, upperM); sp(SS.sole, soleM);
+      if (SS.cap) sp(SS.cap, soleM);
+      const top = t => SS.st(t) + SS.h(t), slope = t => -Math.atan2(top(t + 0.02) - top(t - 0.02), SS.z(t + 0.02) - SS.z(t - 0.02));
+      if (SD.laces) { const [a, b, n] = SD.laces; for (let i = 0; i < n; i++) { const t = a + (b - a) * i / (n - 1); bar(laceM, SS.w(t) * 1.15, 0.006, 0.009, 0, top(t) - 0.001, SS.z(t), slope(t)); } }
+      if (SD.shaft && SD.laces) for (const k of [0.55, 0.8]) bar(laceM, 0.07, 0.006, 0.008, 0, SS.st(0.3) + SD.H * k, 0.008 + 0.096);   // on up the front of the ankle
+      if (SD.stripe) for (const s of [-1, 1]) bar(accM, 0.004, 0.013, SS.L * 0.36, s * (SS.w(0.5) + 0.0015), SS.st(0.5) + SS.h(0.5) * 0.42, SS.z(0.5), -0.28);   // the side stripe, sweeping up to the heel
+      if (SD.shaft) { const p = sp(ROUND, upperM); p.scale.set(0.168, SD.H * 0.78, 0.19); p.position.set(0, SS.st(0.2) + SD.H * 0.56, 0.008); }   // the shaft, round the ankle
+      if (SD.collar) { const p = sp(ROUND, upperM); if (SD.shaft) { p.scale.set(0.178, 0.026, 0.2); p.position.set(0, SS.st(0.2) + SD.H - 0.006, 0.008); } else { p.scale.set(SS.w(0.12) * 2.15, 0.022, SS.L * 0.34); p.position.set(0, SS.st(0.1) + SD.H - 0.004, SS.z(0.13)); } }   // the padded collar
+      if (SD.tab) bar(soleM, 0.026, 0.034, 0.008, 0, SS.st(0) + SD.H + 0.004, SS.z(0) - 0.002);                  // the pull tab
+      if (SD.strap) bar(shoeStyle === "loafer" ? upperM : accM, SS.w(SD.strap) * 2.08, 0.008, 0.02, 0, top(SD.strap) - 0.001, SS.z(SD.strap), slope(SD.strap));   // penny strap / Mary Jane strap
+    };
     const legs = [-1, 1].map(s => {
       const hip = pivot(body, s * 0.1, 0.9, 0);
       const thigh = part(hip, SOFT, legM, CUT[0], 0.5, CUT[0] + 0.02, 0, -0.23, 0); if (P.legs) trousers.push(thigh);
@@ -445,9 +545,7 @@ window.VaultCustomers = (() => {
       }
       if (kind === "baggy") trousers.push(part(knee, SOFT, legM, CUT[1] + 0.03, 0.08, CUT[1] + 0.045, 0, -0.36, 0.01));   // pooled over the sneaker
       const b = part(knee, SOFT, P.legs || skin, 0.19, 0.1, 0.2, 0, -0.33, 0.01); b.visible = false; if (P.legs) bunched.push(b);   // around the ankle
-      const hi = o.hightop;                            // his high-tops: up over the ankle
-      part(knee, ROUND, shoe, o.female ? 0.13 : 0.14, hi ? 0.15 : 0.085, o.female ? 0.25 : 0.27, 0, hi ? -0.365 : -0.395, 0.045);
-      part(knee, ROUND, sole, o.female ? 0.14 : 0.15, 0.035, o.female ? 0.265 : 0.285, 0, -0.43, 0.045);
+      shoeOn(knee);
       return { hip, knee };
     });
     const seat = part(body, ROUND, P.seat, 0.35, 0.16, 0.22, 0, 0.93, 0); if (!skirt) trousers.push(seat);          // seat of the pants
@@ -651,8 +749,7 @@ window.VaultCustomers = (() => {
       const mesh = new THREE.SkinnedMesh(g, mlist); mesh.frustumCulled = false; group.add(mesh); parts.push(mesh);
       group.updateMatrixWorld(true); const skel = new THREE.Skeleton(bones); mesh.bind(skel, mesh.matrixWorld); tmesh.bind(skel, tmesh.matrixWorld);
       // the blocks it stands in for
-      const shoes = new Set([shoe, sole]);
-      for (const { hip, knee } of legs) { hip.children.forEach(c => { if (c.isMesh) c.visible = false; }); knee.children.forEach(c => { if (c.isMesh && !shoes.has(c.material)) c.visible = false; }); }
+      for (const { hip, knee } of legs) { hip.children.forEach(c => { if (c.isMesh) c.visible = false; }); knee.children.forEach(c => { if (c.isMesh && !c.userData.shoe) c.visible = false; }); }
       for (const { sh, el, hand } of arms) { sh.children.forEach(c => { if (c.isMesh) c.visible = false; }); el.children.forEach(c => { if (c.isMesh && c !== hand) c.visible = false; }); }
       seat.visible = false; torso.visible = false; if (belt) belt.visible = false;   // (the buckle stays, on the band)
     }
@@ -662,33 +759,71 @@ window.VaultCustomers = (() => {
     // the TV head, kept at true size (not stretched with the body)
     const HEAD_Z = 0.05;                              // TV sits a touch forward, over the neck rather than hanging back
     const head = pivot(group, 0, 1.63 * H, HEAD_Z);
-    const { w: tw, h: th, d: td } = o.tv, caseM = solid(o.tv.color), dark = solid("#111214");
-    const side = o.tv.knobs ? 0.09 : 0;                                            // a control strip down the right of the screen
-    part(head, CASE, caseM, tw, th, td, 0, th / 2, -0.02);
-    part(head, CASE, dark, tw * 0.84 - side, th * 0.8, 0.03, -side / 2, th / 2, td / 2 - 0.02);         // bezel, inset in the front
-    part(head, CASE, caseM, tw * 0.64, th * 0.64, 0.12, 0, th * 0.52, -td / 2 - 0.06);                 // the tube's back hump
-    part(head, CASE, caseM, tw * 0.34, th * 0.34, 0.06, 0, th * 0.52, -td / 2 - 0.14);                 // and the neck of the tube behind it
-    part(head, ROUND, dark, tw * 0.5, 0.03, td * 0.6, 0, -0.005, -0.03);                                // swivel base it sits on
-    // the screen: a gently bulged CRT face (its own geometry — sizes differ per set)
-    const sw = tw * 0.74 - side, sh = th * 0.66, sg = new THREE.PlaneGeometry(sw, sh, 8, 6), sp = sg.attributes.position;
-    for (let i = 0; i < sp.count; i++) { const x = sp.getX(i) / (sw / 2), y = sp.getY(i) / (sh / 2); sp.setZ(i, 0.018 * (1 - x * x * 0.8) * (1 - y * y * 0.8)); }
+    // V2: a tube set's shape. A cabinet with its front edge softened, the back stepping in and tapering to the rear
+    // the tube needs, and the tube's neck behind that; a bevelled bezel round a rounded, bulging screen set back in it.
+    // Each set its own: a classic, a portable (a handle), a boxy 80s one, a round space-age one; wood grain, brushed
+    // aluminum, glossy or matte plastic, vinyl wood sides on some; its own front panel or black back on some; knobs,
+    // a channel dial, push buttons or nothing; the speaker under the screen, beside it or on the side
+    const tv = o.tv, { w: tw, h: th, d: td } = tv, dark = solid("#111214"), style = tv.style || "classic";
+    const sidesM = tv.woodSides ? caseMat("wood", "#7a4f2a") : caseMat(tv.finish || "matte", tv.color);
+    const frontCol = tv.front || (tv.woodSides ? tv.color : null);
+    const frontM = frontCol ? caseMat(frontCol === "#c9ccd1" ? "brushed" : tv.finish === "wood" || tv.woodSides ? "gloss" : tv.finish || "matte", frontCol) : null;
+    const backM = tv.back ? caseMat("matte", tv.back) : tv.finish === "wood" ? caseMat("matte", "#3a2a1c") : sidesM;
+    const yc = th / 2, zF = td / 2 - 0.02, fd = td * (style === "boxy" ? 0.72 : style === "portable" ? 0.62 : 0.5), zBack = zF - td - 0.06;
+    const cr = { classic: 0.035, portable: 0.03, boxy: 0.012, round: 0.11 }[style] ?? 0.035, hw = tw / 2, hh = th / 2;
+    const tvPart = (g, m) => { const p = new THREE.Mesh(g, m); head.add(p); parts.push(p); return p; };
+    tvPart(loftRR([[zF - fd, hw, hh, cr, yc], [zF - 0.014, hw, hh, cr, yc], [zF, hw - 0.009, hh - 0.009, cr, yc]], 5), sidesM);   // the cabinet
+    tvPart(loftRR([[zBack, tw * 0.25, th * 0.27, Math.min(0.06, cr + 0.04), yc + 0.01], [zF - fd - td * 0.32, tw * 0.4, th * 0.43, Math.min(0.08, cr + 0.04), yc + 0.005],
+      [zF - fd + 0.006, hw * 0.96, hh * 0.96, cr, yc]], 5), backM);                                                    // the back, tapering
+    part(head, CYL, backM, tw * 0.2, 0.07, tw * 0.2, 0, yc + 0.01, zBack - 0.03).rotation.x = Math.PI / 2;           // the tube's neck
+    if (frontM) tvPart(loftRR([[zF - 0.003, hw - 0.006, hh - 0.006, cr * 0.8, yc], [zF + 0.004, hw - 0.013, hh - 0.013, cr * 0.7, yc]], 5), frontM);   // its own front panel
+    const zP = zF + (frontM ? 0.004 : 0);                                                                           // the face of the front
+    part(head, ROUND, dark, tw * 0.5, 0.03, td * 0.6, 0, -0.005, -0.03);                                           // swivel base it sits on
+    const side = tv.controls && tv.controls !== "none" ? (style === "boxy" ? 0.1 : 0.09) : 0;                     // a control strip down the right of the screen
+    // the screen: a squircle of glass (a grid pulled into rounded corners), bulged, its face drawn live
+    const sw = tw * 0.74 - side, sh = th * (style === "portable" ? 0.62 : 0.66), sx0 = -side / 2, sy0 = yc + (tv.grille === "front" && !side ? 0.012 : 0);
+    const sg = new THREE.PlaneGeometry(sw, sh, 16, 12), sp = sg.attributes.position, SQ = style === "boxy" ? 8 : style === "round" ? 3 : 5;
+    for (let i = 0; i < sp.count; i++) {
+      const u = sp.getX(i) / (sw / 2), v = sp.getY(i) / (sh / 2), k = Math.max(Math.abs(u), Math.abs(v)), n = (Math.abs(u) ** SQ + Math.abs(v) ** SQ) ** (1 / SQ), f = n > 0 ? k / n : 1;
+      sp.setXYZ(i, u * f * sw / 2, v * f * sh / 2, 0.02 * (1 - u * u * f * f * 0.75) * (1 - v * v * f * f * 0.75));
+    }
     sg.computeVertexNormals();
     const fc = document.createElement("canvas"); fc.width = FW; fc.height = FH;
     const ftex = new THREE.CanvasTexture(fc); ftex.colorSpace = THREE.SRGBColorSpace;
     const screen = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ map: ftex }));
-    screen.position.set(-side / 2, th / 2, td / 2 - 0.004); head.add(screen); parts.push(screen);
+    screen.position.set(sx0, sy0, zP - 0.008); head.add(screen); parts.push(screen);
     const sheen = new THREE.Mesh(sg, SHEEN); sheen.position.copy(screen.position); sheen.position.z += 0.003; sheen.userData.clearToBloom = true; head.add(sheen);   // glass reflection (the store's bloom pass sees through it)
+    {                                                 // the bezel: a bevelled frame round it, its window a touch inside the glass's edge
+      const rr = (w, h, r, path = new THREE.Shape()) => { const x = -w / 2, y = -h / 2; path.moveTo(x + r, y); path.lineTo(x + w - r, y); path.absarc(x + w - r, y + r, r, -Math.PI / 2, 0); path.lineTo(x + w, y + h - r); path.absarc(x + w - r, y + h - r, r, 0, Math.PI / 2); path.lineTo(x + r, y + h); path.absarc(x + r, y + h - r, r, Math.PI / 2, Math.PI); path.lineTo(x, y + r); path.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5); return path; };
+      const m = 0.028, rIn = Math.min(sw, sh) * (style === "boxy" ? 0.08 : style === "round" ? 0.3 : 0.17), shp = rr(sw + m * 2, sh + m * 2, rIn + m);
+      shp.holes.push(rr(sw * 0.965, sh * 0.955, rIn * 0.95, new THREE.Path()));
+      const bz = new THREE.ExtrudeGeometry(shp, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 2, curveSegments: 6 });
+      const b = tvPart(bz, dark); b.position.set(sx0, sy0, zP - 0.004);
+    }
     const led = new THREE.Mesh(BALL, new THREE.MeshBasicMaterial({ color: 0xff3b2f })); led.scale.setScalar(0.012);
-    led.position.set(tw / 2 - 0.035, th * 0.12, td / 2 - 0.01); head.add(led);                                     // power light
-    if (o.tv.knobs) {
-      for (const y of [0.62, 0.42]) part(head, CYL, solid("#2b2c30"), 0.04, 0.025, 0.04, tw / 2 - side / 2 - 0.015, th * y, td / 2 - 0.005).rotation.x = Math.PI / 2;
-      part(head, BOX, GRILLE, side * 0.7, th * 0.16, 0.004, tw / 2 - side / 2 - 0.015, th * 0.22, td / 2 - 0.004);  // speaker grille
-    } else part(head, BOX, GRILLE, tw * 0.4, 0.028, 0.004, 0, th * 0.08, td / 2 - 0.004);                          // a speaker slot under the screen
-    if (o.tv.antenna) for (const s of [-1, 1]) {
-      const a = pivot(head, s * 0.05, th, -0.05); a.rotation.z = -s * 0.45;
+    led.position.set(hw - 0.035, th * 0.1, zP + 0.002); head.add(led);                                             // power light
+    const cx = hw - side / 2 - 0.015, knobM = solid("#2b2c30"), chrome = caseMat("brushed", "#c9ccd1");
+    if (tv.controls === "knobs") {
+      for (const y of [0.64, 0.44]) { const k = part(head, CYL, knobM, 0.045, 0.025, 0.045, cx, th * y, zP + 0.012); k.rotation.x = Math.PI / 2; part(head, BOX, chrome, 0.006, 0.03, 0.006, cx, th * y + 0.008, zP + 0.026); }   // two knobs, a pointer on each
+    } else if (tv.controls === "dial") {             // a big channel dial, its numbers round the face, and a fine-tuning knob under it
+      const dk = "dialFace", dm = mats.get(dk) || mats.set(dk, new THREE.MeshLambertMaterial({ map: canvasTex(64, 64, (g, w) => { g.fillStyle = "#d9d6cc"; g.fillRect(0, 0, w, w); g.fillStyle = "#1c1c1e"; g.font = "bold 9px Arial"; g.textAlign = "center"; g.textBaseline = "middle"; for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; g.fillText(String(i + 2), w / 2 + Math.cos(a) * 22, w / 2 + Math.sin(a) * 22); } g.beginPath(); g.arc(w / 2, w / 2, 11, 0, 7); g.fill(); }) })).get(dk);
+      const d = part(head, CYL, [chrome, dm, chrome], side * 0.8, 0.02, side * 0.8, cx, th * 0.64, zP + 0.01); d.rotation.x = Math.PI / 2;
+      const k = part(head, CYL, knobM, 0.03, 0.022, 0.03, cx, th * 0.4, zP + 0.011); k.rotation.x = Math.PI / 2;
+    } else if (tv.controls === "buttons") {         // a column of push buttons, the top one red
+      for (let i = 0; i < 5; i++) part(head, BOX, i === 0 ? solid("#c8322c") : i % 2 ? chrome : knobM, side * 0.55, 0.022, 0.012, cx, th * (0.74 - i * 0.075), zP + 0.006);
+    }
+    if (tv.grille === "side") part(head, BOX, GRILLE, 0.004, th * 0.46, fd * 0.62, hw + 0.002, yc, zF - fd * 0.5);   // louvres down the side
+    else if (side) part(head, BOX, GRILLE, side * 0.7, th * 0.15, 0.004, cx, th * 0.17, zP + 0.002);                 // under the controls
+    else part(head, BOX, GRILLE, tw * 0.42, 0.028, 0.004, sx0, th * 0.075, zP + 0.002);                              // a slot under the screen
+    if (style === "portable") {                     // a carry handle, folded down along the top
+      for (const sx of [-1, 1]) part(head, ROUND, dark, 0.03, 0.03, 0.04, sx * tw * 0.36, th + 0.008, zF - fd * 0.45);
+      part(head, ROUND, dark, tw * 0.72 + 0.03, 0.022, 0.034, 0, th + 0.018, zF - fd * 0.45 + 0.03);
+    }
+    if (tv.antenna) for (const s of [-1, 1]) {
+      const a = pivot(head, s * 0.05, th, zF - fd * 0.7); a.rotation.z = -s * 0.45;
       part(a, CYL, solid("#b8bcc2"), 0.008, 0.36, 0.008, 0, 0.18, 0);
       part(a, BALL, solid("#d7dade"), 0.02, 0.02, 0.02, 0, 0.36, 0);                 // ball tip
-      part(head, ROUND, dark, 0.05, 0.02, 0.05, s * 0.05, th + 0.005, -0.05);       // its base
+      part(head, ROUND, dark, 0.05, 0.02, 0.05, s * 0.05, th + 0.005, zF - fd * 0.7);  // its base
     }
     if (o.hat) {                                                                  // on top of the TV: a ball cap (forwards or back), a bucket hat, a big bow, a headband
       const hm = solid(o.hat.color), k = o.hat.kind || "cap", cap = pivot(head, 0, th, 0); cap.rotation.y = o.hat.back ? Math.PI : 0;
