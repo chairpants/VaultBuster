@@ -128,6 +128,13 @@ window.VaultCustomers = (() => {
     }
     return g;
   }
+  // u all the way round a torso (a top whose design wraps, T.wrap): distance round the box's outline from the front's
+  // left edge, over its whole girth (A, B: half its width and depth); x, z in its unit box
+  const wrapU = (x, z, A, B) => {
+    const X = x * 2 * A, Z = z * 2 * B, P = 4 * A + 4 * B;
+    const s = Math.abs(X) / A >= Math.abs(Z) / B ? (X > 0 ? 2 * A + (B - Z) : 4 * A + 2 * B + (Z + B)) : (Z > 0 ? X + A : 2 * A + 2 * B + (A - X));
+    return s / P;
+  };
   const canvasTex = (w, h, draw) => { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
   function geo() {
     if (BOX) return;
@@ -220,7 +227,17 @@ window.VaultCustomers = (() => {
           g.fillStyle = c; g.fillRect(0, n * 0.91, n, n * 0.09);
         });
         const front = top === "windbreaker" ? mk("front", (g, n) => { g.drawImage(m.map.image, 0, 0); g.fillStyle = "#d8d8d8"; g.fillRect(n * 0.49, 0, 2, n); }) : m;   // the zipper
-        return res(front, m, m, top === "windbreaker" ? m : solid(b), solid(c));
+        // and all the way round (see wrapU): the slash climbs across the front and her right side and comes back down
+        // across the back and the left, so it meets itself everywhere
+        const wk = `wrap|${key}`, wrap = mats.get(wk) || mats.set(wk, new THREE.MeshLambertMaterial({ map: canvasTex(256, 64, (g, w, h) => {
+          g.fillStyle = a; g.fillRect(0, 0, w, h);
+          for (let x = 0; x < w; x++) { const f = x / w, tri = f < 0.5 ? f * 2 : 2 - f * 2, y1 = (0.5 - 0.35 * tri) * h; g.fillStyle = b; g.fillRect(x, y1, 1, 0.33 * h); g.fillStyle = "#f5f5f5"; g.fillRect(x, y1 + 0.33 * h, 1, 0.08 * h); }
+          g.fillStyle = c; g.fillRect(0, h * 0.91, w, h * 0.09);
+          if (top === "windbreaker") { g.fillStyle = "#d8d8d8"; g.fillRect(w * 0.157 - 1, 0, 2, h); }   // the zipper, down the front
+          if (top === "crop") { g.fillStyle = o.skin; g.fillRect(0, h * 0.8, w, h * 0.2); }
+        }) })).get(wk);
+        wrap.map.wrapS = THREE.RepeatWrapping;
+        return res(front, m, m, top === "windbreaker" ? m : solid(b), solid(c), { wrap });
       }
       case "varsity": {                           // body color, cream sleeves, a chenille letter on the front, a stripe at the hem
         const back = flat((g, n) => { fillA(g, n); g.fillStyle = b; g.fillRect(0, n - 6, n, 6); });
@@ -441,6 +458,12 @@ window.VaultCustomers = (() => {
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
     const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
     const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
+    const wrapA = 0.5 * torso.scale.x * W, wrapB = 0.5 * torso.scale.z;   // (the torso's half width and depth, for a design that wraps round)
+    if (T.wrap) {                                      // a design all the way round: its own copy of the box, mapped round its outline
+      const g = torso.geometry.clone(), pos = g.attributes.position, uv = g.attributes.uv, tp = o.female ? 0.1 : 0.22;
+      for (let i = 0; i < pos.count; i++) { const y = pos.getY(i); uv.setXY(i, wrapU(pos.getX(i) / (1 - tp * (0.5 - y)), pos.getZ(i), wrapA, wrapB), y + 0.5); }
+      torso.geometry = g; torso.material = T.wrap;
+    }
     if (o.female && o.bust) {                          // a bust (V2): her own size, width, set, height, shape; under the shirt, one form across the chest
       // In the torso's own material, with its texture projected from the torso's front: every point
       // samples the bit of shirt right behind it, so a plaid keeps its scale and a print runs straight
@@ -472,12 +495,12 @@ window.VaultCustomers = (() => {
       for (let r = 0; r < NY; r++) for (let q = 0; q < NX; q++) { const a = r * (NX + 1) + q, c = a + NX + 1; bix.push(a, a + 1, c, a + 1, c + 1, c); }   // (wound to face out, +z)
       const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(bpos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(new Array(bpos.length / 3 * 2).fill(0), 2));
       g.setIndex(bix); g.computeVertexNormals();
-      const m = part(upper, g, T.front, 1, 1, 1, 0, 0, 0); m.updateMatrix();
+      const m = part(upper, g, T.wrap || T.front, 1, 1, 1, 0, 0, 0); m.updateMatrix();
       const pos = g.attributes.position, uv = g.attributes.uv;
       for (let i = 0; i < pos.count; i++) {
         v.fromBufferAttribute(pos, i).applyMatrix4(m.matrix);          // into the torso's frame (both hang off the waist)
         const xu = (v.x - torso.position.x) / torso.scale.x, yu = (v.y - torso.position.y) / torso.scale.y;   // torso unit coords
-        uv.setXY(i, xu / (1 - taper * (0.5 - yu)) + 0.5, yu + 0.5);    // the torso front's own mapping (u across, v up), undoing its taper
+        uv.setXY(i, T.wrap ? wrapU(xu / (1 - taper * (0.5 - yu)), 0.5, wrapA, wrapB) : xu / (1 - taper * (0.5 - yu)) + 0.5, yu + 0.5);    // the torso front's own mapping (u across, v up), undoing its taper
       }
       if (o.nameTag) {                                 // name tag pinned high on the chest, above it
         const key = "tag|" + o.nameTag;
@@ -583,6 +606,7 @@ window.VaultCustomers = (() => {
         const y = (a.p[1] + b.p[1] + c.p[1]) / 3, nx = a.n.x + b.n.x + c.n.x, ny = a.n.y + b.n.y + c.n.y, nz = a.n.z + b.n.z + c.n.z;
         if (belt && Math.abs(y - waist) < beltH) return [belt.material, v => [v.u[0] + 0.5, v.u[1] + 0.5]];
         if (y < waist) return [P.seat, v => [v.u[0] + 0.5, v.u[1] + 0.5]];
+        if (T.wrap) return [T.wrap, v => [wrapU(v.u[0], v.u[2], wrapA, wrapB), v.u[1] + 0.5]];   // (a design all the way round)
         if (Math.abs(ny) > Math.max(Math.abs(nx), Math.abs(nz))) return [torsoM[2], v => [v.u[0] + 0.5, -v.u[2] + 0.5]];
         if (Math.abs(nx) > Math.abs(nz)) return nx > 0 ? [torsoM[0], v => [-v.u[2] + 0.5, v.u[1] + 0.5]] : [torsoM[1], v => [v.u[2] + 0.5, v.u[1] + 0.5]];
         return nz > 0 ? [torsoM[4], v => [v.u[0] + 0.5, v.u[1] + 0.5]] : [torsoM[5], v => [-v.u[0] + 0.5, v.u[1] + 0.5]];
@@ -596,7 +620,10 @@ window.VaultCustomers = (() => {
       const tp = [], tn = [], tu = [], tsi = [], tsw = [], tg = new THREE.BufferGeometry(), tmats = [];
       for (const [m, list] of tm) {
         tg.addGroup(tp.length / 3, list.length * 3, tmats.length); tmats.push(m);
-        for (const [t, uvf] of list) for (const v of t) { tp.push(...v.p); tn.push(v.n.x, v.n.y, v.n.z); tu.push(...uvf(v)); const w = [...v.w, [0, 0], [0, 0], [0, 0]].slice(0, 4); for (const [b2, x] of w) { tsi.push(b2); tsw.push(x); } }
+        for (const [t, uvf] of list) {
+          const tuv = t.map(uvf), us = tuv.map(q => q[0]); if (Math.max(...us) - Math.min(...us) > 0.5) for (const q of tuv) if (q[0] < 0.5) q[0] += 1;   // (straddling where a wrapped design meets itself)
+          t.forEach((v, vi) => { tp.push(...v.p); tn.push(v.n.x, v.n.y, v.n.z); tu.push(...tuv[vi]); const w = [...v.w, [0, 0], [0, 0], [0, 0]].slice(0, 4); for (const [b2, x] of w) { tsi.push(b2); tsw.push(x); } });
+        }
       }
       tg.setAttribute("position", new THREE.Float32BufferAttribute(tp, 3)); tg.setAttribute("normal", new THREE.Float32BufferAttribute(tn, 3)); tg.setAttribute("uv", new THREE.Float32BufferAttribute(tu, 2));
       tg.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(tsi, 4)); tg.setAttribute("skinWeight", new THREE.Float32BufferAttribute(tsw, 4));
