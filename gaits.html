@@ -52,7 +52,7 @@
     });
     document.getElementById("list").innerHTML = NAMES.map((g, i) => `${i + 1} — ${g}`).join("<br>");
   }
-  build(); window.__g = { camera, controls, walkers };   // (for tests: framing a close-up)
+  build(); window.__g = { camera, controls, walkers, scene };   // (for tests: framing a close-up)
   document.getElementById("same").onchange = document.getElementById("skin").onchange = build;
 
   const view = (side) => { if (side) camera.position.set(W / 2 + 7, 1.6, 0); else camera.position.set(0, 2.6, LEN / 2 + 13); controls.target.set(0, 0.9, 0); controls.update(); };
