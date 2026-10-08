@@ -441,37 +441,42 @@ window.VaultCustomers = (() => {
     const upper = pivot(body, 0, 0.9, 0);                                           // the waist: everything above bends forward from here
     const SX = o.female ? SHOULDER_X_F : SHOULDER_X, SY = o.female ? 0.585 : 0.6;   // her shoulders sit in and a touch lower, under the rounder top
     const torso = part(upper, o.female ? TORSO_F : TORSO, torsoM, o.female ? 0.4 : 0.43, 0.56, 0.245, 0, 0.37, 0);
-    if (o.female && o.bust) {                          // a bust (V2): two rounded forms on the chest, each her own: size, width, set, height, shape, splay
+    if (o.female && o.bust) {                          // a bust (V2): her own size, width, set, height, shape; under the shirt, one form across the chest
       // In the torso's own material, with its texture projected from the torso's front: every point
       // samples the bit of shirt right behind it, so a plaid keeps its scale and a print runs straight
       // across (each block mapping the whole pattern onto itself shrank plaids and miscolored prints)
       const b = o.bust, k = 0.9 + 0.1 * b, taper = 0.1, v = new THREE.Vector3();   // (TORSO_F's taper)
       const bw = o.bustW ?? 1, gap = o.bustGap ?? 0.075, by = o.bustY ?? 0.395, drop = o.bustDrop ?? 0.4, splay = o.bustSplay ?? 0.22;
-      // the form, from the side like a puffin's beak: tall where it meets the chest, a long gently curving top edge, a
-      // fuller rounded underside, out to a blunt round tip that sits lower the more drop she has. Built as cross-sections
-      // stepping out from the chest (z), each narrower and a little lower, closed round at the tip; it starts a little
-      // inside the chest, so there's no open edge to see
-      const W0 = 0.07 * k * bw, H0 = 0.076 * k, D = 0.082 * b, NA = 20, NU = 10, bpos = [], bix = [];
-      const ring = u => { const e = Math.sqrt(Math.max(0, 1 - Math.max(0, u) ** 2.2)); return [W0 * e, H0 * e, -H0 * drop * 0.45 * Math.max(0, u) ** 1.3]; };
-      for (let r = 0; r <= NU; r++) {
-        const u = r === 0 ? -0.3 : (r - 1) / (NU - 1) * 0.97, [w, h, c] = ring(u);
-        for (let q = 0; q < NA; q++) { const a = q / NA * Math.PI * 2, sn = Math.sin(a); bpos.push(w * Math.cos(a), c + h * sn * (sn < 0 ? 1 + 0.12 * drop : 1 - 0.08 * drop), D * u); }
+      // The shirt hangs across both sides, so what shows is one form: the torso's own front, pushed out. From the front
+      // a wide soft swell across the chest; from the side a long slope down from high on the chest to a rounded fullest
+      // point (lower the more drop she has), then a shorter underside back in. Nothing at the edges, rising from it
+      // gently, so it grows out of the chest with no outline; a faint dip down the middle where the cloth bridges
+      const Wh = Math.min(0.17, gap + 0.062 * k * bw), D = 0.07 * b + 0.005;
+      const yA = by - 0.01 - drop * 0.03, yT = yA + (0.15 + 0.02 * k), yB = yA - (0.06 + 0.03 * drop) * k;
+      const sstep = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+      const tq = torso.position, ts = torso.scale, TR = 0.3, TC = 0.2;           // (TORSO_F: rounded 0.3, tapered 0.1)
+      const front = (x, y) => {                                                   // the torso's front surface (z) at x, y, in the waist's frame
+        const yu = (y - tq.y) / ts.y, xu = Math.abs(x) / (ts.x * (1 - taper * (0.5 - yu)));
+        const dx = Math.max(0, xu - TC), dy = Math.max(0, Math.abs(yu) - TC);
+        return ts.z * (TC + Math.sqrt(Math.max(0, TR * TR - dx * dx - dy * dy)));
+      };
+      const NX = 28, NY = 26, bpos = [], bix = [];
+      for (let r = 0; r <= NY; r++) for (let q = 0; q <= NX; q++) {
+        const x = (q / NX * 2 - 1) * Wh * 1.05, y = yB + (yT - yB) * r / NY;
+        const fy = y >= yA ? sstep((yT - y) / (yT - yA)) : Math.sqrt(Math.max(0, 1 - ((yA - y) / (yA - yB)) ** 2)) ** 0.8;
+        const fx = sstep((Wh - Math.abs(x)) / (Wh * 0.55));
+        const dip = 1 - 0.1 * Math.exp(-((x / 0.025) ** 2)) * Math.max(0, 1 - Math.abs(y - yA) / 0.06);
+        bpos.push(x, y, front(x, y) - 0.002 + D * fy * fx * dip);
       }
-      bpos.push(0, ring(1)[2], D);                                                   // the tip
-      for (let r = 0; r < NU; r++) for (let q = 0; q < NA; q++) { const a = r * NA + q, a2 = r * NA + (q + 1) % NA, b2 = a2 + NA; bix.push(a, a2, a + NA, a2, b2, a + NA); }   // (wound to face out)
-      for (let q = 0; q < NA; q++) bix.push(NU * NA + q, NU * NA + (q + 1) % NA, NU * NA + NA);
-      const bg = new THREE.BufferGeometry(); bg.setAttribute("position", new THREE.Float32BufferAttribute(bpos, 3)); bg.setAttribute("uv", new THREE.Float32BufferAttribute(new Array(bpos.length / 3 * 2).fill(0), 2));
-      bg.setIndex(bix); bg.computeVertexNormals();
-      for (const s of [-1, 1]) {
-        const m = part(upper, bg, T.front, 1, 1, 1, s * gap, by, 0.104);
-        m.rotation.set(0.05, s * splay, 0); m.updateMatrix();
-        const g = bg.clone(), pos = g.attributes.position, uv = g.attributes.uv;
-        for (let i = 0; i < pos.count; i++) {
-          v.fromBufferAttribute(pos, i).applyMatrix4(m.matrix);          // into the torso's frame (both hang off the waist)
-          const xu = (v.x - torso.position.x) / torso.scale.x, yu = (v.y - torso.position.y) / torso.scale.y;   // torso unit coords
-          uv.setXY(i, xu / (1 - taper * (0.5 - yu)) + 0.5, yu + 0.5);    // the torso front's own mapping (u across, v up), undoing its taper
-        }
-        uv.needsUpdate = true; m.geometry = g;
+      for (let r = 0; r < NY; r++) for (let q = 0; q < NX; q++) { const a = r * (NX + 1) + q, c = a + NX + 1; bix.push(a, a + 1, c, a + 1, c + 1, c); }   // (wound to face out, +z)
+      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(bpos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(new Array(bpos.length / 3 * 2).fill(0), 2));
+      g.setIndex(bix); g.computeVertexNormals();
+      const m = part(upper, g, T.front, 1, 1, 1, 0, 0, 0); m.updateMatrix();
+      const pos = g.attributes.position, uv = g.attributes.uv;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrix);          // into the torso's frame (both hang off the waist)
+        const xu = (v.x - torso.position.x) / torso.scale.x, yu = (v.y - torso.position.y) / torso.scale.y;   // torso unit coords
+        uv.setXY(i, xu / (1 - taper * (0.5 - yu)) + 0.5, yu + 0.5);    // the torso front's own mapping (u across, v up), undoing its taper
       }
       if (o.nameTag) {                                 // name tag pinned high on the chest, above it
         const key = "tag|" + o.nameTag;
