@@ -65,7 +65,7 @@ window.VaultAudio = (() => {
 
 window.VaultAmbience = (() => {
   let carSeen = null, lastNight = false;
-  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null, windG = null;   // vol: the settings' store-sounds volume
+  let ac = null, master, bed, room, glass, verbIn, hums = [], nextCar = 3, carT = 0, fade = 0, vol = 1, rainG = null, voices = [], crowdG = null, windG = null, units = [];   // vol: the settings' store-sounds volume
   let muted = (() => { try { return localStorage.getItem("vaultbuster-ambience") === "off"; } catch { return false; } })();
   const noise = { white: null, pink: null, brown: null };
 
@@ -216,6 +216,10 @@ window.VaultAmbience = (() => {
     bed.traffic.gain.setTargetAtTime((0.05 + 0.08 * (1 - s.night)) * (1 - 0.6 * (s.snow || 0)), t, 1);   // (snow hushes the road)
     const wind = (s.wind || 0) * (0.55 + 0.9 * (s.gust || 0)); windG.gain.setTargetAtTime(wind * (s.outdoors ? 0.11 : 0.012), t, 0.35);
     const rain = s.rain || 0; rainG.roof.gain.setTargetAtTime(0.05 * rain, t, 0.8); rainG.pat.gain.setTargetAtTime(0.02 * rain * rain, t, 0.8);
+    (s.units || []).forEach((u, i) => {             // the rooftop AC units: a fan's rush and the compressor's drone, loud out on the roof, a faint rumble through the ceiling
+      if (!units[i]) units[i] = rooftop(u.x, u.y, u.z);
+      units[i].gain.setTargetAtTime(u.on ? (s.outdoors ? 0.05 : 0.004) : 0, t, u.on ? 0.6 : 1.2);
+    });
     const tk = s.talk || { at: [], crowd: 0 };
     crowdG.gain.setTargetAtTime(Math.min(0.012, Math.max(0, tk.crowd - 1) * 0.0022), t, 1.5);
     while (voices.length < tk.at.length) voices.push(voice());
@@ -319,6 +323,13 @@ window.VaultAmbience = (() => {
     }
     const k = Math.min(1, speed / 3), t = ac.currentTime;
     w.g.gain.setTargetAtTime(0.2 * k * k, t, 0.05); w.bp.frequency.setTargetAtTime(350 + 900 * k, t, 0.05);
+  }
+  function rooftop(x, y, z) {
+    const p = panner(x, y, z, 2.5, 1.1), g = ac.createGain(); g.gain.value = 0; g.connect(p).connect(bed);
+    const m = ac.createOscillator(), mf = ac.createBiquadFilter(), mg = ac.createGain(); m.type = "sawtooth"; m.frequency.value = 58.8 + Math.random(); mf.type = "lowpass"; mf.frequency.value = 220; mg.gain.value = 0.35; m.connect(mf).connect(mg).connect(g); m.start();
+    const fan = loop(noise.pink), fb = ac.createBiquadFilter(), fg = ac.createGain(); fb.type = "bandpass"; fb.frequency.value = 620; fb.Q.value = 0.5; fg.gain.value = 0.7; fan.connect(fb).connect(fg).connect(g);
+    const lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = 7.5 + Math.random(); lg.gain.value = 0.12; lfo.connect(lg).connect(fg.gain); lfo.start();   // the blades' beat
+    return g;
   }
   let comp = null;
   function compressor(x, y, z, on) {                // the cooler's compressor and condenser fan
