@@ -1248,7 +1248,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
         ctx.fillStyle = "#3b6aa0"; ctx.fillRect(10, 56, W - 20, H - 110); ctx.fillStyle = "#222"; ctx.font = "bold 16px Arial"; ctx.fillText("FALL PREVIEW: 22 NEW SHOWS", 10, H - 30);
       }, 192, 256), 0.14, 0.19, tx - 0.32, y + 0.0065, tz - 0.12); tvg.rotation.x = -Math.PI / 2; tvg.rotation.z = 0.4;   // (flat, turned 0.4 on the table: spun in its own plane before it's laid down)
       bx(0.14, 0.006, 0.19, lam(0xe8e4d8), tx - 0.32, y + 0.003, tz - 0.12).rotation.y = 0.4;   // its pages
-      const mug = (x, z, c, par) => { const g = grp(x, y, z, Math.random() * 6); put(new THREE.CylinderGeometry(0.04, 0.036, 0.095, 16, 1, true), phong(c, 50), 0, 0.0475, 0, 0, g); cyl(0.036, 0.036, 0.004, phong(c, 50), 0, 0.002, 0, 16, g); cyl(0.036, 0.036, 0.002, lam(0x3a1f0e), 0, 0.075, 0, 16, g); const h = put(new THREE.TorusGeometry(0.025, 0.007, 6, 12), phong(c, 50), 0.045, 0.05, 0, 0, g); return g; };
+      const mug = (x, z, c, par) => { const g = grp(x, y, z, Math.random() * 6); put(new THREE.CylinderGeometry(0.04, 0.036, 0.095, 16, 1, true), Object.assign(phong(c, 50), { side: THREE.DoubleSide }), 0, 0.0475, 0, 0, g); cyl(0.036, 0.036, 0.004, phong(c, 50), 0, 0.002, 0, 16, g); cyl(0.036, 0.036, 0.002, lam(0x3a1f0e), 0, 0.075, 0, 16, g); const h = put(new THREE.TorusGeometry(0.025, 0.007, 6, 12), phong(c, 50), 0.045, 0.05, 0, 0, g); return g; };
       mug(tx - 0.42, tz + 0.2, 0xf2f2ee);
     }
     const chairMat = phong(0xc0501e, 30, 0x333333);
@@ -1308,7 +1308,9 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       for (let k = -2; k <= 2; k++) bx(0.004, 0.006, 0.3, wire, k * 0.06, 0.012, 0, rk);
       const plate = put(new THREE.CylinderGeometry(0.11, 0.09, 0.012, 20), phong(0xf4f2ea, 60), -0.06, 0.12, 0, 0, rk); plate.rotation.z = Math.PI / 2 - 0.12;
       const m = grp(rx + 0.07, CH + 0.06, kz - 0.02); m.rotation.z = Math.PI - 0.3;
-      put(new THREE.CylinderGeometry(0.04, 0.036, 0.095, 14, 1, true), phong(0x2d5aa8, 50), 0, 0, 0, 0, m); put(new THREE.TorusGeometry(0.025, 0.007, 6, 12), phong(0x2d5aa8, 50), 0.045, 0, 0, 0, m);
+      const blue = phong(0x2d5aa8, 50);                                                                 // (upside down, drying: open tube drawn both sides, so you see in, and its base)
+      put(new THREE.CylinderGeometry(0.04, 0.036, 0.095, 14, 1, true), Object.assign(phong(0x2d5aa8, 50), { side: THREE.DoubleSide }), 0, 0, 0, 0, m); put(new THREE.TorusGeometry(0.025, 0.007, 6, 12), blue, 0.045, 0, 0, 0, m);
+      cyl(0.036, 0.036, 0.004, blue, 0, -0.0455, 0, 14, m);
       cyl(0.028, 0.03, 0.17, phong(0x3aa04a, 60, 0x99ff99), sinkX - 0.21, CH + 0.085, z1 - 0.07, 10);   // dish soap, behind the basin
       cyl(0.008, 0.012, 0.03, lam(0xe0e0e0), sinkX - 0.21, CH + 0.185, z1 - 0.07, 8);
       bx(0.09, 0.03, 0.06, lam(0xe0c02a), sinkX + 0.2, CH + 0.015, z1 - 0.07); bx(0.09, 0.01, 0.06, lam(0x2f7a3a), sinkX + 0.2, CH + 0.035, z1 - 0.07);   // the sponge
