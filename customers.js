@@ -667,8 +667,8 @@ window.VaultCustomers = (() => {
             const k = p / stanceF, kn = (0.32 * Math.exp(-(((k - 0.2) / 0.13) ** 2)) + 0.55 * Math.max(0, (k - 0.65) / 0.35) ** 2) * kneeK, c = Math.cos(kn / 2);   // the knee giving to take the weight, then heel off into toe off
             return [Math.asin(Math.max(-1, Math.min(1, reachD * (1 - 2 * k) / (LEG * c)))) + kn / 2, kn, 1];
           }
-          const k = (p - stanceF) / (1 - stanceF);       // the swing: fold up, swing through, straighten (full extension at ~80%, then held for the strike)
-          return [thEnd + (A - thEnd) * (1 - Math.cos(Math.PI * Math.min(1, k / 0.8))) / 2, (0.55 + 0.55 * Math.sin(Math.PI * Math.min(1, k / 0.75)) - 0.55 * Math.min(1, k / 0.75) ** 2) * kneeK, 0];
+          const k = (p - stanceF) / (1 - stanceF);       // the swing: fold just enough to clear the floor (the feet have no ankle to point the toe: any more and it's a march), swing through, straighten (full extension at ~80%, then held for the strike)
+          return [thEnd + (A - thEnd) * (1 - Math.cos(Math.PI * Math.min(1, k / 0.8))) / 2, (k < 0.2 ? 0.55 + 0.07 * k / 0.2 : 0.62 * Math.cos(Math.PI / 2 * Math.min(1, (k - 0.2) / 0.6))) * kneeK, 0];
         };
         const gl = [legAt(((cyc % 1) + 1) % 1), legAt((((cyc + 0.5) % 1) + 1) % 1)];
         // the hips ride on the planted leg: as high as it reaches (vaulting over it), dropping as the legs spread (double support)
@@ -762,5 +762,5 @@ window.VaultCustomers = (() => {
     };
   }
 
-  return { randomOutfit, build };
+  return { randomOutfit, build, GAITS };
 })();
