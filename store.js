@@ -9883,12 +9883,42 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     for (let k = 0; k < 6; k++) bx(0.075, 0.004, 0.44, web[k % 2], -0.22 + k * 0.088, 0.37, 0, c);   // seat webbing, front to back, sagging a bit
     for (let k = 0; k < 6; k++) { const b = bx(0.54, 0.004, 0.07, web[(k + 1) % 2], 0, 0.36, -0.17 + k * 0.07, c); }
     for (let k = 0; k < 6; k++) { const t = (k + 0.5) / 6, b = bx(0.54, 0.07, 0.004, web[k % 2], 0, 0.42 + t * 0.5, 0.235 + t * 0.14, c); b.rotation.x = -0.29; }
-    // the can, by the right arm, and a few butts that missed it
-    const can = new THREE.Group(); can.position.set(10.5, Y, 26.1); G.add(can);
-    cy(0.078, 0.078, 0.16, lam(0x9e2e28), 0, 0.08, 0, 16, can); cy(0.079, 0.079, 0.03, alum, 0, 0.145, 0, 16, can);
-    const butt = new THREE.CylinderGeometry(0.0045, 0.0045, 0.03, 5), bm = lam(0xe9e2cf), fm = lam(0xc9883e);
-    for (let k = 0; k < 9; k++) { const o = put(butt, k % 3 ? bm : fm, (Math.random() - 0.5) * 0.1, 0.16, (Math.random() - 0.5) * 0.1, can); o.rotation.set(Math.random() - 0.5, 0, Math.random() - 0.5); }
-    for (let k = 0; k < 5; k++) { const o = put(butt, fm, (Math.random() - 0.5) * 0.7, 0.005, (Math.random() - 0.5) * 0.6, can); o.rotation.set(Math.PI / 2, Math.random() * 3, 0); }
+    // the can, by the right arm: an old coffee can, lid long gone, half full of sand gone grey with ash, the butts
+    // stubbed out standing up in it, and a few that missed it. (Open tube, its own inside wall and floor: no two
+    // surfaces in the same place to fight)
+    const can = new THREE.Group(); can.position.set(10.5, Y, 26.1); can.rotation.y = 2.2; G.add(can);
+    const canTex = makeTexture((ctx, W, H) => {
+      ctx.fillStyle = "#a3302a"; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#e9dfc4"; ctx.fillRect(0, H * 0.38, W, H * 0.26);
+      ctx.fillStyle = "#a3302a"; ctx.font = `bold ${H * 0.2}px Georgia, serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for (const x of [0.25, 0.75]) ctx.fillText("COFFEE", W * x, H * 0.52);
+      ctx.fillStyle = "#e9dfc4"; ctx.font = `bold ${H * 0.1}px Arial`; for (const x of [0.25, 0.75]) ctx.fillText("ROASTED · GROUND", W * x, H * 0.24);
+      ctx.fillStyle = "#00000030"; for (let i = 0; i < 40; i++) ctx.fillRect(Math.random() * W, Math.random() * H, 2 + Math.random() * 6, 1 + Math.random() * 3);   // scuffs
+    }, 256, 64);
+    const CR = 0.078, CH = 0.16, tin = phong(0xb9bcc0, 50);
+    put(new THREE.CylinderGeometry(CR, CR, 0.124, 24, 1, true), new THREE.MeshLambertMaterial({ map: canTex }), 0, 0.08, 0, can);       // the label
+    for (const [y0, h] of [[0, 0.018], [0.142, 0.018]]) put(new THREE.CylinderGeometry(CR, CR, h, 24, 1, true), tin, 0, y0 + h / 2, 0, can);   // bare tin above and below it
+    put(new THREE.CylinderGeometry(CR - 0.002, CR - 0.002, CH, 24, 1, true), new THREE.MeshLambertMaterial({ color: 0x5e5a55, side: THREE.BackSide }), 0, CH / 2, 0, can);   // the inside, sooty
+    const rim = new THREE.TorusGeometry(CR - 0.001, 0.0025, 6, 24); rim.rotateX(Math.PI / 2);
+    put(rim, tin, 0, CH, 0, can); put(rim, tin, 0, 0.003, 0, can);                                                     // rolled lip, rolled base
+    for (const y of [0.025, 0.137]) { const b = new THREE.TorusGeometry(CR + 0.0005, 0.0015, 4, 24); b.rotateX(Math.PI / 2); put(b, tin, 0, y, 0, can); }   // the beads
+    const disc = (r, y, c) => { const g = new THREE.CircleGeometry(r, 20); g.rotateX(-Math.PI / 2); return put(g, lam(c), 0, y, 0, can); };
+    disc(CR - 0.002, 0.004, 0x3a3835);                                                                                // the floor (seen only from above, past the sand)
+    const SY = 0.112, sand = new THREE.CircleGeometry(CR - 0.002, 24); sand.rotateX(-Math.PI / 2);
+    const sp = sand.attributes.position; for (let i = 1; i < sp.count; i++) sp.setY(i, (Math.random() - 0.5) * 0.006);   // lumpy, not a lid
+    sand.computeVertexNormals(); put(sand, lam(0x8f8a80), 0, SY, 0, can);
+    for (let k = 0; k < 4; k++) { const a = Math.random() * 6.28, d = Math.random() * 0.04, ash = new THREE.CircleGeometry(0.012 + Math.random() * 0.012, 8); ash.rotateX(-Math.PI / 2);
+      put(ash, lam(0x5c5955), Math.cos(a) * d, SY + 0.0045, Math.sin(a) * d, can); }                                    // grey ash heaps, sat on the lumps
+    const butt = new THREE.CylinderGeometry(0.0045, 0.0045, 0.026, 6), filt = new THREE.CylinderGeometry(0.0046, 0.0046, 0.012, 6), bm = lam(0xe9e2cf), fm = lam(0xc9883e), burnt = lam(0x3b3633);
+    const stub = (x, y, z, rx, rz, par, lying) => {                                                                     // a filter and what's left of the cigarette, the end charred
+      const s = new THREE.Group(); s.position.set(x, y, z); s.rotation.set(rx, Math.random() * 6.28, rz); par.add(s);
+      put(filt, fm, 0, 0.006, 0, s); put(butt, bm, 0, 0.012 + 0.013 * (lying ? 1 : 0.6), 0, s).scale.y = lying ? 1 : 0.6;
+      cy(0.0044, 0.0046, 0.003, burnt, 0, lying ? 0.0395 : 0.029, 0, 6, s); return s;
+    };
+    for (let k = 0; k < 11; k++) { const a = Math.random() * 6.28, d = Math.sqrt(Math.random()) * 0.06;            // stubbed in, filter up, leaning every which way
+      stub(Math.cos(a) * d, SY + 0.016, Math.sin(a) * d, Math.PI + (Math.random() - 0.5) * 0.9, (Math.random() - 0.5) * 0.9, can); }
+    for (let k = 0; k < 5; k++) { const a = Math.random() * 6.28, d = 0.12 + Math.random() * 0.25;                  // the ones that missed, lying on the gravel
+      stub(Math.cos(a) * d, 0.0046, Math.sin(a) * d, Math.PI / 2, 0, can, true); }
     // the crate, upside down, a can of soda and a paperback left on it
     const crateTex = makeTexture((ctx, W, H) => {
       ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#24479a"; ctx.fillRect(0, 0, W, 18); ctx.fillRect(0, H - 14, W, 14); ctx.fillRect(0, 0, 14, H); ctx.fillRect(W - 14, 0, 14, H);
