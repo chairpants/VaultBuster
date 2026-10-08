@@ -490,6 +490,78 @@ window.VaultCustomers = (() => {
       part(hand, SOFT, skin, 0.35, 0.5, 0.6, s * -0.55, 0.05, 0.25);                  // thumb, tucked in toward the body
       return { sh, el, hand };
     });
+    if (o.skinned) skinLimbs();
+    // o.skinned (a trial, see gaits.html): the legs, hips and arms as one skinned surface over the same joints, so a
+    // knee or an elbow bends as one surface instead of two blocks meeting: each vertex follows its nearest joints,
+    // blended across the joint, and the cloth stops where the colour changes, not at a gap. Torso, hands, shoes
+    // and the head stay as they are
+    function skinLimbs() {
+      group.updateMatrixWorld(true);
+      const bones = [body, upper, legs[0].hip, legs[0].knee, legs[1].hip, legs[1].knee, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el];
+      const at = b => group.worldToLocal(b.getWorldPosition(new THREE.Vector3()));
+      const pos = [], uvs = [], si = [], sw = [], byMat = new Map(), SEG = 16;
+      const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+      // one tube down a joint chain (vertical in the rest pose): rings [y, rx, rz] top to bottom, rounded shut at both
+      // ends; w(y) -> [[bone, weight], ...], m(y) -> its material there; ex: the cross-section's squareness (2 = an ellipse)
+      const tube = (cx, cz, rings, w, m, ex = 2) => {
+        const R = [], cap = (r, dir) => [0.92, 0.7, 0.38, 0.02].map(k => [r[0] + dir * Math.sqrt(1 - k * k) * Math.min(r[1], r[2]) * 0.9, r[1] * k, r[2] * k]);
+        R.push(...cap(rings[0], 1).reverse(), ...rings, ...cap(rings[rings.length - 1], -1));
+        const y0 = R[0][0], y1 = R[R.length - 1][0], base = pos.length / 3;
+        R.forEach(([y, rx, rz]) => {
+          const ws = w(y).sort((a, b) => b[1] - a[1]).slice(0, 4); while (ws.length < 4) ws.push([0, 0]);
+          const tot = ws.reduce((s, [, x]) => s + x, 0);
+          for (let j = 0; j <= SEG; j++) {
+            const a = j / SEG * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
+            pos.push(cx + rx * Math.sign(c) * Math.abs(c) ** (2 / ex), y, cz + rz * Math.sign(s) * Math.abs(s) ** (2 / ex));
+            uvs.push(j / SEG, (y - y1) / (y0 - y1));
+            for (const [b, x] of ws) { si.push(b); sw.push(x / tot); }
+          }
+        });
+        for (let i = 0; i < R.length - 1; i++) {
+          const mat = m((R[i][0] + R[i + 1][0]) / 2); if (!byMat.has(mat)) byMat.set(mat, []);
+          const ix = byMat.get(mat), a = base + i * (SEG + 1), b = a + SEG + 1;
+          for (let j = 0; j < SEG; j++) ix.push(a + j, a + j + 1, b + j, a + j + 1, b + j + 1, b + j);   // (wound to face out)
+        }
+      };
+      const legM_ = P.legs || skin;
+      for (const [li, { hip, knee }] of legs.entries()) {          // the legs: from inside the hips down into the shoes
+        const hp = at(hip), kp = at(knee), hY = hp.y, kY = kp.y, aY = kY - 0.37 * H, t0 = CUT[0] / 2, t1 = CUT[1] / 2, B = 2 + li * 2;
+        const cut = kind === "shorts" ? kY - 0.02 : kind === "cargo" ? kY - 0.2 : kind === "bike" ? kY + 0.02 : -9;   // where bare leg starts
+        tube(hp.x, 0.005, [[hY + 0.04, t0 * W * 1.02, t0 + 0.012], [hY - 0.2, t0 * W * 0.98, t0 + 0.01], [kY + 0.08, t0 * W * 0.86, t0 * 0.9 + 0.008], [kY, t1 * W * 1.02, t1 + 0.01], [kY - 0.12, t1 * W * 1.05, t1 + 0.012], [aY, t1 * W * 0.72, t1 * 0.75]],
+          y => { const top = 0.5 * (1 - ss(hY + 0.04, hY - 0.14, y)), kn = ss(kY + 0.06, kY - 0.06, y); return [[0, top], [B, (1 - top) * (1 - kn)], [B + 1, (1 - top) * kn]]; },
+          y => y > cut ? legM_ : skin);
+      }
+      const hY = at(legs[0].hip).y;                                   // the hips: the seat of the pants, over the tops of both legs
+      tube(0, 0, [[hY + 0.13, 0.17 * W, 0.115], [hY + 0.05, 0.178 * W, 0.118], [hY - 0.03, 0.17 * W, 0.11], [hY - 0.075, 0.1 * W, 0.075]],
+        y => [[0, 1 - 0.5 * ss(hY + 0.02, hY + 0.13, y)], [1, 0.5 * ss(hY + 0.02, hY + 0.13, y)]], () => P.seat, 2.6);
+      const sl = o.sleeve || (o.longSleeves ? "long" : "short");
+      for (const [ai, { sh, el }] of arms.entries()) {             // the arms: from the shoulder (inside the torso) to the wrist (inside the hand)
+        const sp = at(sh), ep = at(el), sY = sp.y, eY = ep.y, wY = eY - 0.27 * H, B = 6 + ai * 2;
+        const end = sl === "cap" ? sY - 0.1 : sl === "long" ? -9 : sY - 0.3, loose = sl === "baggy" ? 0.012 : sl === "long" ? 0 : 0.006;   // where the sleeve stops
+        const r = y => (y > end ? loose : 0);
+        const rings = [[sY - 0.02, 0.06, 0.064], [sY - 0.07, 0.064, 0.068], [eY + 0.03, 0.055, 0.058], [eY - 0.03, 0.053, 0.056], [wY, 0.043, 0.045]].map(([y, rx, rz]) => [y, (rx + r(y)) * W, rz + r(y)]);
+        if (end > wY) rings.push(...[[end + 0.012, 0], [end - 0.012, 0]].map(([y]) => { const k = (y - eY) / (sY - eY); const rx = 0.055 + (0.064 - 0.055) * Math.max(0, Math.min(1, k)); return [y, (rx + r(y)) * W, rx + 0.004 + r(y)]; }));
+        rings.sort((a, b) => b[0] - a[0]);
+        tube(sp.x, 0, rings,
+          y => { const top = 0.5 * (1 - ss(sY + 0.04, sY - 0.12, y)), e = ss(eY + 0.06, eY - 0.06, y); return [[1, top], [B, (1 - top) * (1 - e)], [B + 1, (1 - top) * e]]; },
+          y => sl === "long" && y < wY + 0.04 ? collarM : y > end ? sleeveM : (sl === "short" && y > end - 0.04 ? collarM : skin));   // (a cuff at the wrist; a short sleeve's hem band)
+      }
+      const g = new THREE.BufferGeometry(), idx = [];
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      g.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(si, 4)); g.setAttribute("skinWeight", new THREE.Float32BufferAttribute(sw, 4));
+      const mlist = [];
+      for (const [m, ix] of byMat) { g.addGroup(idx.length, ix.length, mlist.length); mlist.push(m); idx.push(...ix); }
+      g.setIndex(idx); g.computeVertexNormals();
+      const nr = g.attributes.normal, v = new THREE.Vector3(), w2 = new THREE.Vector3();   // the u seam down each tube: both copies the same normal, so no crease there
+      for (let i = 0; i < pos.length / 3; i += SEG + 1) { v.fromBufferAttribute(nr, i).add(w2.fromBufferAttribute(nr, i + SEG)).normalize(); nr.setXYZ(i, v.x, v.y, v.z); nr.setXYZ(i + SEG, v.x, v.y, v.z); }
+      const mesh = new THREE.SkinnedMesh(g, mlist); mesh.frustumCulled = false; group.add(mesh); parts.push(mesh);
+      group.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones), mesh.matrixWorld);
+      // the blocks it stands in for
+      const shoes = new Set([shoe, sole]);
+      for (const { hip, knee } of legs) { hip.children.forEach(c => { if (c.isMesh) c.visible = false; }); knee.children.forEach(c => { if (c.isMesh && !shoes.has(c.material)) c.visible = false; }); }
+      for (const { sh, el, hand } of arms) { sh.children.forEach(c => { if (c.isMesh) c.visible = false; }); el.children.forEach(c => { if (c.isMesh && c !== hand) c.visible = false; }); }
+      seat.visible = false;
+    }
     const neck = part(upper, CYL, skin, 0.1, 0.09, 0.1, 0, 0.69, 0);                // neck
     part(upper, CYL, collarM, 0.15, 0.04, 0.15, 0, 0.65, 0);                         // collar
 
