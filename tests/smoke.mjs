@@ -27,7 +27,7 @@ await ev(() => localStorage.clear()); await page.reload({ timeout: 300000 }); aw
 check("loads with no errors", errors.length === 0, errors[0]);
 check("first visit: three empty store files", (await page.$$("#mmFiles .file.empty")).length === 3);
 await page.click('#mmFiles [data-file="2"]');
-check("an empty file offers both modes", (await page.$$("#mmFiles [data-mode]")).length === 2);
+check("an empty file offers the three modes", (await page.$$("#mmFiles [data-mode]")).length === 3);
 await page.click("#mmSettingsBtn");
 await page.fill("#setSens", "150").catch(() => {}); await ev(() => { const e = document.getElementById("setSens"); e.value = 150; e.dispatchEvent(new Event("input")); });
 check("settings save (sensitivity)", (await ev(() => JSON.parse(localStorage.getItem("vaultbuster-settings")).sens)) === 150);
@@ -223,6 +223,73 @@ check("the register shows the sale once the card's tapped", await ev(() => {
   __t.custInteract(k); const before = __t.posTerm.ringing();
   __t.coAct("register"); const s = __t.posTerm.ringing();
   return before && !before.carded && s?.carded && s.member === k.member && s.items.length === 1; }));
+
+console.log("\ncustomer mode");
+await freshStore("customer");
+check("out on the lot in your own clothes, a full crew, the doors locked till 10", await ev(() =>
+  __t.CUSTOMER && __t.player.z < 0 && __t.staff.length >= 3 && __t.blocked(0.9, -0.3) && __t.staff.every(e => e.sched.every(m => m)) && __t.KEYED.every(k => k.door())));
+check("open at 10: in through the right-hand door, not through the glass or round the side", await ev(() => {
+  __t.shift.h = 10.01; __t.setFrontLock(false);
+  return !__t.blocked(0.9, -0.3) && !__t.blocked(0.9, 0.2) && __t.blocked(-3, 0) && __t.blocked(-9, 1) && __t.blocked(0, -11); }));
+check("pay at the register: wallet down, the tape's yours (desensitized), the store's up", await ev(() => {
+  Object.assign(__t.player, { x: 0.9, z: 6 }); const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
+  const e = __t.staff[0], w = __t.cm.wallet, b = __t.posTerm.budget(); __t.cmPay(e);
+  return __t.cm.rented.has(t) && t.desens && __t.cm.wallet < w && __t.posTerm.budget() > b; }));
+check("caught taking something: it's taken back and you're out for the day", await ev(() => {
+  const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync(); __t.cm.today = 1;
+  __t.cmCaught("theft", __t.staff[0]); return __t.cm.banned === __t.shift.day && __t.returnBin.includes(t) && !__t.inv().some(e => e.ref === t); }));
+const keySpot = `const id = __t.cmTrail.keyAt; if (id.startsWith("bin:")) __t.cmSearchBin(__t.trashBins[id.slice(4)]); else __t.cmSearch(__t.PICKUPS.find(p => p.id === id));`;
+check("the break room key's hidden in this save's spot (searching the rest turns up nothing)", await ev(k => {
+  const decoy = __t.PICKUPS.find(p => p.area === "public" && p.id !== __t.cmTrail.keyAt); __t.cmSearch(decoy); const none = !__t.inv().some(e => e.ref.id === "breakKey");
+  eval(k); return none && __t.inv().some(e => e.ref.id === "breakKey"); }, keySpot));
+await page.waitForTimeout(2500); await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
+const trailOf = () => ev(() => [__t.cm.seed, __t.COMBOS.locker.code, __t.COMBOS.hatch.code, __t.cmTrail.pin, __t.cmTrail.keyAt, __t.cmTrail.noteAt, __t.cmTrail.pinAt]);
+check("...the key survives the reload, and so does this save's trail (codes and hiding spots)", await ev(() => __t.CUSTOMER && __t.inv().some(e => e.ref.id === "breakKey") && __t.cm.found.has(__t.cmTrail.keyAt)));
+const trail = await trailOf(); await page.waitForTimeout(2500); await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
+check("...(the same trail after another reload)", JSON.stringify(trail) === JSON.stringify(await trailOf()));
+check("the trail: half the locker code in a note, the rest on Ray's time card -> his badge -> his PIN, behind the counter -> logged in -> NO SALE: the janitor's key -> the printout -> the hatch", await ev(() => {
+  __t.cmSearch(__t.PICKUPS.find(p => p.id === __t.cmTrail.noteAt)); __t.cmSearch(__t.PICKUPS.find(p => p.id === "timecard"));
+  const L = __t.COMBOS.locker.code, halves = __t.ITEMS.comboNote.note.includes(`${L[0]} - ${L[1]} - ?`) && document.getElementById("toast").innerText.endsWith(L[2]);
+  __t.cm.comboOf = __t.COMBOS.locker; L.split("").forEach(__t.cmComboKey); __t.cm.comboOf = null; __t.cmTakeFrom(__t.COMBOS.locker);
+  const badge = __t.inv().some(e => e.ref.id === "badge");
+  Object.assign(__t.player, { x: -5, z: 5 }); __t.cmPickUp(__t.PICKUPS.find(p => p.id === __t.cmTrail.pinAt)); const fromFront = __t.inv().some(e => e.ref.id === "pinNote");
+  Object.assign(__t.player, { x: -5, z: 2.8 }); __t.cmPickUp(__t.PICKUPS.find(p => p.id === __t.cmTrail.pinAt));
+  __t.cmTermOpen(); for (const d of __t.cmTrail.pin) __t.cmTermKey({ code: "Digit" + d });
+  for (const code of ["Digit4", "KeyK", "KeyB", "Digit1", "KeyP", "KeyE"]) __t.cmTermKey({ code });
+  __t.cmSpentTick(); const keyed = __t.inv().some(e => e.ref.id === "closetKey"), printed = __t.inv().some(e => e.ref.id === "printout"), pinTossed = !__t.inv().some(e => e.ref.id === "pinNote");
+  __t.cm.comboOf = __t.COMBOS.hatch; __t.COMBOS.hatch.code.split("").forEach(__t.cmComboKey); __t.cm.comboOf = null;
+  return halves && badge && !fromFront && __t.cm.loggedIn && pinTossed && keyed && printed && __t.cm.hatch && !__t.cm.term; }));
+check("three wrong PINs: the register's locked for the day", await ev(() => {
+  __t.cm.loggedIn = false; __t.cmTermOpen(); for (let i = 0; i < 3; i++) for (const d of "0000") __t.cmTermKey({ code: "Digit" + d });
+  __t.cmTermOpen(); const locked = __t.cm.termLock === __t.shift.day && !__t.cm.term; __t.cm.loggedIn = true; __t.cm.termLock = 0; return locked; }));
+check("full pockets never lose anything: the badge waits in the open locker; used-up notes toss themselves", await ev(() => {
+  for (const id of ["badge", "combo:locker", __t.cmTrail.noteAt]) __t.cm.found.delete(id);
+  for (const e of [...__t.inv()]) if (e.kind === "item" && ["badge", "comboNote", "printout"].includes(e.ref.id)) __t.invRemove(e);
+  while (__t.inv().length < __t.INV_MAX) { const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.invMakeRoom(); __t.pickup(t); __t.invSync(); }
+  __t.cm.comboOf = __t.COMBOS.locker; __t.COMBOS.locker.code.split("").forEach(__t.cmComboKey); __t.cm.comboOf = null; __t.cmTakeFrom(__t.COMBOS.locker);
+  const waited = !__t.cm.found.has("badge");
+  for (const e of __t.inv().filter(e => e.kind === "tape").slice(0, 2)) { __t.invRemove(e); __t.returnBin.push(e.ref); }
+  __t.cmTakeFrom(__t.COMBOS.locker); const took = __t.inv().some(e => e.ref.id === "badge");
+  __t.cmSearch(__t.PICKUPS.find(p => p.id === __t.cmTrail.noteAt)); __t.cmSpentTick();
+  return waited && took && !__t.inv().some(e => e.ref.id === "comboNote"); }));
+check("the movies: tonight's feature picked in the morning, a ticket at the register (once)", await ev(() => {
+  __t.shift.h = 15; const w = __t.cm.wallet, n = __t.show.sold; __t.cmTicket(__t.staff[0]); __t.cmTicket(__t.staff[0]);
+  return !!__t.show.title && __t.show.day === __t.shift.day && __t.show.sold === n + 1 && __t.cm.ticket === __t.shift.day && Math.abs(w - __t.cm.wallet - __t.SHOW.ticket * (__t.cm.trust >= 60 ? 0.9 : 1)) < 0.01; }));
+check("ask what's good: their pick, rented, is remembered; and the first rental gets you a card", await ev(() => {
+  __t.cmRecommend(__t.staff[0]); const c = __t.onShelfCopy(__t.cm.rec.title); __t.pickup(c); __t.invSync(); __t.cmPay(__t.staff[0]);
+  return __t.cm.rec.done && __t.cm.card && __t.inv().some(e => e.ref.id === "card"); }));
+check("whoever catches you keeps an eye on you the rest of the day", await ev(() => { __t.cm.today = 0; __t.cmCaught("staff", __t.staff[0]); return __t.cm.wary.has(__t.staff[0].id); }));
+check("a regular gets 10% off; getting caught costs you that", await ev(() => {
+  __t.cm.trust = 70; const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
+  const full = __t.posTerm.rentPrice(t), w = __t.cm.wallet; __t.cmPay(__t.staff[0]); const paid = +(w - __t.cm.wallet).toFixed(2);
+  const before = __t.cm.trust; __t.cmCaught("staff", __t.staff[0]); return Math.abs(paid - full * 0.9) < 0.01 && __t.cm.trust < before; }));
+
+console.log("\nsimulation: fired");
+await freshStore("simulation");
+await ev(() => { __t.setRedNights(2); __t.posTerm.sale(-__t.posTerm.budget() - 50); __t.shift.h = 24.1; for (const k of [...__t.custs]) __t.custGone(k); __t.clockOut(); });
+check("three nights in the red: fired on the slip", await ev(() => document.getElementById("shiftSlip").textContent.includes("FIRED")));
+await page.click("#shiftNext"); await page.waitForTimeout(1000); await page.waitForLoadState(); await ready();
+check("...and the next morning you're a customer of the same store, out on the lot", await ev(() => __t.CUSTOMER && __t.player.z < 0 && __t.staff.length >= 3));
 
 console.log(`\nerrors on the page: ${errors.length}`); errors.slice(0, 3).forEach(e => console.log("   " + e));
 check("no page errors overall", errors.length === 0);
