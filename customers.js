@@ -775,7 +775,6 @@ window.VaultCustomers = (() => {
     tvPart(loftRR([[zF - fd, hw, hh, cr, yc], [zF - 0.014, hw, hh, cr, yc], [zF, hw - 0.009, hh - 0.009, cr, yc]], 5), sidesM);   // the cabinet
     tvPart(loftRR([[zBack, tw * 0.25, th * 0.27, Math.min(0.06, cr + 0.04), yc + 0.01], [zF - fd - td * 0.32, tw * 0.4, th * 0.43, Math.min(0.08, cr + 0.04), yc + 0.005],
       [zF - fd + 0.006, hw * 0.96, hh * 0.96, cr, yc]], 5), backM);                                                    // the back, tapering
-    part(head, CYL, backM, tw * 0.2, 0.07, tw * 0.2, 0, yc + 0.01, zBack - 0.03).rotation.x = Math.PI / 2;           // the tube's neck
     if (frontM) tvPart(loftRR([[zF - 0.003, hw - 0.006, hh - 0.006, cr * 0.8, yc], [zF + 0.004, hw - 0.013, hh - 0.013, cr * 0.7, yc]], 5), frontM);   // its own front panel
     const zP = zF + (frontM ? 0.004 : 0);                                                                           // the face of the front
     part(head, ROUND, dark, tw * 0.5, 0.03, td * 0.6, 0, -0.005, -0.03);                                           // swivel base it sits on
@@ -791,7 +790,7 @@ window.VaultCustomers = (() => {
     const fc = document.createElement("canvas"); fc.width = FW; fc.height = FH;
     const ftex = new THREE.CanvasTexture(fc); ftex.colorSpace = THREE.SRGBColorSpace;
     const screen = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ map: ftex }));
-    screen.position.set(sx0, sy0, zP - 0.008); head.add(screen); parts.push(screen);
+    screen.position.set(sx0, sy0, zP + 0.001); head.add(screen); parts.push(screen);
     const sheen = new THREE.Mesh(sg, SHEEN); sheen.position.copy(screen.position); sheen.position.z += 0.003; sheen.userData.clearToBloom = true; head.add(sheen);   // glass reflection (the store's bloom pass sees through it)
     {                                                 // the bezel: a bevelled frame round it, its window a touch inside the glass's edge
       const rr = (w, h, r, path = new THREE.Shape()) => { const x = -w / 2, y = -h / 2; path.moveTo(x + r, y); path.lineTo(x + w - r, y); path.absarc(x + w - r, y + r, r, -Math.PI / 2, 0); path.lineTo(x + w, y + h - r); path.absarc(x + w - r, y + h - r, r, 0, Math.PI / 2); path.lineTo(x + r, y + h); path.absarc(x + r, y + h - r, r, Math.PI / 2, Math.PI); path.lineTo(x, y + r); path.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5); return path; };
