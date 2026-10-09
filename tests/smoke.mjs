@@ -283,6 +283,38 @@ check("a regular gets 10% off; getting caught costs you that", await ev(() => {
   __t.cm.trust = 70; const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
   const full = __t.posTerm.rentPrice(t), w = __t.cm.wallet; __t.cmPay(__t.staff[0]); const paid = +(w - __t.cm.wallet).toFixed(2);
   const before = __t.cm.trust; __t.cmCaught("staff", __t.staff[0]); return Math.abs(paid - full * 0.9) < 0.01 && __t.cm.trust < before; }));
+// customers and days (customer mode)
+check("a list for the day: three things to do, up in the corner; done, they're checked off (and the staff like you better)", await ev(() => {
+  for (const e of [...__t.inv()]) if (e.kind === "tape") __t.invRemove(e);
+  delete __t.cm.day.goals; __t.cmDayCheck(); const rolled = __t.cm.day.goals.length === 3 && __t.cmDayHud().every(l => __t.cmHud()[2].includes(l));
+  const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked);
+  __t.cm.day.goals = [{ id: "cat", cat: t.category }, { id: "money" }, { id: "clean" }]; __t.cm.day.caught = 0; __t.cm.day.in = true; __t.cm.trust = 10;
+  Object.assign(__t.player, { x: 0.9, z: 6 }); __t.pickup(t); __t.invSync(); __t.cmPay(__t.staff[0]); __t.cm.day.found += 1; __t.cmDayCheck();
+  const [cat, money, clean] = __t.cm.day.goals;
+  return rolled && cat.done && money.done && !clean.done && !clean.miss && __t.cm.trust >= 10 + 6 + 4; }));
+check("...the slip: the list (staying clean checked off at close) and your record, counted once a day", await ev(() => {
+  const r = __t.cm.dayRecord, days = r.days; __t.cmSlip(); const txt = document.getElementById("shiftSlip").textContent;
+  __t.cmDayEnd(); __t.shift.report = false; document.getElementById("shiftReport").style.display = "none";
+  return __t.cm.day.goals[2].done && txt.includes("TODAY'S LIST") && txt.includes("YOUR RECORD") && txt.includes("BEST DAY") && r.days === days + 1 && r.perfect >= 1 && r.best?.day === __t.shift.day && JSON.parse(JSON.stringify(__t.cm.dayRecord)).days === r.days; }));
+check("a shopper asks you what's good: a tape in their section, handed over, goes up to the counter with them", await ev(() => {
+  __t.cm.inside = true; Object.assign(__t.player, { x: 0.9, z: 6 });
+  const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked);
+  __t.custSpawn(); const k = __t.custs.at(-1); k.c.group.position.set(0.9, 0, 7.5); k.path = []; k.state = "browse"; k.thief = false; k.holding = 0; k.tapes = [];
+  k.who.persona.taste = { name: "test", cats: [t.category] }; k.who.persona.maxTapes = 2;
+  __t.cmCustAsk(k); const asked = k.state === "cmAsk" && __t.cmCust.ask?.k === k;
+  __t.invStash?.(); __t.cmCustE(k); const waited = k.state === "cmAsk";
+  const helped = __t.cm.day.helped || 0, rnd = Math.random; Math.random = () => 0;
+  try { __t.pickup(t); __t.invSync(); __t.cmCustE(k); } finally { Math.random = rnd; }
+  const ok = asked && waited && k.tapes.includes(t) && !__t.inv().some(e => e.ref === t) && __t.cm.day.helped === helped + 1 && !__t.cmCust.ask && k.state !== "cmAsk";
+  if (k.c) __t.custGone(k); return ok; }));
+check("a shoplifter in plain sight: point them out to the staff and the tape comes back", await ev(() => {
+  __t.cm.inside = true; Object.assign(__t.player, { x: 0.9, z: 6 }); __t.player.onRoof = false;
+  const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.setOnShelf(t, false);
+  __t.custSpawn(); const k = __t.custs.at(-1); k.c.group.position.set(0.9, 0, 7); k.path = []; k.state = "browse"; k.tapes = [t]; k.holding = 1; k.thief = true; __t.custSneak(k);
+  __t.cmCust.thief = null; __t.cmCustThiefTick(); const spotted = __t.cmCust.thief === k;
+  const trust = __t.cm.trust; __t.cmCustTell(__t.staff[0]);
+  const ok = spotted && __t.returnBin.includes(t) && !k.sneaking && !k.tapes.length && __t.cm.trust > trust && !__t.cmCust.thief;
+  if (k.c) __t.custGone(k); return ok; }));
 // rentals (customer mode)
 const rentOne = `const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked && t.seasons[0].episodes.length === 1); __t.pickup(t); __t.showTape(t); __t.invSync(); __t.cm.wallet = 200; __t.cmPay(__t.staff[0]);`;
 await ev(() => { for (const e of [...__t.inv()]) if (e.kind === "tape") __t.invRemove(e); __t.cm.rented.clear(); __t.shift.h = 15; __t.shift.day = Math.max(__t.shift.day, 5);   // (far enough in for a tape to be days late)
