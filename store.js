@@ -33,6 +33,7 @@ const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, cl
 const breakFx = { clock: null, punch: null, clock12: null, coffee: null, coffeeLed: null, tv: null, tvMesh: null, vcr: null, tvT: 0 };   // the break room's moving parts (see breakroomTick)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };
+const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 46.6, 0, -1], [7.5, 33.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal
 const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 33.1], [11.1, 12.7, 27.9, 29.9], [-7.07, 1.33, 33.1, 46.6]] };   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
 // the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
 // (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
@@ -113,6 +114,7 @@ camera.rotation.order = "YXZ";
 const WX = { kind: "clear", k: 0, wet: 0, cover: 0, plan: null, said: null, wind: 0, gust: 0, fog: 0, clouds: 0 };   // the weather (see "weather"): what's falling, how hard (0..1), how wet the ground is, how much snow's lying
 const EXTERIOR_LAYER = 2;                  // exterior meshes + moonlight live only here, so interior lights never touch them
 camera.layers.enable(EXTERIOR_LAYER);      // camera still needs to see layer 2, just doesn't light it any differently
+let carsOut = null;                        // the cars out front, for the golf ball to hit (see golfCars): wired up with the exterior
 let parkLot = () => {}, passCar = () => {}, carNew = () => null, driveIn = () => null, driveOut = () => {};   // wired up with the exterior: the day's
 // parked cars / one driving by / a customer's own car ({ s: style, c: color }) / bringing theirs in to park, and away again   // (day, busy) the lot's cars for the day / ({ dir, v, z, span }) one driving by: wired up with the exterior
 let setExteriorDay;                        // (isDay) => ... — street lamps and lot lights on/off; wired up below, called from the time of day
@@ -2116,7 +2118,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const BEV = 0.04, BEVT = 0.06, YB = 0.25, ARCH = 0.5, TIRE = 0.33;
   const car = (x, z, yaw, s) => {
     const { L, W, color, noseY, hoodY, cowlX, wsTopX, roofY, rTopX, rBotX, rBotY, rearY, wheels } = s;
-    const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g);
+    const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g); g.userData.car = s;   // (its shape: the golf ball hits it)
     const part = (geo, m, px, py, pz) => {
       const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
     };
@@ -2257,7 +2259,14 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const movers = [], ROAD_END = 35, laneZ = dir => dir > 0 ? -10.8 : -12.8;
   const roadPass = (look, dir, v, then) => {
     const g = car(-dir * ROAD_END, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c }); lampSet(g, running());
-    movers.push({ g, vx: dir * v, end: dir * ROAD_END, then });
+    movers.push({ g, vx: dir * v, v0: dir * v, z0: laneZ(dir), end: dir * ROAD_END, then });
+  };
+  const alarms = new Set();
+  carsOut = {                                        // for the golf ball: every car out there, what it's doing, and the scares it can get
+    all: () => [...parked.map(g => ({ g })), ...lotCars.filter(c => c.g).map(c => ({ g: c.g, lot: c })), ...movers.map(m => ({ g: m.g, m }))],
+    alarm: g => { g.userData.alarm = { t: 0 }; alarms.add(g); },
+    swerve: (m, away) => { if (!m.sw && !m.crash) m.sw = { t: 0, T: 1.3, A: away * 1.1 }; },   // away: +1 toward the store, -1 away from it
+    crash: m => { m.sw = null; m.crash = { st: "off", t: 0, z1: m.v0 > 0 ? -9.45 : -14.6 }; },   // to its right: the lot's curb, or the grass over the road
   };
   carNew = () => ({ s: Math.floor(Math.random() * STYLES.length), c: PAINT[Math.floor(Math.random() * PAINT.length)] });
   passCar = ({ dir, v }) => roadPass(carNew(), dir, v);
@@ -2293,7 +2302,11 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   // off; leaving, started up on the brake and into reverse (the reverse lamps), braking to a stop at the end of
   // backing out, then into drive and away. Headlights and the dim tail lights whenever it's moving at night
   const lotTick = dt => {
-    for (const g of movers) lampSet(g.g, running());   // (night can fall while one's going by)
+    for (const g of movers) if (g.crash?.st !== "sat") lampSet(g.g, running());   // (night can fall while one's going by)
+    for (const g of alarms) {                         // a car alarm going: the lights flashing with it
+      const a = g.userData.alarm; a.t += dt; const on = Math.floor(a.t * 2.5) % 2 === 0;
+      lampSet(g, a.t < 10 ? { head: on, tail: on ? 2 : 0 } : {}); if (a.t >= 10) alarms.delete(g);
+    }
     for (const c of lotCars) if (c.phase === "parked" && c.idling) lampSet(c.g, running());
     for (const c of [...lotCars]) {
       if (c.phase === "aisle") {                     // up the aisle toward the stall, the turn in starts 3m short of it
@@ -2432,8 +2445,27 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const SODIUM_WARM = 5, cold = new THREE.Color(0xff4d1a), warm = new THREE.Color(0xffae4a);
   exteriorTick = dt => {
     for (let i = movers.length - 1; i >= 0; i--) {   // the cars going by
-      const m = movers[i]; m.g.position.x += m.vx * dt;
-      if ((m.g.position.x - m.end) * Math.sign(m.vx) > 0) { m.g.removeFromParent(); movers.splice(i, 1); m.then?.(); }
+      const m = movers[i], p = m.g.position, dir = Math.sign(m.v0);
+      let vz = 0;
+      if (m.crash) {                                 // off the road: braking hard onto the shoulder, sat there on its hazards, then away again
+        const c = m.crash; c.t += dt;
+        if (c.st === "off") {
+          m.vx = dir * Math.max(0, Math.abs(m.vx) - 9 * dt); vz = (c.z1 - p.z) * 2.2;
+          if (Math.abs(m.vx) < 0.05) { m.vx = 0; c.st = "sat"; c.t = 0; m.g.rotation.z = dir * 0.025; }   // (up on the curb, or nose down in the grass)
+        } else if (c.st === "sat") {
+          const on = Math.floor(c.t * 1.6) % 2 === 0; lampSet(m.g, { head: night(), tail: on ? 2 : 0 });   // the hazards
+          if (c.t > 22) { c.st = "back"; m.g.rotation.z = 0; }
+        } else {
+          m.vx = dir * Math.min(Math.abs(m.v0), Math.abs(m.vx) + 2.5 * dt); vz = (m.z0 - p.z) * 1.2;
+          if (Math.abs(p.z - m.z0) < 0.03 && m.vx === m.v0) { p.z = m.z0; m.crash = null; }
+        }
+      } else if (m.sw) {                             // a swerve: out round it and back into the lane
+        const s = m.sw, k = (s.t += dt) / s.T;
+        if (k >= 1) { p.z = m.z0; m.sw = null; } else vz = s.A * Math.PI / s.T * Math.cos(Math.PI * k);
+      }
+      p.x += m.vx * dt; p.z += vz * dt;
+      if (m.vx || vz) m.g.rotation.y = Math.atan2(-vz, m.vx || dir * 0.01);   // (pointing the way it's going)
+      if ((p.x - m.end) * dir > 0) { m.g.removeFromParent(); movers.splice(i, 1); m.then?.(); }
     }
     lotTick(dt);
     if (sodiumT === null) return;
@@ -9952,7 +9984,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   // ---- overflow scuppers through the parapet, each with a collector head and a downspout down the outside ----
   {
     const sm = lam(0xb7b2a4), hole = new THREE.MeshBasicMaterial({ color: 0x141414 });
-    for (const [x, z, nx, nz] of [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 46.6, 0, -1], [7.5, 33.1, 0, -1]]) {
+    for (const [x, z, nx, nz] of SCUPPERS) {
       const ry = nx ? Math.PI / 2 : 0, at = (k, y, w, h, d, m, par) => { const o = bx(w, h, d, m, x + nx * k, y, z + nz * k, par); o.rotation.y = ry; return o; };
       at(T + 0.004, Y + 0.09, 0.42, 0.2, 0.012, galv); at(T + 0.012, Y + 0.09, 0.34, 0.13, 0.006, hole);   // the opening's sheet-metal lining, from the deck
       const o = -0.24;                                                    // outside the skin
@@ -10161,11 +10193,11 @@ function golfStrike(at) {                          // the last click (at = where
   else if (!c || Math.abs(c) < 0.15) what.push("pure");
   if (Math.abs(c) >= 0.15) what.push(`off the ${c > 0 ? "toe" : "heel"}`);
   const dir = golfF().multiplyScalar(Math.cos(ang)).addScaledVector(golfRt(), Math.sin(ang));
-  golf.hit = { v: dir.multiplyScalar(speed * Math.cos(elev)).setY(speed * Math.sin(elev)), spin, what };
+  golf.hit = { v: dir.multiplyScalar(speed * Math.cos(elev)).setY(speed * Math.sin(elev)), spin, what }; golf.seen = new Set();   // (who it's given a scare this shot)
   golf.st = "down"; golf.t = 0; golf.th0 = golf.theta;
 }
 function golfTick(dt) {
-  golf.ball.visible = player.onRoof || golf.on;
+  golf.ball.visible = (player.onRoof || golf.on) && golf.st !== "spout";   // (down the downspout: out of sight till it drops out the foot)
   if (!golf.on) return;
   const F = golfF(), Rt = golfRt(), stance = golfStance();
   if (golf.st === "idle") {                        // aim (A/D: round the ball), the strike point (W/S: along the face)
@@ -10191,18 +10223,24 @@ function golfTick(dt) {
   golf.club.position.copy(grip).addScaledVector(xA, -0.04 - golf.c * 0.035);   // (the head toes out 4 cm: centred on the ball, less the strike point)
   me.reachTo(grip, 0, { lean: false }); me.reachAlso(grip, 1);
   if (golf.st === "flight") golfFly(dt);
+  else if (golf.st === "spout" && (golf.t += dt) > 1.4) {   // out the foot of the downspout and off along the ground
+    const [x, z, sx, sz] = golf.spout; golf.ball.position.set(x - sx * 0.52, 0.2, z - sz * 0.52); golf.v.set(-sx * 2.4, 0, -sz * 2.4);
+    golf.st = "flight"; golf.rolled = false; golf.carry = null; toast("Down the scupper, rattling down the downspout... and out the bottom", true);
+  }
   else if (golf.st === "done" && (golf.t += dt) > 2.4) { golfReTee(); }
   // the camera: behind the ball at address; in flight it chases the ball, a few metres back along the way it's gone
   const home = golfTee.clone().addScaledVector(F, -2.4).addScaledVector(Rt, 0.55).setY(ROOF.y + 1.55);   // (off to the right of the line: you're on the left of the picture)
   player.x = stance.x; player.z = stance.z;
-  if (golf.st === "flight" || golf.st === "done") {
+  if (golf.st === "flight" || golf.st === "done" || golf.st === "spout") {
     const b = golf.ball.position, out = new THREE.Vector3(b.x - golfTee.x, 0, b.z - golfTee.z), far = out.length();
     const back = far > 0.5 ? out.divideScalar(far) : F, chase = b.clone().addScaledVector(back, -Math.min(4, 2.4 + far * 0.05));
     chase.y = Math.max(b.y + 1.3, (onDeck(chase.x, chase.z) ? ROOF.y : 0) + 0.6);   // (ponytail: no wall/tree collision: it can pass through the parapet or a tree)
     if (golf.st === "flight") golf.cam.addScaledVector(golf.v, dt);   // (carried along with it, so the easing below is only the swing round behind it, not a lag)
     golf.cam.lerp(chase, Math.min(1, dt * 3));
+    const over = onDeck(golf.cam.x, golf.cam.z) ? ROOF.y + 0.6 : onTony(golf.cam.x, golf.cam.z) ? TONY.wall + 0.3 : 0;   // (never down inside a building: over its roof, looking down)
+    if (golf.cam.y < over) golf.cam.y = over;
   } else golf.cam.copy(home);
-  if (golf.st === "flight" || golf.st === "done") {
+  if (golf.st === "flight" || golf.st === "done" || golf.st === "spout") {
     const to = golf.ball.position.clone().sub(golf.cam), yaw = Math.atan2(-to.x, -to.z), pitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
     let dy = yaw - player.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
     player.yaw += dy * Math.min(1, dt * 6); player.pitch += (Math.max(-0.6, pitch) - player.pitch) * Math.min(1, dt * 6);
@@ -10210,8 +10248,10 @@ function golfTick(dt) {
   golfHud();
 }
 function golfFly(dt) {
-  const b = golf.ball.position, v = golf.v;
+  const b = golf.ball.position, v = golf.v, cars = (carsOut?.all() || []).filter(c => Math.hypot(c.g.position.x - b.x, c.g.position.z - b.z) < 9);
   golf.t += dt;
+  for (const c of cars) c.g.updateMatrixWorld();
+  golfScares(b);
   for (let i = 0; i < 4; i++) {
     const h = dt / 4, sp = v.length(), air = !golf.rolled;
     if (air) {
@@ -10221,13 +10261,23 @@ function golfFly(dt) {
       v.y += (golf.lift * sp - 9.8) * h;            // backspin holds it up
     }
     const nx = b.x + v.x * h, ny = b.y + v.y * h, nz = b.z + v.z * h;
+    if (ny < 2.4 && cars.some(c => golfCarHit(c, b, nx, ny, nz))) continue;   // off a car (see golfCarHit)
+    if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < ROOF.y + 0.15) {   // through a scupper, if it's rolled right into one
+      const sc = SCUPPERS.find(([x, z, sx]) => sx ? Math.abs(nz - z) < 0.15 && Math.abs(nx - x) < 0.3 : Math.abs(nx - x) < 0.15 && Math.abs(nz - z) < 0.3);
+      if (sc) { golfSpout(sc); return; }
+    }
+    if (onTony(b.x, b.z) !== onTony(nx, nz) && ny < TONY.wall) {   // next door's walls (from outside), its coping (from on its roof)
+      if (onTony(nx, b.z) !== onTony(b.x, b.z)) v.x *= -0.4;
+      if (onTony(b.x, nz) !== onTony(b.x, b.z)) v.z *= -0.4;
+      v.y *= 0.7; continue;
+    }
     if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < ROOF.y + ROOF.wall + GOLF.R) {   // the parapet: off it and back
       if (!onDeck(nx, b.z)) v.x *= -0.4;
       if (!onDeck(b.x, nz)) v.z *= -0.4;
       v.y *= 0.7; continue;
     }
     if (Math.hypot(nx - golfTee.x, nz - golfTee.z) > GOLF.MAX) { v.x *= -0.15; v.z *= -0.15; continue; }   // into the trees: it drops out of them (ponytail: a ring round the tee, not the real treeline)
-    const fl = (onDeck(nx, nz) ? ROOF.y : 0) + GOLF.R;
+    const fl = (onDeck(nx, nz) ? ROOF.y : onTony(nx, nz) ? TONY.y : 0) + GOLF.R;
     b.set(nx, ny, nz);
     if (golf.rolled || b.y < fl) {
       b.y = fl;
@@ -10244,9 +10294,135 @@ function golfFly(dt) {
   if (golf.n < 120 && !golf.rolled) { tp.setXYZ(golf.n++, b.x, b.y, b.z); tp.needsUpdate = true; golf.trail.geometry.setDrawRange(0, golf.n); }
   if ((golf.rolled && Math.hypot(v.x, v.z) < 0.05) || golf.t > 25) {   // it's stopped: how far
     const yd = Math.hypot(b.x - golfTee.x, b.z - golfTee.z) / 0.9144, carry = (golf.carry ?? 0) / 0.9144;
-    toast(`${Math.round(yd)} yards${carry > 1 ? ` (${Math.round(carry)} in the air)` : ""} · ${golf.hit.what.join(", ")}`, golf.hit.what[0] === "pure");
+    if (onTony(b.x, b.z)) {                          // up on Tony's roof: it stays there (the ball on the tee's a new one)
+      const lost = golf.ball.clone(); scene.add(lost); golfLost.push(lost); if (golfLost.length > 20) golfLost.shift().removeFromParent();
+      toast(`${Math.round(yd)} yards, onto Tony's roof. That one's not coming back`);
+    } else toast(`${Math.round(yd)} yards${carry > 1 ? ` (${Math.round(carry)} in the air)` : ""} · ${golf.hit.what.join(", ")}`, golf.hit.what[0] === "pure");
     golf.st = "done"; golf.t = 0;
   }
+}
+// ---- what the ball can get into out there: the cars in the lot and going by on the road, people on the walk, the
+// scuppers (down the downspout and out the foot), Tony's roof next door (and that's the end of that ball) ----
+const TONY = { x0: 13, x1: 21, z0: 0, z1: 14, y: 4.385, wall: 4.65 };   // next door: its walls' footprint, its roof's gravel, the top of its coping
+const onTony = (x, z) => x > TONY.x0 && x < TONY.x1 && z > TONY.z0 && z < TONY.z1;
+const golfLost = [];
+function golfSpout(sc) {                          // into a scupper: gone, a rattle down the pipe, then out the bottom (see golfTick)
+  golf.st = "spout"; golf.t = 0; golf.spout = sc; golf.v.set(0, 0, 0); golf.ball.position.set(sc[0] - sc[2] * 0.36, 1.5, sc[1] - sc[3] * 0.36);   // (in the pipe: the camera looks down to the foot)
+  golfSnd("rattle", golf.ball.position);
+}
+// the car's top line, nose to tail, in its own frame (+x the nose, y up: see car()), and where the ball is against it
+const carTop = s => [[s.L / 2, s.noseY], [s.cowlX, s.hoodY], [s.wsTopX, s.roofY], [s.rTopX, s.roofY], [s.rBotX, s.rBotY], [-s.L / 2, s.bedTop ?? s.rearY]];
+function carTopAt(s, x) {                         // -> { y, nx, ny (the surface's normal), seg (1: the windshield, 3: the rear glass) }
+  const p = carTop(s); let i = 0; while (i < p.length - 2 && x < p[i + 1][0]) i++;
+  const [x0, y0] = p[i], [x1, y1] = p[i + 1], f = Math.max(0, Math.min(1, (x - x0) / (x1 - x0 || 1))), l = Math.hypot(x1 - x0, y1 - y0) || 1;
+  return { y: y0 + (y1 - y0) * f, nx: (y1 - y0) / l, ny: (x0 - x1) / l, seg: i };
+}
+const golfQ = new THREE.Vector3(), golfQp = new THREE.Vector3();
+function golfCarHit({ g, m, lot }, b, nx, ny, nz) {   // the ball into a car this step: off it, and what it did -> true (it bounced: the step's done)
+  const s = g.userData.car, R = GOLF.R + 0.04, q = g.worldToLocal(golfQ.set(nx, ny, nz));   // (the body's bevel stands 4 cm proud of its outline)
+  if (Math.abs(q.x) > s.L / 2 + 0.14 + R || Math.abs(q.z) > s.W / 2 + R || q.y < 0.12) return false;
+  const top = carTopAt(s, q.x); if (q.y > top.y + R) return false;
+  const qp = g.worldToLocal(golfQp.copy(b)), was = carTopAt(s, qp.x), at = q.clone();
+  let n, glass;
+  if (qp.y > was.y + R - 0.03) {                  // came down on it
+    n = new THREE.Vector3(top.nx, top.ny, 0); glass = top.seg === 1 || top.seg === 3;
+    at.y = top.y; at.addScaledVector(n, glass ? 0.06 : 0.045);
+  } else if (Math.abs(qp.z) > s.W / 2 + R - 0.03) {   // into its side (above the beltline: a window)
+    n = new THREE.Vector3(0, 0, Math.sign(qp.z)); glass = q.y > s.hoodY + 0.05;
+    at.z = n.z * (s.W / 2 + (glass ? 0.012 : 0.004));
+  } else {                                        // its nose or its tail
+    n = new THREE.Vector3(Math.sign(qp.x), 0, 0); glass = false;
+    at.x = n.x * (s.L / 2 + 0.145);
+  }
+  const face = n.clone().transformDirection(g.matrixWorld);
+  const cv = new THREE.Vector3(m ? m.vx : 0, 0, 0), rel = golf.v.clone().sub(cv), vn = rel.dot(face);
+  if (vn >= 0) return false;
+  rel.addScaledVector(face, -vn).multiplyScalar(0.7).addScaledVector(face, -vn * 0.3); golf.v.copy(rel.add(cv));   // off it: a dull bounce, some speed scrubbed off
+  const hard = -vn;
+  if (hard < 2.5) return true;                   // just a tap
+  golfMark(g, at, n, glass);
+  const where = m ? "a car on the road" : lot ? "a customer's car" : "a car in the lot";
+  golfSnd(glass ? "glass" : "clank", b);
+  if (m) {                                        // one going by: it swerves, or (through the windshield, or hard) off the road it goes
+    if (m.hitBy === golf.hit) return true; m.hitBy = golf.hit;   // (once a shot: a near miss first doesn't count, see golfScares)
+    golfSnd("screech", b);
+    if (glass || hard > 9) { carsOut.crash(m); golfSnd("thud", g.position, 0.9); toast(`Hit ${where}! It's run off the road`); shiftScore(-10, "you"); logAct("Ran a car off the road with a golf ball", "bad", null, -10); }
+    else { carsOut.swerve(m, Math.sign(g.position.z - b.z) || 1); golfSnd("horn", g.position); toast(`Bounced it off ${where}. It swerved, and leaned on the horn`); }
+    return true;
+  }
+  if (!g.userData.alarm || g.userData.alarm.t > 10) { carsOut.alarm(g); golfSnd("alarm", g.position); }
+  if (!golf.seen.has(g)) {
+    golf.seen.add(g);
+    toast(glass ? `Cracked the glass on ${where}. There goes the alarm` : `Dented ${where}. There goes the alarm`);
+    if (lot) { shiftScore(-5, "you"); logAct("Dinged a customer's car with a golf ball", "bad", null, -5); }
+  }
+  return true;
+}
+let golfDentM = null, golfCrackM = null;
+function golfMark(g, at, n, glass) {              // a ding in the paint, or a star in the glass, where it hit
+  if ((g.userData.marks = (g.userData.marks || 0) + 1) > 8) return;
+  const decal = (draw, size) => new THREE.MeshLambertMaterial({ map: makeTexture(draw, size, size), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+  golfDentM ??= decal((c, W) => {                 // a shallow dimple: shadowed on one side, a glint on the other
+    c.clearRect(0, 0, W, W);
+    const d = c.createRadialGradient(W * 0.56, W * 0.56, 0, W / 2, W / 2, W / 2); d.addColorStop(0, "rgba(0,0,0,0.5)"); d.addColorStop(0.55, "rgba(0,0,0,0.22)"); d.addColorStop(1, "rgba(0,0,0,0)"); c.fillStyle = d; c.fillRect(0, 0, W, W);
+    const l = c.createRadialGradient(W * 0.38, W * 0.38, 0, W * 0.38, W * 0.38, W * 0.2); l.addColorStop(0, "rgba(255,255,255,0.45)"); l.addColorStop(1, "rgba(255,255,255,0)"); c.fillStyle = l; c.fillRect(0, 0, W, W);
+  }, 64);
+  golfCrackM ??= decal((c, W) => {                // a star break: a crushed spot, cracks running out of it, a few rings across them
+    c.clearRect(0, 0, W, W); c.strokeStyle = "rgba(225,235,245,0.85)"; c.lineCap = "round";
+    const arms = [];
+    for (let i = 0; i < 11; i++) {
+      let a = i / 11 * Math.PI * 2 + Math.random() * 0.4, r = 0; const pts = [[W / 2, W / 2]];
+      while (r < W * (0.3 + Math.random() * 0.18)) { a += (Math.random() - 0.5) * 0.35; r += 6 + Math.random() * 10; pts.push([W / 2 + Math.cos(a) * r, W / 2 + Math.sin(a) * r]); }
+      c.lineWidth = 1.2 + Math.random(); c.beginPath(); pts.forEach(([x, y], k) => k ? c.lineTo(x, y) : c.moveTo(x, y)); c.stroke(); arms.push(pts);
+    }
+    c.lineWidth = 0.8;
+    for (const ring of [0.25, 0.5, 0.8]) { c.beginPath(); arms.forEach((p, k) => { const [x, y] = p[Math.min(p.length - 1, Math.floor(p.length * ring))]; k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.closePath(); c.stroke(); }
+    const s = c.createRadialGradient(W / 2, W / 2, 0, W / 2, W / 2, W * 0.06); s.addColorStop(0, "rgba(235,240,250,0.9)"); s.addColorStop(1, "rgba(235,240,250,0)"); c.fillStyle = s; c.fillRect(0, 0, W, W);
+  }, 256);
+  const size = glass ? 0.32 + Math.random() * 0.12 : 0.07 + Math.random() * 0.04;
+  const d = new THREE.Mesh(new THREE.PlaneGeometry(size, size), glass ? golfCrackM : golfDentM);
+  d.position.copy(at); d.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n.clone().normalize()); d.rotateZ(Math.random() * 6.28);
+  d.layers.set(EXTERIOR_LAYER); g.add(d);
+}
+function golfScares(b) {                          // close calls: a car coming up on it in the road swerves; people on the walk jump (and if it hits one...)
+  for (const { g, m } of carsOut?.all() || []) {
+    if (!m || golf.seen.has(m) || b.y > 2) continue;
+    const ahead = (b.x - g.position.x) * Math.sign(m.v0);
+    if (ahead > -1 && ahead < 8 && Math.abs(b.z - g.position.z) < 2.2) {
+      golf.seen.add(m); carsOut.swerve(m, Math.sign(g.position.z - b.z) || 1); golfSnd("screech", g.position, 0.6); golfSnd("horn", g.position);
+      toast("A car swerved round it, leaning on the horn");
+    }
+  }
+  for (const c of [...walkers.map(w => w.c), ...custs.map(k => k.c)]) {
+    const p = c?.group.position; if (!p || !c.group.visible || golf.seen.has(c) || b.y > 2.4) continue;
+    const d = Math.hypot(b.x - p.x, b.z - p.z); if (d > 1.4) continue;
+    golf.seen.add(c); c.setMood("shock"); c.stagger?.(Math.sign((b.x - p.x) || 1));
+    if (d < 0.35 && b.y < 1.9) { golf.v.x *= -0.3; golf.v.z *= -0.3; golfSnd("thud", b, 0.4); toast("Beaned somebody with it. \"OW! Hey!\""); shiftScore(-10, "you"); logAct("Hit a passer-by with a golf ball", "bad", null, -10); }
+    else toast("\"Hey! Watch it!\"");
+  }
+}
+function golfSnd(kind, at, vol = 1) {             // the noises it makes out there: fainter the further off they are
+  try {
+    const ac = VaultAudio.ctx(); ac.resume();
+    const t = ac.currentTime, out = ac.createGain(), d = camera.position.distanceTo(at);
+    out.gain.value = vol / (1 + (d / 14) ** 2); out.connect(sfxOut(ac));
+    const noise = len => { const b = ac.createBuffer(1, ac.sampleRate * len, ac.sampleRate), x = b.getChannelData(0); for (let i = 0; i < x.length; i++) x[i] = Math.random() * 2 - 1; const s = ac.createBufferSource(); s.buffer = b; return s; };
+    const env = (node, a, t0, t1) => { const g = ac.createGain(); g.gain.setValueAtTime(a, t0); g.gain.exponentialRampToValueAtTime(0.0005, t1); node.connect(g).connect(out); return g; };
+    const tone = (type, f, a, t0, t1) => { const o = ac.createOscillator(); o.type = type; o.frequency.value = f; env(o, a, t0, t1); o.start(t0); o.stop(t1); };
+    if (kind === "clank") { for (const [f, a] of [[1150, 0.12], [1720, 0.08], [2630, 0.05], [420, 0.1]]) tone("sine", f, a, t, t + 0.35); const n = noise(0.05); env(n, 0.2, t, t + 0.05); n.start(t); }
+    else if (kind === "glass") { const n = noise(0.4), f = ac.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 2500; n.connect(f); env(f, 0.25, t, t + 0.35); n.start(t); tone("sine", 3900, 0.05, t, t + 0.6); tone("sine", 5200, 0.03, t + 0.02, t + 0.5); }
+    else if (kind === "thud") { tone("sine", 70, 0.4, t, t + 0.4); const n = noise(0.2), f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 500; n.connect(f); env(f, 0.4, t, t + 0.25); n.start(t); }
+    else if (kind === "screech") { const n = noise(1.3), f = ac.createBiquadFilter(); f.type = "bandpass"; f.Q.value = 9; f.frequency.setValueAtTime(2300, t); f.frequency.linearRampToValueAtTime(1500, t + 1.2); n.connect(f); env(f, 0.5, t, t + 1.3); n.start(t); }
+    else if (kind === "horn") { for (const f of [392, 494]) { const o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain(); o.type = "square"; o.frequency.value = f; lp.type = "lowpass"; lp.frequency.value = 1400;
+      g.gain.setValueAtTime(0, t); for (const [a, b] of [[0.05, 0.3], [0.42, 1.3]]) { g.gain.setValueAtTime(0.06, t + a); g.gain.setValueAtTime(0, t + b); } o.connect(lp).connect(g).connect(out); o.start(t); o.stop(t + 1.4); } }
+    else if (kind === "rattle") { for (let k = 0, tt = t; k < 16; k++, tt += 0.05 + k * 0.006) tone("triangle", 900 + Math.random() * 900, 0.07 * (1 - k / 20), tt, tt + 0.04); tone("sine", 160, 0.12, t + 1.3, t + 1.5); }
+    else if (kind === "alarm") {                  // the classic: a whoop, chirps, the two-tone, round again for ten seconds
+      const o = ac.createOscillator(), g = ac.createGain(); o.type = "sawtooth"; g.gain.value = 0.05; o.connect(g).connect(out); o.start(t); o.stop(t + 10);
+      for (let c = 0; c < 10; c += 3.3) { o.frequency.setValueAtTime(600, t + c); o.frequency.linearRampToValueAtTime(1500, t + c + 0.9);
+        for (let k = 0; k < 6; k++) o.frequency.setValueAtTime(k % 2 ? 900 : 1300, t + c + 1 + k * 0.16); for (let k = 0; k < 6; k++) o.frequency.setValueAtTime(k % 2 ? 700 : 1000, t + c + 2 + k * 0.22); }
+    }
+    setTimeout(() => out.disconnect(), 11000);
+  } catch {}
 }
 function golfHud() {
   const m = $("golfHud"), fill = golf.st === "power" ? golf.pow : golf.st === "back" ? golf.peak : 0;
@@ -11954,7 +12130,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
-window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
