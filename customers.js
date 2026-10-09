@@ -637,8 +637,8 @@ window.VaultCustomers = (() => {
       part(hand, SOFT, skin, 0.35, 0.5, 0.6, s * -0.55, 0.05, 0.25);                  // thumb, tucked in toward the body
       return { sh, el, hand };
     });
-    if (o.skinned) skinLimbs();
-    // o.skinned (a trial, see gaits.html): the legs, hips and arms as one skinned surface over the same joints, so a
+    if (o.skinned !== false) skinLimbs();
+    // o.skinned (on unless false; gaits.html can turn it off to compare): the legs, hips and arms as one skinned surface over the same joints, so a
     // knee or an elbow bends as one surface instead of two blocks meeting: each vertex follows its nearest joints,
     // blended across the joint, and the cloth stops where the colour changes, not at a gap. Torso, hands, shoes
     // and the head stay as they are
