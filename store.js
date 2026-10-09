@@ -5613,6 +5613,21 @@ function meTick(dt) {
   if (onToilet) { censor.lookAt(camera.position); if ((censor.t -= dt) <= 0) { censor.t = 0.12; censorDraw(); } }   // (always square to your eye)
   me.tick(dt, speed);
 }
+// whatever's in your hand rides your own right hand: the arm reaches for the spot the item's drawn at (its carry
+// spot, or up at your mouth mid-bite or mid-sip), and for the frame the item's drawn where the hand actually got to:
+// at arm's length, swinging as you walk, low in a crouch. (Tools and the ladder pose the arms themselves.)
+// Returns an undo, so everything else keeps seeing the item at its own spot
+let meHolding = false;
+const meGrip = new THREE.Vector3();
+function meHandFollow() {
+  const g = [handGroup, snackGroup, popcornGroup, coHand, postitHeld?.mesh].find(o => o?.visible && o.parent === camera);
+  if (!g || toolHeld || ladder.on || roof.climb) { if (meHolding && !toolHeld && !ladder.on) me.reachTo(null); meHolding = false; return null; }
+  camera.updateMatrixWorld();
+  me.reachTo(camera.localToWorld(meGrip.copy(g.position)), 0, { lean: false }); meHolding = true;   // (lands next tick)
+  me.group.updateMatrixWorld(true); me.rig.arms[0].hand.getWorldPosition(meGrip);
+  const rest = g.position.clone(); g.position.copy(camera.worldToLocal(meGrip));
+  return () => g.position.copy(rest);
+}
 // the censor: a pixel mosaic over your lap, redrawn a few times a second so it shimmers like a TV blur
 let meToilet = false;
 const censorTex = makeTexture(() => {}, 64, 64); censorTex.magFilter = THREE.NearestFilter; censorTex.minFilter = THREE.NearestFilter;
@@ -8709,6 +8724,7 @@ function snackTag() {
   $("holdingName").textContent = snackLeft
     ? `${p.kind || "Snack"} — ${p.name} · ${snackLeft} ${drink ? "sip" : "bite"}${snackLeft === 1 ? "" : "s"} left · click to ${drink ? "drink" : "eat"}`
     : `Empty ${p.name} ${EMPTY[p.shape]} · take it to the trash`;
+  invRender();
 }
 function consumeSnack() {
   if (!snackLeft) return;                    // finished: nothing left but the wrapper — trash it
@@ -10598,7 +10614,7 @@ function popcornVisual() {
     $("holdingName").textContent = hp.fill ? `Popcorn${tops ? ` — ${tops}` : ""} · click to eat`
       : hp.used ? "Empty popcorn box · refill it or take it to the trash" : "Empty popcorn box";
   }
-  popcornGroup.visible = true; $("holdingTag").style.display = "block";
+  popcornGroup.visible = true; $("holdingTag").style.display = "block"; invRender();
 }
 function popcornStep(what, apply) {
   const hp = heldPopcorn;
@@ -10708,7 +10724,10 @@ function invRender() {
   bar.innerHTML = Array.from({ length: INV_MAX }, (_, i) => {
     const e = inv[i];
     const img = !e ? "" : e.kind === "tape" ? artUrl(e.ref.art) : e.thumb;
-    const wind = e?.kind === "tape" ? `<i class="wind" style="--w:${(windFrac(e.ref) * 100).toFixed(1)}%"></i>` : "";   // rewound = all green; red = how far it's played
+    const used = e?.kind === "tape" ? windFrac(e.ref)                                  // rewound = all green; red = how far it's played
+      : e?.kind === "snack" ? 1 - (i === invSel ? snackLeft / snackTotal : e.left / e.total)   // bites / sips: green left, red gone
+      : e?.kind === "popcorn" && e.ref.kind === "box" ? 1 - e.ref.fill / 8 : null;           // handfuls
+    const wind = used != null && isFinite(used) ? `<i class="wind" style="--w:${(used * 100).toFixed(1)}%"></i>` : "";
     return `<div class="slot${i === sel ? " sel" : ""}"><span>${i + 1}</span>${img ? `<img src="${img}">` : ""}${wind}</div>`;
   }).join("");
 }
@@ -11627,7 +11646,7 @@ renderer.setAnimationLoop(() => {
   regionTick();
   cullDarkLights(dt);
   ambTick(dt);
-  renderWithBloom();
+  const handBack = meHandFollow(); renderWithBloom(); handBack?.();
 });
 window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
@@ -11636,7 +11655,7 @@ window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wx
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
