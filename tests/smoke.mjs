@@ -15,7 +15,7 @@ const ready = () => page.waitForFunction(() => !document.getElementById("mainMen
 async function freshStore(mode) {                // a new store in slot 1, into the game
   await ev(m => { window.__t?.stopSaving(); localStorage.clear(); localStorage.setItem("vaultbuster-save", JSON.stringify({ v: 3, mode: m, fresh: true })); }, mode);   // (stop the current store saving over the new one on the way out, as the menu does)
   await page.reload({ timeout: 300000 }); await ready();
-  await page.click("#mmContinue"); await page.waitForFunction(() => document.pointerLockElement, null, { timeout: 30000 }).catch(() => {});
+  await page.click("#mmFiles .acts .go"); await page.waitForFunction(() => document.pointerLockElement, null, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(1500);
 }
 
@@ -25,10 +25,10 @@ await page.goto(URL, { timeout: 300000 });
 console.log("\nstartup + menu");
 await ev(() => localStorage.clear()); await page.reload({ timeout: 300000 }); await ready();
 check("loads with no errors", errors.length === 0, errors[0]);
-check("first visit: only NEW GAME (no continue/load)", await page.isHidden("#mmContinue") && await page.isHidden("#mmLoad"));
-await page.click("#mmNew");
-check("new game asks which slot (3)", (await page.$$("#mmSlotList button")).length === 3);
-await page.click("#mmSlotsBack"); await page.click("#mmSettingsBtn");
+check("first visit: three empty store files", (await page.$$("#mmFiles .file.empty")).length === 3);
+await page.click('#mmFiles [data-file="2"]');
+check("an empty file offers both modes", (await page.$$("#mmFiles [data-mode]")).length === 2);
+await page.click("#mmSettingsBtn");
 await page.fill("#setSens", "150").catch(() => {}); await ev(() => { const e = document.getElementById("setSens"); e.value = 150; e.dispatchEvent(new Event("input")); });
 check("settings save (sensitivity)", (await ev(() => JSON.parse(localStorage.getItem("vaultbuster-settings")).sens)) === 150);
 
@@ -95,14 +95,14 @@ check("sound effects follow mute (M) and the volume setting", await ev(() => {
 check("move the desensitizer along the counter", await ev(() => { __t.player.x = -4.9; __t.player.z = 3; const it = __t.counterItemsList().find(i => i.id === "desens");
   __t.moveStart(it); __t.cmove.spot = { x: -3.4, z: 3.85 }; __t.cmove.ok = true; __t.movePlace(); return Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && !__t.cmove.item; }));
 await page.waitForTimeout(2500);
-await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
+await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
 check("save/reload keeps the counter layout and the hold", await ev(() => Math.abs(__t.DESENS_AT.x + 3.4) < 0.01 && __t.holds.length === 1));
 await ev(() => {                                 // a store saved in 2026 (before the game was set in 1996): its dates move back
   __t.stopSaving(); const k = Object.keys(localStorage).find(k => k.startsWith("vaultbuster-save") && JSON.parse(localStorage.getItem(k))?.shift);
   const s = JSON.parse(localStorage.getItem(k)), dt = +new Date(2026, 9, 5, 12) - s.shift.date0; s.shift.date0 += dt;
   for (const r of Object.values(s.rentals || {})) if (r) r[1] += dt;
   localStorage.setItem(k, JSON.stringify(s)); });
-await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmContinue"); await page.waitForTimeout(1000);
+await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
 check("an old 2026 save moves to 1996, rentals with it", await ev(() => __t.shiftDate().getFullYear() === 1996 && __t.posTerm.members.flatMap(m => m.rentals).every(r => r.due.getFullYear() < 1998)));
 
 check("calling: weekday afternoons get the machine, past bedtime gets you yelled at", await ev(() => {

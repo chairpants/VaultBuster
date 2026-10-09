@@ -11568,10 +11568,8 @@ setInterval(() => {
 let started = false;
 $("titleScreen").addEventListener("click", e => {
   if (e.target.closest("button, #mainMenu")) return;
-  if (started) canvas.requestPointerLock();       // paused: click anywhere to go back in
+  if (started || ($("mainMenu").hidden === false && titleMenu.autoPlay?.())) canvas.requestPointerLock();   // paused (or just reloaded into a store): click anywhere to go in
 });
-// the main menu: continue the saved store (or resume), or a new game in either
-// mode. A new game is set up as a fresh save and the page reloads into it
 function slotInfo(n) {                           // what's in a save slot, for the menu
   try {
     const d = JSON.parse(localStorage.getItem(slotKey(n))); if (!d || d.v !== SAVE_V) return null;
@@ -11591,39 +11589,79 @@ function aaApply() {                              // smooth edges: 4x multisampl
   mainRT.samples = n; mainRT.dispose(); glowRT.dispose();
 }
 aaApply();
-// the main menu: continue the store in the active slot (or resume), load another slot, start a new
-// store in a slot (then pick the mode), settings. Switching stores reloads the page into that slot
+// the main menu: three store files, like a cartridge's save files. Pick one and you can PLAY it (an empty one:
+// pick the mode for a new store), COPY it to another file, or DELETE it. The page holds one store at a time (the
+// active file's), so playing another file reloads into it and straight on into the store at your next click
 function titleMenu() {
-  const nice = MODE === "simulation" ? "SIMULATION" : "SANDBOX";
-  const label = () => started ? "RESUME" : SAVE?.fresh ? `START · ${nice} (SLOT ${SLOT})` : `CONTINUE · ${nice} · DAY ${shift.day} (SLOT ${SLOT})`;
-  const cont = $("mmContinue"), panels = { main: $("mmMain"), slots: $("mmSlots"), modes: $("mmModes"), settings: $("mmSettings") };
+  const MODES = {
+    simulation: ["SIMULATION", "A bare-bones store: no staff, the theater locked up, part of the library. Build it up with what it earns."],
+    sandbox: ["SANDBOX", "Dana on staff, $10,000 in the budget: buy whatever you like and just play store."],
+  };
+  const panels = { main: $("mmMain"), settings: $("mmSettings") };
   const show = k => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
-  let newSlot = SLOT;
-  const switchTo = (n, fresh) => {               // into slot n (a fresh store if mode given)
-    if (started && !fresh) saveState();           // (the store you're leaving keeps where it was)
-    if (fresh) { if (n === SLOT) saveOff = true; else if (started) saveState(); try { localStorage.setItem(slotKey(n), JSON.stringify({ v: SAVE_V, mode: fresh, fresh: true })); } catch {} }
-    try { localStorage.setItem("vaultbuster-slot", String(n)); } catch {}
+  const write = (n, d) => { try { d ? localStorage.setItem(slotKey(n), typeof d === "string" ? d : JSON.stringify(d)) : localStorage.removeItem(slotKey(n)); } catch {} };
+  const raw = n => { try { return localStorage.getItem(slotKey(n)); } catch { return null; } };
+  let autoPlay = false; try { autoPlay = sessionStorage.getItem("vaultbuster-play") === "1"; sessionStorage.removeItem("vaultbuster-play"); } catch {}
+  let sel = autoPlay || SAVE || started ? SLOT : 0, step = null, target = 0;   // step: null | "copy" (pick where) | "copyOk" | "del"
+  const play = () => { autoPlay = false; canvas.requestPointerLock(); };
+  const reloadInto = (n, go) => {                  // the page into file n (and on into the store, if go)
+    try { localStorage.setItem("vaultbuster-slot", String(n)); if (go) sessionStorage.setItem("vaultbuster-play", "1"); } catch {}
     location.reload();
   };
-  const slotList = mode => {                      // "load": pick a store; "new": pick where the new one goes
-    const list = $("mmSlotList"); list.innerHTML = ""; $("mmSlotsTitle").textContent = mode === "load" ? "LOAD A STORE" : "NEW STORE · WHICH SLOT?";
-    for (let n = 1; n <= SLOTS; n++) {
-      const info = slotInfo(n), b = document.createElement("button");
-      b.innerHTML = `<b>SLOT ${n}${n === SLOT ? " · PLAYING" : ""}</b><small>${info ? info.label + (mode === "new" ? " · (replaced)" : "") : "empty"}</small>`;
-      if (mode === "load") { b.disabled = !info; b.onclick = () => n === SLOT ? cont.onclick() : switchTo(n); }
-      else b.onclick = () => { newSlot = n; $("mmWarn").textContent = info ? `This replaces the store in slot ${n}.` : `Slot ${n} is empty.`; show("modes"); };
-      list.appendChild(b);
-    }
-    show("slots");
+  const leaving = () => { if (started) saveState(); saveOff = true; };   // (the store you're in keeps where it was, and nothing saves over what's next)
+  const playFile = n => {
+    if (n === SLOT && (SAVE || started)) return play();
+    leaving(); reloadInto(n, true);
   };
-  titleMenu.refresh = () => { cont.textContent = label(); cont.hidden = !SAVE && !started; $("mmLoad").hidden = ![1, 2, 3].some(n => slotInfo(n)); show("main"); };
+  const newStore = (n, mode) => {
+    if (n === SLOT && !SAVE && !started && mode === MODE) return play();   // (the store that's already set up is just that)
+    leaving(); write(n, { v: SAVE_V, mode, fresh: true }); reloadInto(n, true);
+  };
+  const del = n => {
+    if (n === SLOT) { saveOff = true; write(n, null); reloadInto(n, false); return; }   // (the store on screen goes with it)
+    write(n, null); sel = 0; step = null; render();
+  };
+  const copy = (from, to) => {
+    if (from === SLOT && started) saveState();
+    const d = raw(from); if (!d) return;
+    if (to === SLOT) { saveOff = true; write(to, d); reloadInto(to, false); return; }   // copied over the one on screen: load the copy
+    write(to, d); sel = to; step = null; render();
+  };
+  const btn = (html, cls, on) => { const b = document.createElement("button"); b.innerHTML = html; if (cls) b.className = cls; b.onclick = e => { e.stopPropagation(); on(); }; return b; };
+  const q = (text, warn) => { const d = document.createElement("div"); d.className = warn ? "q warn" : "q"; d.textContent = text; return d; };
+  function render() {
+    const list = $("mmFiles"); list.innerHTML = "";
+    $("mmTitle").textContent = step === "copy" || step === "copyOk" ? `COPY STORE ${sel} TO…` : started ? "PAUSED" : "SELECT A STORE";
+    for (let n = 1; n <= SLOTS; n++) {
+      const info = slotInfo(n), copying = step === "copy" || step === "copyOk";
+      const sub = copying && n !== sel ? (info ? `${info.label} · replace it` : "empty · copy here") : info ? info.label : "empty";
+      const f = btn(`<span class="n">${n}</span><span><b>${info ? `STORE ${n}` : "NEW STORE"}${n === SLOT && started ? " · PLAYING" : ""}</b><small>${sub}</small></span>`,
+        `file${info ? "" : " empty"}${n === sel ? " sel" : ""}${copying && n === sel ? " dim" : ""}`, () => {
+          if (copying) { if (n === sel) { step = null; render(); } else if (slotInfo(n)) { target = n; step = "copyOk"; render(); } else copy(sel, n); return; }
+          if (sel !== n || step) { sel = n; step = null; render(); }
+        });
+      f.dataset.file = n; list.appendChild(f);
+      const at = step === "copyOk" ? target : sel;
+      if (n !== at || (copying && step !== "copyOk")) continue;
+      const acts = document.createElement("div"); acts.className = "acts";
+      if (step === "copyOk") acts.append(q(`Store ${target} gets replaced with a copy of store ${sel}.`, true), btn("COPY", "go", () => copy(sel, target)), btn("BACK", "back", () => { step = "copy"; render(); }));
+      else if (step === "del") acts.append(q(`Delete store ${n} for good?`, true), btn("DELETE", "del", () => del(n)), btn("KEEP IT", "back", () => { step = null; render(); }));
+      else if (info) acts.append(btn(n === SLOT && started ? "RESUME" : "PLAY", "go", () => playFile(n)),
+        btn("COPY", "", () => { step = "copy"; render(); }), btn("DELETE", "del", () => { step = "del"; render(); }));
+      else for (const [m, [name, about]] of Object.entries(MODES)) { const b = btn(`<b>${name}</b><small>${about}</small>`, "mode", () => newStore(n, m)); b.dataset.mode = m; acts.append(b); }
+      list.appendChild(acts);
+    }
+    const hint = $("playHint"); hint.hidden = !autoPlay; hint.textContent = `STORE ${SLOT} · CLICK OR PRESS A KEY TO PLAY`;
+  }
+  titleMenu.refresh = () => { if (started) { saveState(); sel = SLOT; } step = null; render(); show("main"); };
+  titleMenu.autoPlay = () => autoPlay;
+  $("playHint").onclick = play;
   titleMenu.refresh();
-  cont.onclick = () => canvas.requestPointerLock();
-  $("mmLoad").onclick = () => slotList("load");
-  $("mmNew").onclick = () => slotList("new");
-  $("mmBack").onclick = () => slotList("new");
-  $("mmSlotsBack").onclick = () => show("main");
-  for (const b of panels.modes.querySelectorAll("button[data-mode]")) b.onclick = () => switchTo(newSlot, b.dataset.mode);
+  addEventListener("keydown", e => {                // on the title: a key goes on in (after the reload into a store), Enter plays the one picked
+    if (document.pointerLockElement === canvas || $("mainMenu").hidden || $("titleScreen").style.display === "none" || panels.main.hidden || e.code === "Escape") return;
+    if (autoPlay && !started) play();
+    else if (e.code === "Enter" && sel && !step && slotInfo(sel)) playFile(sel);
+  });
   // settings: sliders and toggles, applied as they change
   const bind = (id, key, fmt, after) => {
     const el = $(id), out = $(id + "V"), sync = () => { if (el.type === "checkbox") el.checked = !!SETTINGS[key]; else el.value = SETTINGS[key]; if (out) out.textContent = fmt(SETTINGS[key]); };
