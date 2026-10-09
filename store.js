@@ -10552,8 +10552,13 @@ function roofClimb(dir) {                          // up (1) or down (-1) the cl
   player.yaw = 0;                                   // facing the rungs (south), up or down
 }
 const PUDDLE_DARK = new THREE.Color(0x24282e), PUDDLE_GREY = new THREE.Color(0xb4b8bc);   // (a puddle: the sky, darkened by the water and what's under it)
+const cineAt = new THREE.Vector3();
 function cineTick(dt) {                           // the movie on the roof: the projector's picture on the sheet, washed out by daylight, and its beam after dark
-  const C = roof.cine; if (!C || !roof.g.visible) return;
+  const C = roof.cine; if (!C) return;
+  let k = 1;                                       // the tape's sound: up top it comes from the projector (loud by it, faint across the roof, nothing with it off)
+  if (player.onRoof || roof.climb) { const d = camera.position.distanceTo(C.lens.getWorldPosition(cineAt)); k = C.on ? Math.min(1, Math.max(0.03, 3 / Math.max(d, 0.01)) ** 1.5) : 0; }
+  video.volume = tvSet.volume / 100 * k;
+  if (!roof.g.visible) return;
   const on = C.on, day = Math.max(0, Math.min(1, tod.level));
   roof.cineU.uProj.value = on ? 0.06 + 0.9 * (1 - day) ** 1.5 : 0;   // (in the sun it's barely there; after dark it's the picture)
   roof.cineU.uBlue.value = playing ? 0 : 1;
