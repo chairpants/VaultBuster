@@ -78,6 +78,25 @@
   #mainMenu .set input[type=checkbox] { justify-self: start; width: 18px; height: 18px; accent-color: var(--bb-yellow); }
   #mainMenu .set span { color: var(--bb-yellow); text-align: right; font-variant-numeric: tabular-nums; }
   #mainMenu .note { color: #cfe0ff; font-size: 11px; text-align: center; opacity: .8; }
+  /* the three store files: pick one, and what you can do with it opens under it */
+  #mmFiles { display: flex; flex-direction: column; gap: 10px; }
+  #mainMenu .file { display: flex; align-items: center; gap: 14px; text-align: left; width: 100%; }
+  #mainMenu .file .n { font: 900 italic 30px "Arial Black", Arial, sans-serif; color: var(--bb-yellow); min-width: 28px; text-align: center; }
+  #mainMenu .file b { display: inline; }
+  #mainMenu .file small { margin-top: 2px; }
+  #mainMenu .file.empty { background: #0a1a45; border-style: dashed; border-color: #ffd40088; }
+  #mainMenu .file.empty b { color: #ffffffaa; }
+  #mainMenu .file.sel { background: #0a3fa0; outline: 3px solid #fff; outline-offset: 2px; }
+  #mainMenu .file.dim { opacity: .45; }
+  #mainMenu .acts { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 4px; }
+  #mainMenu .acts button { flex: 1 1 0; min-width: 0; font-size: 14px; padding: 9px 6px; }
+  #mainMenu .acts button.go { background: var(--bb-yellow); color: var(--bb-blue-dark); }
+  #mainMenu .acts button.go:hover { background: #ffe24d; }
+  #mainMenu .acts button.del { border-color: #ff8080; }
+  #mainMenu .acts button.mode { flex-basis: 100%; text-align: left; }
+  #mainMenu .acts .q { flex-basis: 100%; color: #fff; font-size: 13px; text-align: center; }
+  #mainMenu .acts .q.warn { color: #ffb3b3; }
+  #playHint { color: var(--bb-yellow); font-weight: bold; letter-spacing: 3px; font-size: 18px; text-align: center; animation: blink 1.4s infinite; text-shadow: 0 2px 6px #000; }
   #titleScreen { cursor: default; }
   #titleScreen.paused #enterHint { color: #fff; }
   /* resume screen (already played once) goes translucent so the still-running
@@ -261,21 +280,10 @@
   <div id="enterHint">LOADING…<i></i></div>
   <div id="mainMenu" hidden>
     <div class="mm" id="mmMain">
-      <button id="mmContinue"></button>
-      <button id="mmLoad">LOAD A STORE</button>
-      <button id="mmNew">NEW GAME</button>
+      <div id="playHint" hidden></div>
+      <div class="ttl" id="mmTitle">SELECT A STORE</div>
+      <div id="mmFiles"></div>
       <button id="mmSettingsBtn" class="back">SETTINGS</button>
-    </div>
-    <div class="mm" id="mmSlots" hidden>
-      <div class="ttl" id="mmSlotsTitle"></div>
-      <div id="mmSlotList" class="mm"></div>
-      <button id="mmSlotsBack" class="back">BACK</button>
-    </div>
-    <div class="mm" id="mmModes" hidden>
-      <button data-mode="simulation"><b>SIMULATION</b><small>A bare-bones store: no staff, the theater locked up, part of the library. Build it up with what it earns.</small></button>
-      <button data-mode="sandbox"><b>SANDBOX</b><small>Dana on staff, $10,000 in the budget: buy whatever you like and just play store.</small></button>
-      <div class="warn" id="mmWarn"></div>
-      <button id="mmBack" class="back">BACK</button>
     </div>
     <div class="mm" id="mmSettings" hidden>
       <div class="ttl">SETTINGS</div>
