@@ -283,6 +283,45 @@ check("a regular gets 10% off; getting caught costs you that", await ev(() => {
   __t.cm.trust = 70; const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
   const full = __t.posTerm.rentPrice(t), w = __t.cm.wallet; __t.cmPay(__t.staff[0]); const paid = +(w - __t.cm.wallet).toFixed(2);
   const before = __t.cm.trust; __t.cmCaught("staff", __t.staff[0]); return Math.abs(paid - full * 0.9) < 0.01 && __t.cm.trust < before; }));
+// the staff (customer mode)
+const said = () => ev(() => document.getElementById("toast").textContent);
+check("the staff get to know you a day at a time: once a day each, your name by the second day, then a word about their day", await ev(() => {
+  __t.cm.wary.clear(); __t.cm.alert = 0; __t.cm.crew = {}; const e = __t.staff[1], day = __t.shift.day, me = __t.cmStaffYou();
+  __t.cmStaffTalk(e); __t.cmStaffTalk(e); const once = __t.cmStaffOf(e).k === 1;
+  __t.shift.day = day + 1; __t.cmStaffTalk(e); const named = __t.cmStaffOf(e).k === 2 && document.getElementById("toast").textContent.includes(me);
+  __t.cmStaffTalk(e); const pick = __t.cm.rec.day === __t.shift.day; __t.cmStaffTalk(e); const chat = document.getElementById("toast").textContent.startsWith(`${e.first}: "`);
+  __t.shift.day = day; return once && named && pick && chat && __t.cmStaffTip(e) === "knows your name"; }));
+await page.waitForFunction(() => __t.staff.filter(e => e.c && !e.leaving).length >= 2, null, { timeout: 300000 }).catch(() => {});
+check("a favor for one you're friendly with: a message passed on to the other, and a tip about the trail for it", await ev(() => {
+  const day = __t.shift.day, [a] = __t.staff.filter(e => e.c && !e.leaving); __t.shift.day = day | 1;
+  Object.assign(__t.cmStaffOf(a), { k: 3, named: true, day: __t.shift.day }); __t.cm.rec.day = __t.shift.day; __t.cm.fav = null; __t.cm.favDay = 0;
+  __t.cmStaffTalk(a); const f = __t.cm.fav, b = __t.staff.find(x => x.id === f?.to); if (!b) { __t.shift.day = day; return false; }
+  const tipB = __t.cmStaffTip(b); __t.cmStaffTalk(b); const tipA = __t.cmStaffTip(a), k = __t.cmStaffOf(a).k; __t.cmStaffTalk(a);
+  const ok = f.kind === "msg" && tipB.includes("message") && f.done && tipA === "E — tell them it's done" && f.paid && __t.cmStaffOf(a).k === k + 1 && document.getElementById("toast").textContent.includes("I owe you one");
+  __t.shift.day = day; return ok; }));
+check("...or a misshelved tape put back (any one will do)", await ev(() => {
+  const day = __t.shift.day, [a] = __t.staff.filter(e => e.c && !e.leaving); __t.shift.day = day + (day % 2 ? 1 : 0);
+  __t.cm.rec.day = __t.shift.day; __t.cm.fav = null; __t.cm.favDay = 0; __t.cmStaffTalk(a); const f = __t.cm.fav, st = __t.strays[0];
+  if (st) __t.cmHelped(st.copy); __t.cmStaffTalk(a); __t.shift.day = day; return f?.kind === "shelf" && f.done && f.paid; }));
+check("gossip: who caught you tells the other one (who's wary now too), overheard close by; a good word warms the other one up", await ev(() => {
+  const [a, b] = __t.staff.filter(e => e.c && !e.leaving), p = a.c.group.position, at = { x: __t.player.x, z: __t.player.z }, chat = t => { a.chatWith = b; b.chatWith = a; a.chatAt = b.chatAt = t; };
+  __t.cm.wary.clear(); __t.cm.wary.add(a.id); __t.cm.day.caught = 1; __t.cm.inside = true; Object.assign(__t.player, { x: p.x + 1, z: p.z });
+  chat(-1001); __t.cmStaffTick(0.01); const heard = document.getElementById("toast").textContent.startsWith(`Overheard, ${a.first} to ${b.first}`), spread = __t.cm.wary.has(b.id);
+  __t.cm.wary.clear(); __t.cm.day.caught = 0; __t.cm.fav = { kind: "shelf", by: a.id, byName: a.first, done: true, paid: true, day: __t.shift.day };
+  const k = __t.cmStaffOf(b).k; chat(-1002); __t.cmStaffTick(0.01); const warmer = __t.cmStaffOf(b).k === k + 1;
+  Object.assign(__t.player, { x: 30, z: 30 }); chat(-1003); __t.cmStaffTick(0.01); const far = !a.gossip?.heard;
+  a.chatWith = b.chatWith = null; Object.assign(__t.player, at); return heard && spread && warmer && far; }));
+check("a regular they know well can ask for an application; the answer's there the next morning", await ev(() => {
+  const [a] = __t.staff.filter(e => e.c && !e.leaving); __t.cm.found.delete("badge"); __t.cm.trust = 70; __t.cm.wary.clear(); __t.cm.app = null; __t.cm.short = 0;
+  Object.assign(__t.cmStaffOf(a), { k: 4, named: true }); __t.cm.rec.day = __t.shift.day; __t.cmStaffTalk(a); const applied = !!__t.cm.app && !__t.cm.app.ans;
+  __t.shift.day++; __t.cmStaffMorning(); const yes = __t.cm.app.ans === "yes"; __t.cmStaffTalk(a);
+  return applied && yes && __t.cm.app.told && __t.cmStaffTip(a) === "E — take the job"; }));
+await page.waitForTimeout(2500); await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
+check("...it all survives a reload (how well they know you, the offer)", await ev(() => __t.CUSTOMER && __t.cm.app?.ans === "yes" && __t.staff.some(e => __t.cmStaffOf(e).k >= 4)));
+await ev(() => { setTimeout(() => __t.cmStaffJoin(), 0); }); await page.waitForTimeout(1000); await page.waitForLoadState(); await ready();
+check("take the job: on staff in the same store (and still, a reload later)", await ev(() => !__t.CUSTOMER && __t.staff.length >= 3));
+await page.waitForTimeout(2500); await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
+check("...(still on staff after another reload)", await ev(() => !__t.CUSTOMER && JSON.parse(localStorage.getItem("vaultbuster-save")).role === "staff"));
 
 console.log("\nsimulation: fired");
 await freshStore("simulation");
