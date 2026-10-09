@@ -1146,18 +1146,22 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
       ladder.stowBox = { x0: ladder.stow.x - 0.27, x1: ladder.stow.x + 0.27, z0: z1 - 0.22, z1, y1: 1.7 }; colliders.push(ladder.stowBox);
       ladderPose();
     }
-    // shelf on the back wall, up out of the way: carpet shampoo, floor cleaner, a gallon of bleach, glass cleaner
-    const sy = 1.5, sz0 = z0 + 0.35, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
-    bx(sd, 0.025, sz1 - sz0, wood, sx, sy, (sz0 + sz1) / 2);
-    for (const z of [sz0 + 0.1, sz1 - 0.1]) bx(0.02, 0.18, 0.02, grey, x1 - 0.02, sy - 0.1, z);   // brackets
-    const top = sy + 0.0125, label = (w, h, c, y, z, d) => bx(0.004, h, w, lam(c), sx - d, y, z);
+    // two short shelves stacked on the back wall, up out of the way and over in the right-hand corner (clear of the roof
+    // ladder by the left wall, and whoever's climbing it): carpet shampoo and floor cleaner up top, bleach and glass cleaner below
+    const sz0 = z1 - 0.75, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
     const items = [
-      z => { bx(0.09, 0.26, 0.11, lam(0x6aa84f), sx, top + 0.13, z); cyl(0.02, 0.03, dark, sx, top + 0.275, z); label(0.09, 0.09, 0xf6f6f2, top + 0.12, z, 0.047); },   // carpet shampoo
-      z => { bx(0.08, 0.22, 0.1, yellow, sx, top + 0.11, z); cyl(0.018, 0.03, lam(0xd21f26), sx, top + 0.235, z); label(0.08, 0.08, 0xd21f26, top + 0.1, z, 0.042); },   // floor cleaner
-      z => { bx(0.12, 0.24, 0.15, lam(0xf6f6f2), sx, top + 0.12, z); cyl(0.022, 0.03, lam(0x2a5fb0), sx, top + 0.255, z + 0.04); label(0.11, 0.1, 0x2a5fb0, top + 0.11, z, 0.062); },   // bleach jug
-      z => { cyl(0.04, 0.2, lam(0x2f8fe8), sx, top + 0.1, z); bx(0.06, 0.06, 0.03, lam(0xf2f2f2), sx - 0.01, top + 0.23, z); bx(0.012, 0.04, 0.012, lam(0xf2f2f2), sx - 0.05, top + 0.19, z); },   // glass cleaner: spray head + trigger
+      top => { bx(0.09, 0.26, 0.11, lam(0x6aa84f), sx, top + 0.13, z); cyl(0.02, 0.03, dark, sx, top + 0.275, z); label(0.09, 0.09, 0xf6f6f2, top + 0.12, z, 0.047); },   // carpet shampoo
+      top => { bx(0.08, 0.22, 0.1, yellow, sx, top + 0.11, z); cyl(0.018, 0.03, lam(0xd21f26), sx, top + 0.235, z); label(0.08, 0.08, 0xd21f26, top + 0.1, z, 0.042); },   // floor cleaner
+      top => { bx(0.12, 0.24, 0.15, lam(0xf6f6f2), sx, top + 0.12, z); cyl(0.022, 0.03, lam(0x2a5fb0), sx, top + 0.255, z + 0.04); label(0.11, 0.1, 0x2a5fb0, top + 0.11, z, 0.062); },   // bleach jug
+      top => { cyl(0.04, 0.2, lam(0x2f8fe8), sx, top + 0.1, z); bx(0.06, 0.06, 0.03, lam(0xf2f2f2), sx - 0.01, top + 0.23, z); bx(0.012, 0.04, 0.012, lam(0xf2f2f2), sx - 0.05, top + 0.19, z); },   // glass cleaner: spray head + trigger
     ];
-    items.forEach((f, i) => f(sz0 + 0.12 + i * (sz1 - sz0 - 0.24) / (items.length - 1)));
+    let z = 0;
+    const label = (w, h, c, y, zz, d) => bx(0.004, h, w, lam(c), sx - d, y, zz);
+    [1.65, 1.2].forEach((sy, k) => {
+      bx(sd, 0.025, sz1 - sz0, wood, sx, sy, (sz0 + sz1) / 2);
+      for (const bz of [sz0 + 0.08, sz1 - 0.08]) bx(0.02, 0.18, 0.02, grey, x1 - 0.02, sy - 0.1, bz);   // brackets
+      for (const i of [0, 1]) { z = sz0 + 0.16 + i * (sz1 - sz0 - 0.32); items[k * 2 + i](sy + 0.0125); }
+    });
   }
 
   const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over the store-side doorway, above the stripe
