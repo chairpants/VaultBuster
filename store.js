@@ -8555,14 +8555,18 @@ function pickHover() {
   }
   raycaster.setFromCamera(aimNDC, camera);
   aimRoofLadder = false;
-  aimGolf = false;
-  if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down) and the golf mat are all there is
+  aimGolf = false; aimCine = null;
+  if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down), the golf mat and the movie setup are all there is
     highlight.visible = false; const tip = $("hoverTip");
     if (golf.on) { tip.style.display = "none"; return; }
-    const a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts), false)[0];
-    aimGolf = !!a && a.distance < 2.4 && golf.parts.includes(a.object);
-    aimRoofLadder = !!a && a.distance < 2.4 && !aimGolf;
-    tip.innerHTML = aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off") : ""; tip.style.display = aimRoofLadder || aimGolf ? "block" : "none";
+    const C = roof.cine, a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts, C.vcr, C.proj), false)[0], near = !!a && a.distance < 2.4;
+    aimGolf = near && golf.parts.includes(a.object);
+    aimCine = near && C.vcr.includes(a.object) ? "vcr" : near && C.proj.includes(a.object) ? "proj" : null;
+    aimRoofLadder = near && !aimGolf && !aimCine;
+    tip.innerHTML = aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off")
+      : aimCine === "proj" ? `E — turn the projector ${C.on ? "off" : "on"}`
+      : aimCine === "vcr" ? (held ? `E — put ${held.title} in` : playing ? `E — eject${C.on ? "" : "<div class=\"cat\">the projector's off</div>"}` : "The VCR<div class=\"cat\">bring a tape up</div>") : "";
+    tip.style.display = tip.innerHTML ? "block" : "none";
     return;
   }
   {                                          // the fixed ladder in the closet, up to the roof
@@ -10019,8 +10023,9 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   // ---- where the staff come up for a smoke: a webbed lawn chair facing the lot, a coffee can of butts, a milk crate
   // for a table ----
   {
-    const c = new THREE.Group(); c.position.set(9.9, Y, 26.4); c.rotation.y = 0.55; G.add(c);
-    const tube = phong(0xc8ccd0, 70), web = [lam(0x2f8a58), lam(0xe8e4d4)], R = 0.011;
+    const lawnChair = (x, z, ry, web) => {
+    const c = new THREE.Group(); c.position.set(x, Y, z); c.rotation.y = ry; G.add(c);
+    const tube = phong(0xc8ccd0, 70), R = 0.011;
     const L = (a, b) => stick(V(...a), V(...b), R, tube, c);
     for (const s of [-1, 1]) {
       const x = s * 0.27;
@@ -10034,6 +10039,8 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     for (let k = 0; k < 6; k++) bx(0.075, 0.004, 0.44, web[k % 2], -0.22 + k * 0.088, 0.37, 0, c);   // seat webbing, front to back, sagging a bit
     for (let k = 0; k < 6; k++) { const b = bx(0.54, 0.004, 0.07, web[(k + 1) % 2], 0, 0.36, -0.17 + k * 0.07, c); }
     for (let k = 0; k < 6; k++) { const t = (k + 0.5) / 6, b = bx(0.54, 0.07, 0.004, web[k % 2], 0, 0.42 + t * 0.5, 0.235 + t * 0.14, c); b.rotation.x = -0.29; }
+    };
+    lawnChair(9.9, 26.4, 0.55, [lam(0x2f8a58), lam(0xe8e4d4)]);
     // the can, by the right arm: an old coffee can, lid long gone, half full of sand gone grey with ash, the butts
     // stubbed out standing up in it, and a few that missed it. (Open tube, its own inside wall and floor: no two
     // surfaces in the same place to fight)
@@ -10078,8 +10085,114 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     const crate = bx(0.33, 0.28, 0.33, new THREE.MeshLambertMaterial({ map: crateTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), 9.45, Y + 0.14, 25.95); crate.rotation.y = 0.3;
     cy(0.033, 0.033, 0.12, lam(0x3d8a3b), 9.42, Y + 0.34, 25.9, 12); cy(0.03, 0.03, 0.006, alum, 9.42, Y + 0.403, 25.9, 12);
     bx(0.11, 0.018, 0.17, lam(0x8a2f6a), 9.52, Y + 0.289, 26.02).rotation.y = 0.8;
-    shade(9.9, 26.4, 0.8, 0.8, 0.55); shade(9.45, 25.95, 0.5, 0.5, 0.3);
-    col(9.35, 10.65, 25.7, 26.85);
+    // ---- a movie up here: a second lawn chair beside the first, and behind them a projector on a box and two milk
+    // crates, the VCR beside it, pointed over their heads at a bedsheet clipped to a length of conduit between a broom
+    // and a mop stood up in crates of tapes, a few metres off. Whatever's in a VCR plays on it (see cineTick): washed
+    // out to almost nothing in the day, the picture after dark, its edges soft and ragged, the sheet's weave and folds
+    // through it, and the beam over your head. Built facing the way the chairs do (-z), from behind them ----
+    lawnChair(9.9 - Math.cos(0.55) * 0.8, 26.4 + Math.sin(0.55) * 0.8, 0.62, [lam(0x2a5fa8), lam(0xf0d34a)]);   // the second: blue and yellow, the same vintage
+    {
+      const k = new THREE.Group(); k.position.set(9.9 - Math.cos(0.55) * 0.4 + Math.sin(0.55) * 0.95, Y, 26.4 + Math.sin(0.55) * 0.4 + Math.cos(0.55) * 0.95); k.rotation.y = 0.58; G.add(k); k.updateMatrixWorld(true);
+      const cardboard = lam(0xb08a5a), crateM = new THREE.MeshLambertMaterial({ map: crateTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), tapeM = lam(0x161616);
+      // the stand: a shipping box of tapes, two crates upside down on it, a few tapes to shim it level; the VCR beside them
+      bx(0.62, 0.42, 0.44, cardboard, 0, 0.21, 0, k); bx(0.62, 0.012, 0.06, lam(0xc9b58c), 0, 0.425, 0, k);   // (the packing tape down its middle)
+      for (const y of [0.56, 0.84]) bx(0.33, 0.28, 0.33, crateM, -0.13, y, 0, k);
+      for (let i = 0; i < 3; i++) bx(0.19, 0.025, 0.105, tapeM, -0.13, 0.993 + i * 0.026, 0, k).rotation.y = (Math.random() - 0.5) * 0.3;
+      const proj = new THREE.Group(); proj.position.set(-0.13, 1.07, 0); k.add(proj);   // the projector: a 90s LCD one, a school's, from somebody's garage
+      const shell = phong(0xcfcabf, 30);
+      bx(0.31, 0.1, 0.25, shell, 0, 0.05, 0, proj); bx(0.29, 0.015, 0.23, lam(0x9a968e), 0, 0.105, 0, proj);
+      for (let i = 0; i < 6; i++) bx(0.004, 0.06, 0.12, dark, 0.157, 0.05, -0.05 + i * 0.02, proj);   // its fan grille
+      cy(0.042, 0.042, 0.05, dark, 0.07, 0.055, -0.14, 16, proj).rotation.x = Math.PI / 2;               // the lens barrel
+      const lens = put(new THREE.CircleGeometry(0.03, 16), new THREE.MeshBasicMaterial({ color: 0x223040 }), 0.07, 0.055, -0.1655, proj); lens.rotation.y = Math.PI;
+      const led = put(new THREE.PlaneGeometry(0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x331a00 }), -0.1, 0.1135, 0.06, proj); led.rotation.x = -Math.PI / 2;
+      const vcr = new THREE.Group(); vcr.position.set(0.17, 0.425, 0.02); vcr.rotation.y = -0.08; k.add(vcr);
+      bx(0.25, 0.085, 0.3, lam(0x1d1d1f), 0, 0.0425, 0, vcr);
+      bx(0.17, 0.022, 0.004, lam(0x050505), -0.02, 0.05, -0.151, vcr);                              // the tape door
+      const vled = put(new THREE.PlaneGeometry(0.05, 0.016), new THREE.MeshBasicMaterial({ color: 0x0a1a10 }), 0.08, 0.05, -0.1515, vcr); vled.rotation.y = Math.PI;
+      const cord = lam(0xd8641c), blk = lam(0x111111);                                                 // the cables: video to the projector, and an orange extension cord off over the parapet
+      stick(V(0.1, 0.47, 0.13), V(-0.02, 0.5, 0.2), 0.006, blk, k); stick(V(-0.02, 0.5, 0.2), V(-0.05, 1.1, 0.17), 0.006, blk, k);
+      { const pts = [[0.2, 0.42, 0.1], [0.3, 0.02, 0.15], [0.55, 0.02, 0.7], [0.75, 0.02, 1.1]].map(([x, y, z]) => k.localToWorld(V(x, y, z)));
+        pts.push(V(10.88, Y + 0.02, pts[3].z + 0.2), V(10.92, Y + PH, pts[3].z + 0.3), V(11.12, Y + PH - 0.04, pts[3].z + 0.3)); for (let i = 0; i < pts.length - 1; i++) stick(pts[i], pts[i + 1], 0.007, cord); }
+      roof.cine = { proj: proj.children.slice(), vcr: vcr.children.slice(), led, vled, lens, on: false };
+      const P = k.localToWorld(V(-0.06, 1.125, -0.17));                                                // the lens, in the world
+      const box = (o, x0, x1, z0, z1) => { const p = [[x0, z0], [x1, z0], [x0, z1], [x1, z1]].map(([x, z]) => o.localToWorld(V(x, 0, z))), xs = p.map(q => q.x), zs = p.map(q => q.z); col(Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)); };
+      box(k, -0.32, 0.32, -0.23, 0.23);                                                                 // (the stand: you walk round it)
+      // the screen, 4.6 m out in front
+      const sc = new THREE.Group(); sc.position.copy(k.localToWorld(V(-0.06, 0, -4.6))).setY(Y); sc.rotation.y = 0.58; G.add(sc); sc.updateMatrixWorld(true);
+      const SW = 1.9, SH = 1.32, TOP = 1.98, wood = lam(0x9a7448), tape = phong(0xb9bcc0, 40);
+      for (const s of [-1, 1]) {
+        bx(0.33, 0.28, 0.33, crateM, s * 1.02, 0.14, 0, sc);                                           // a crate, upside down, a stack of tapes in it to hold it down
+        for (let i = 0; i < 5; i++) bx(0.105, 0.19, 0.025, tapeM, s * 1.02 + (Math.random() - 0.5) * 0.08, 0.1, -0.1 + i * 0.045, sc).rotation.z = (Math.random() - 0.5) * 0.3;
+        stick(V(s * 1.02, 0.05, 0), V(s * 1.02, TOP + 0.08, 0), 0.013, wood, sc);                      // the broom handle / the mop handle, down through the crate
+        for (const y of [0.3, TOP - 0.02]) cy(0.017, 0.017, 0.06, tape, s * 1.02, y, 0, 10, sc);      // duct tape
+      }
+      bx(0.32, 0.07, 0.07, lam(0x7a3a24), -1.02, TOP + 0.12, 0, sc); for (let i = 0; i < 14; i++) bx(0.012, 0.11, 0.05, lam(0xc89a3c), -1.16 + i * 0.021, TOP + 0.2, 0, sc);   // the broom's head, bristles up
+      for (let i = 0; i < 22; i++) { const a = i / 22 * Math.PI * 2, r = 0.03 + Math.random() * 0.05; stick(V(1.02, TOP + 0.08, 0), V(1.02 + Math.cos(a) * r * 2.5, TOP + 0.2 + Math.random() * 0.12, Math.sin(a) * r * 2.5), 0.008, lam(0xa8a49a), sc); }   // the mop's head, strings flopped over
+      stick(V(-1.1, TOP, 0.015), V(1.1, TOP, 0.015), 0.011, galv, sc);                                 // the crossbar: a stick of conduit
+      // the sheet: an old twin flat sheet, cream with a faded stripe, clipped up along the bar, sagging between the clips,
+      // creased from the linen closet, its bottom hem hanging free
+      const sheetTex = makeTexture((c, W, H) => {
+        c.fillStyle = "#e6dfcd"; c.fillRect(0, 0, W, H);
+        for (let x = 0; x < W; x += 2) { c.fillStyle = `rgba(120,110,90,${0.04 + Math.random() * 0.05})`; c.fillRect(x, 0, 1, H); }   // the weave
+        for (let y = 0; y < H; y += 2) { c.fillStyle = `rgba(255,255,255,${0.03 + Math.random() * 0.04})`; c.fillRect(0, y, W, 1); }
+        for (let x = 18; x < W; x += 64) { c.fillStyle = "rgba(150,170,200,0.13)"; c.fillRect(x, 0, 14, H); c.fillStyle = "rgba(200,150,160,0.1)"; c.fillRect(x + 20, 0, 4, H); }   // the stripe, washed out
+        const st = c.createRadialGradient(W * 0.72, H * 0.3, 0, W * 0.72, H * 0.3, 26); st.addColorStop(0, "rgba(160,130,70,0.16)"); st.addColorStop(1, "rgba(160,130,70,0)"); c.fillStyle = st; c.fillRect(0, 0, W, H);   // a stain
+        c.fillStyle = "rgba(0,0,0,0.08)"; c.fillRect(0, H - 10, W, 3);                                 // the hem's stitching
+      }, 512, 512);
+      const geo = new THREE.PlaneGeometry(SW, SH, 48, 34), pa = geo.attributes.position, CLIPS = [-0.93, -0.47, 0, 0.47, 0.93];
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i), y = pa.getY(i), down = (SH / 2 - y) / SH;                                // 0 at the bar, 1 at the hem
+        let gap = 1; for (let j = 0; j < CLIPS.length - 1; j++) if (x >= CLIPS[j] && x <= CLIPS[j + 1]) gap = Math.sin(Math.PI * (x - CLIPS[j]) / (CLIPS[j + 1] - CLIPS[j]));
+        if (x < CLIPS[0] || x > CLIPS.at(-1)) gap = 0.4;
+        const sag = 0.035 * gap * Math.max(0, 1 - down * 5);                                           // droops between the clips, near the top
+        const fold = 0.012 * Math.sin(x * 9 + y * 2.3) + 0.008 * Math.sin(x * 23 - y * 5) + 0.02 * Math.sin(y * 4.4) * Math.sin(x * 2.2 + 0.7)   // creases, a couple of the folds it was stored in
+          + 0.018 * Math.max(0, 1 - Math.abs(y + 0.05) * 30) + 0.014 * Math.max(0, 1 - Math.abs(x - 0.32) * 25);
+        pa.setXYZ(i, x * (1 - 0.01 * down), y - sag, fold + 0.04 * down * down * Math.sin(x * 3.1));   // (the hem lifts a little in the air)
+      }
+      geo.computeVertexNormals();
+      const sheetM = new THREE.MeshLambertMaterial({ map: sheetTex, side: THREE.DoubleSide });
+      const IMG = { y: 0.06, w: 1.56 / SW, h: 1.04 / SH };                                             // the picture on it: 1.56 x 1.04 m (the 3:2 frame), a touch above the middle
+      const cu = roof.cineU = { uVid: { value: videoTex }, uProj: { value: 0 }, uBlue: { value: 1 }, uImg: { value: new THREE.Vector4(0.5, 0.5 + IMG.y / SH, IMG.w, IMG.h) } };
+      sheetM.onBeforeCompile = sh => {
+        THREE.MeshLambertMaterial.prototype.onBeforeCompile(sh);                                   // (the lighting everything gets: see the top of the file)
+        Object.assign(sh.uniforms, cu);
+        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uVid; uniform float uProj, uBlue; uniform vec4 uImg;")
+          .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+          {
+            vec2 pu = (vMapUv - uImg.xy) / uImg.zw + 0.5;                                  // where on the picture this bit of sheet is
+            pu.x = (pu.x - 0.5) / (1.0 + 0.035 * (pu.y - 0.5)) + 0.5;                      // a touch of keystone: it's aimed up a little
+            float n = 0.006 * sin(pu.y * 41.0) + 0.004 * sin(pu.y * 97.0 + 1.7) + 0.005 * sin(pu.x * 57.0 + 0.4);   // the frame's edge, ragged where it lands on the folds
+            float m = smoothstep(-0.012, 0.025, pu.x + n) * (1.0 - smoothstep(0.975, 1.012, pu.x - n)) * smoothstep(-0.012, 0.03, pu.y - n) * (1.0 - smoothstep(0.97, 1.012, pu.y + n));
+            vec2 q = pu - 0.5; float hot = 1.05 - 0.55 * dot(q, q) * 4.0;               // brighter in the middle, falling off to the corners
+            vec3 img = mix(texture2D(uVid, clamp(pu, 0.0, 1.0), 0.6).rgb, vec3(0.06, 0.16, 0.78), uBlue);   // (a little soft: the focus); no tape: the VCR's blue
+            float halo = (1.0 - m) * 0.06 * (1.0 - smoothstep(0.0, 0.12, max(max(-pu.x, pu.x - 1.0), max(-pu.y, pu.y - 1.0))));   // spill past the frame
+            totalEmissiveRadiance += (img * m * hot + vec3(halo)) * uProj * diffuseColor.rgb * 1.15;   // lit on the sheet: its weave and stripe through it
+          }`);
+      };
+      const sheet = put(geo, sheetM, 0, TOP - SH / 2 - 0.01, 0, sc);
+      for (const x of CLIPS) { bx(0.032, 0.03, 0.022, lam(0x101010), x, TOP - 0.018, 0.012, sc); stick(V(x - 0.01, TOP - 0.002, 0.02), V(x - 0.01, TOP + 0.025, 0.02), 0.0015, alum, sc); }   // binder clips
+      shade(sc.position.x, sc.position.z, 2.6, 0.5, 0.58);
+      box(sc, -1.2, 1.2, -0.2, 0.2);
+      // the beam: the frustum from the lens to the frame's corners, a faint haze, brightest by the lens; only shows after dark
+      const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => sc.localToWorld(V(sx * 0.78, TOP - SH / 2 - 0.01 + IMG.y + sy * 0.52, 0.02)));
+      const lensPts = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => V(P.x + sx * 0.02, P.y + sy * 0.015, P.z));
+      const pos = [], along = [], across = [];
+      for (let i = 0; i < 4; i++) {
+        const j = (i + 1) % 4, a = lensPts[i], b = lensPts[j], c = corners[j], d = corners[i];
+        for (const [p, al, ac] of [[a, 0, 0], [b, 0, 1], [c, 1, 1], [a, 0, 0], [c, 1, 1], [d, 1, 0]]) { pos.push(p.x, p.y, p.z); along.push(al); across.push(ac); }
+      }
+      const bg = new THREE.BufferGeometry(); bg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); bg.setAttribute("aAlong", new THREE.Float32BufferAttribute(along, 1)); bg.setAttribute("aAcross", new THREE.Float32BufferAttribute(across, 1));
+      const bu = roof.cineBeamU = { uK: { value: 0 }, uCol: { value: new THREE.Color(1, 1, 1) }, uT: { value: 0 } };
+      const beam = new THREE.Mesh(bg, new THREE.ShaderMaterial({ uniforms: bu, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        vertexShader: `attribute float aAlong, aAcross; varying float vA, vX; void main() { vA = aAlong; vX = aAcross; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        fragmentShader: `uniform float uK, uT; uniform vec3 uCol; varying float vA, vX;
+          void main() { float rays = 0.75 + 0.25 * sin(vX * 47.0 + sin(vX * 13.0) * 2.0) * sin(vX * 19.0 + uT * 0.3);
+            float a = uK * rays * (0.15 + 0.85 * pow(1.0 - vA, 2.2)) * smoothstep(0.0, 0.04, vA) * (1.0 - smoothstep(0.9, 1.0, vA));
+            gl_FragColor = vec4(uCol * a, 1.0); }` }));
+      beam.frustumCulled = false; G.add(beam); roof.cine.beam = beam; roof.cine.sheet = sheet;
+    }
+    shade(9.9, 26.4, 0.8, 0.8, 0.55); shade(9.45, 25.95, 0.5, 0.5, 0.3); shade(9.9 - Math.cos(0.55) * 0.8, 26.4 + Math.sin(0.55) * 0.8, 0.8, 0.8, 0.62);
+    col(9.35, 10.65, 25.7, 26.85); col(8.95, 9.65, 26.5, 27.25);
   }
   // things that ended up up here over the years and nobody came for
   {
@@ -10116,7 +10229,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     roof.smoke = { pts, geo, sm, p: [], acc: 0, at: V(fx, ph + 2.2, fz) };
   }
 }
-let aimRoofLadder = false, aimGolf = false;
+let aimRoofLadder = false, aimGolf = false, aimCine = null;   // aimCine: "vcr" | "proj", the movie setup up top
 // ---------------- golf on the roof ----------------
 // A chipped square of fake turf out on the deck with a tee in it and a club lying beside it. E on either: golf. You're
 // at address (the camera behind the ball, looking down the line); A/D walk you round the ball to aim, W/S slide the club
@@ -10439,7 +10552,20 @@ function roofClimb(dir) {                          // up (1) or down (-1) the cl
   player.yaw = 0;                                   // facing the rungs (south), up or down
 }
 const PUDDLE_DARK = new THREE.Color(0x24282e), PUDDLE_GREY = new THREE.Color(0xb4b8bc);   // (a puddle: the sky, darkened by the water and what's under it)
+function cineTick(dt) {                           // the movie on the roof: the projector's picture on the sheet, washed out by daylight, and its beam after dark
+  const C = roof.cine; if (!C || !roof.g.visible) return;
+  const on = C.on, day = Math.max(0, Math.min(1, tod.level));
+  roof.cineU.uProj.value = on ? 0.06 + 0.9 * (1 - day) ** 1.5 : 0;   // (in the sun it's barely there; after dark it's the picture)
+  roof.cineU.uBlue.value = playing ? 0 : 1;
+  const z = TVU.uTvZoneC.value, col = roof.cineBeamU.uCol.value;   // the beam takes the picture's colour (the TV light's 3x3 average)
+  if (playing) { let r = 0, g = 0, b = 0; for (let i = 0; i < 27; i += 3) { r += z[i]; g += z[i + 1]; b += z[i + 2]; } const m = Math.max(r, g, b, 0.01); col.setRGB(0.55 + 0.45 * r / m, 0.55 + 0.45 * g / m, 0.55 + 0.45 * b / m); }
+  else col.setRGB(0.5, 0.6, 1);
+  roof.cineBeamU.uK.value = on ? 0.035 * (1 - day) ** 2 : 0; roof.cineBeamU.uT.value += dt; C.beam.visible = on && day < 0.9;
+  C.lens.material.color.setHex(on ? (playing ? 0xfff6e0 : 0x8fa8ff) : 0x223040); C.led.material.color.setHex(on ? 0x2bff6a : 0xff7a1a);
+  C.vled.material.color.setHex(playing ? (video.paused ? 0xffb020 : 0x3dff8a) : 0x0a1a10);
+}
 function roofTick(dt) {
+  cineTick(dt);
   const R = roof, mo = shiftDate().getMonth(), h = shift.h;
   R.lidA += ((player.onRoof || R.climb ? 1.45 : 0) - R.lidA) * Math.min(1, dt * 2.5); R.lid.rotation.x = -R.lidA;
   if (R.bulb) R.bulb.color.setHex(tod.level < 0.5 ? 0xffe2a8 : 0x4a4a44);
@@ -11316,6 +11442,8 @@ function onE() {
   if (golf.on) { if (golf.st === "idle") golfEnd(); return; }
   if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
   if (aimGolf) { golfStart(); return; }
+  if (aimCine === "proj") { roof.cine.on = !roof.cine.on; return; }
+  if (aimCine === "vcr") { vcrUse(); if (playing) roof.cine.on = true; return; }   // (a tape in: the projector comes on with it)
   if (player.onRoof) return;
   if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
@@ -11391,22 +11519,22 @@ function onE() {
     held.fromReturns = held.strayFix = false; returnBin.push(held); releaseFromHand(); refreshReturnsBin();
     return;
   }
-  if (aimTV) {                               // must actually be looking at the screen
-    if (held) {
-      const tape = held, old = playing?.tape;
-      playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to (the episode — archive.org can't seek)
-      releaseFromHand();                     // the tape leaves your hand...
-      showTableBox(tape);                    // ...and its case lands on the coffee table
-      if (old) {                             // swap: the tape that was in the VCR comes out into your inventory
-        if (invMakeRoom()) showTape(old); else { returnBin.push(old); refreshReturnsBin(); }   // (9 items already: Returns)
-      }
-    }
-    else if (playing) eject();
-    return;
-  }
+  if (aimTV) { vcrUse(); return; }           // must actually be looking at the screen
   if (biteAnim > 0) return;                  // still mid-bite: finish chewing first
   if (heldPopcorn) eatPopcorn();             // nothing else aimed: E eats a handful (or the single piece)
   else if (heldSnack) consumeSnack();        // ...or a bite / sip of whatever snack or drink you're holding
+}
+function vcrUse() {                          // E on the TV or a VCR (the store's, the theater's, the roof's: one tape, every screen)
+  if (held) {
+    const tape = held, old = playing?.tape;
+    playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to (the episode — archive.org can't seek)
+    releaseFromHand();                     // the tape leaves your hand...
+    showTableBox(tape);                    // ...and its case lands on the coffee table
+    if (old) {                             // swap: the tape that was in the VCR comes out into your inventory
+      if (invMakeRoom()) showTape(old); else { returnBin.push(old); refreshReturnsBin(); }   // (9 items already: Returns)
+    }
+  }
+  else if (playing) eject();
 }
 // TV light colors: every 150ms the screen canvas (already cropped,
 // letterboxed and filtered — exactly what's on the glass) is shrunk to 24x18
