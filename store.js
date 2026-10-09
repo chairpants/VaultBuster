@@ -8691,6 +8691,7 @@ function pickHover() {
     const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
     if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
     aimMove = aim && aim.distance < 2.4 && aim.object.userData.movable || null;   // (a rewinder, the pad, the printer: hold E to move it)
+    cmRent.aim = !!aim?.object.userData.cmRentDrop && aim.distance < 2;
     if (aim?.object.userData.pickup && aim.distance < 2) aimPickup = aim.object.userData.pickup;
     else if (aim?.object.userData.combo && aim.distance < 1.6) cm.comboOf = aim.object.userData.combo;
     else if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
@@ -12232,6 +12233,7 @@ function cmPay(e) {                               // E on whoever's on the regis
     cm.tab && `${cmMoney(cm.tab)} for what you'd already eaten`, cm.owed && `${cmMoney(cm.owed)} in late fees`].filter(Boolean).join(", ");
   const wasRegular = cmRegular();
   cm.day.spent += total; cm.day.rented += tapes.length; cm.day.fees += cm.owed;
+  cmRentAtRegister(e);
   cm.tab = cm.owed = 0; cm.trust = Math.min(100, cm.trust + 4 + tapes.length);
   posBeep(1900); setTimeout(() => posBeep(1500), 120); e.c?.setMood("happy");
   toast(`${e.first} rings you up: ${cmMoney(total)}${wasRegular ? " (regular's discount)" : ""}. "${took ? (cm.rec.by === e.first ? "Ooh, good choice. Told you!" : `${cm.rec.by} told you about that one, huh?`) : "Thanks! Be kind, rewind."}"`, true);
@@ -12414,6 +12416,87 @@ function cmTermKey(e) {                           // -> true if the terminal too
   return true;
 }
 
+// ---- customer mode: rentals, from your side of the counter. What you take home gets watched (two tapes a night,
+// each wound on to its end: bring it back like that and it's a dollar to rewind it, so use the rewinders on the
+// counter first). A night drop out front for when they're shut or you'd rather not go in (before ten, it counts as
+// the day before). Anything overdue, the store calls the house about, and the clerk brings it up as you pay ----
+const CM_RENT = { late: 1, rewind: 1, nightly: 2, drop: { x: -2.75, z: -0.4 } };   // $ a day late; $ to rewind one for you; tapes you get through a night; the drop box, on the walk left of the doors
+const cmRent = { aim: false };
+cm.rent = { rw: 0 };                              // (saved) rewind fees on your account, not paid yet
+function cmRentReturn(c, due) {                  // a rental back (the returns slot, the night drop, its shelf): late fees, and was it rewound
+  if (!cm.owed) cm.rent.rw = 0;                  // (paid off or waived since)
+  cm.rented.delete(c); cm.day.returned++;
+  const late = due > 0 ? Math.max(0, shift.day - due) : 0;
+  if (late) cm.owed += late * CM_RENT.late;
+  cmLog(`Returned ${c.title}${late ? ` · ${late} day${late > 1 ? "s" : ""} late (${cmMoney(late * CM_RENT.late)} owed)` : ""}`);
+  if (isRewound(c) || !due) return;              // (one you walked out with: nobody's charging you for anything)
+  cm.owed += CM_RENT.rewind; cm.rent.rw++; cm.day.rwFees = (cm.day.rwFees || 0) + CM_RENT.rewind;
+  const by = cm.inside && !afterClose() && staff.find(e => e.c && !e.leaving);
+  if (by) { by.c.setMood("meh"); toast(`${by.first}: "Aw, ${c.title}'s not rewound. That's ${cmMoney(CM_RENT.rewind)}, sorry. The rewinders are right there on the counter!"`); }
+  cmLog(`Rewind fee: ${c.title} came back not rewound (${cmMoney(CM_RENT.rewind)} owed)`, "bad");
+}
+// the night drop: a steel box on the walk, the store's blue, a pull-down chute up top. It empties into the returns tote
+function cmRentBuild() {
+  const { x, z } = CM_RENT.drop, g = new THREE.Group(); g.position.set(x, 0, z); scene.add(g);
+  const blue = new THREE.MeshLambertMaterial({ color: 0x1b3fa0 }), steel = new THREE.MeshPhongMaterial({ color: 0xaab2ba, specular: 0xffffff, shininess: 60 }), dark = new THREE.MeshLambertMaterial({ color: 0x15171a });
+  const add = (o, px, py, pz) => { o.position.set(px, py, pz); o.layers.set(EXTERIOR_LAYER); g.add(o); return o; }, bx = (w, h, d, m, px, py, pz) => add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m), px, py, pz);
+  bx(0.56, 0.84, 0.42, blue, 0, 0.48, 0);                                                     // the body, up on its feet
+  add(new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.21, 0.56, 20, 1, false, 0, Math.PI), blue), 0, 0.9, 0).rotation.z = Math.PI / 2;   // the rounded top, like a mailbox
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) bx(0.05, 0.06, 0.05, dark, sx * 0.24, 0.03, sz * 0.17);
+  bx(0.4, 0.13, 0.012, dark, 0, 0.8, -0.212);                                                 // the chute
+  bx(0.38, 0.11, 0.02, steel, 0, 0.8, -0.224);                                                // its flap
+  const bar = add(new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.26, 10), steel), 0, 0.765, -0.25); bar.rotation.z = Math.PI / 2;   // the pull
+  for (const [text, w, h, y, fg, bg] of [["VIDEO RETURNS", 0.48, 0.12, 0.6, "#ffd400", "#00349c"], ["NIGHT DROP · BE KIND, REWIND", 0.48, 0.06, 0.47, "#00349c", "#f2f2ee"]]) {
+    const p = textPlane(text, w, h, fg, bg); p.material = new THREE.MeshLambertMaterial({ map: p.material.map }); add(p, 0, y, -0.212).rotation.y = Math.PI;
+  }
+  colliders.push({ x0: x - 0.3, x1: x + 0.3, z0: z - 0.23, z1: z + 0.23 });
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.15, 0.46), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(x, 0.57, z); hit.userData.cmRentDrop = true; scene.add(hit); aimables.push(hit);
+}
+if (CUSTOMER) cmRentBuild();
+const cmRentAiming = () => cmRent.aim && player.z < 0 && Math.hypot(player.x - CM_RENT.drop.x, player.z - CM_RENT.drop.z) < 2.2;
+const cmRentTip = () => `${held ? `E — drop ${held.title} down the chute` : "The night drop"}<div class="cat">video returns${shift.h < SHIFT.open ? " · before 10 AM, it counts as yesterday" : ""}</div>`;
+function cmRentDrop() {                           // E at the night drop: the tape in hand, down the chute (anything else, no)
+  const c = held; if (!c) return toast(heldSnack || heldPopcorn || heldItem ? "Tapes only. It's not a trash can" : "Tapes go down the chute: take one in hand");
+  const due = cm.rented.get(c);
+  if (due > 0 && shift.h < SHIFT.open && shift.day > due) cm.rented.set(c, due + 1);   // before they've opened: last night's
+  c.fromReturns = c.strayFix = false; returnBin.push(c); releaseFromHand(); refreshReturnsBin(); invSync();
+  const at = new THREE.Vector3(CM_RENT.drop.x, 0.8, CM_RENT.drop.z); golfSnd("clank", at, 0.5); setTimeout(() => golfSnd("thud", at, 0.6), 300);
+  toast(`Down the chute: ${c.title}. Clunk`, true);
+  if (cm.rented.has(c)) cmRentReturn(c, cm.rented.get(c));   // (checked in now: nobody's waiting on the slot to notice)
+}
+function cmRentAtRegister(e) {                    // as you pay: what the fees were for, and what's still out that oughtn't be
+  const rw = cm.owed ? Math.min(cm.rent.rw, Math.floor(cm.owed / CM_RENT.rewind + 1e-9)) : 0; cm.rent.rw = 0;
+  const late = [...cm.rented].filter(([, due]) => due > 0 && shift.day > due);
+  const say = [rw && `${cmMoney(rw * CM_RENT.rewind)} of that's for rewinding. Be kind, rewind!`,
+    late.length && `And ${late.length === 1 ? `${late[0][0].title} is` : `${late.length} of your tapes are`} still out. That's ${cmMoney(CM_RENT.late)} a day till it's back.`].filter(Boolean);
+  if (say.length) setTimeout(() => toast(`${e.first}: "${say.join(" ")}"`, true), 2800);
+}
+function cmRentMorning() {                        // the morning after: what you got through last night, and the answering machine
+  const home = inv.filter(e => e.kind === "tape" && cm.rented.has(e.ref)).map(e => e.ref), watched = [];
+  for (const c of home) {
+    if (watched.length >= CM_RENT.nightly) break;
+    if (windFrac(c) > 0.97) continue;            // still at its end from last time: you'd have had to rewind it
+    const n = c.seasons[0].episodes.length; setWindFrac(c, n > 1 ? windFrac(c) + 3 / n : 1); watched.push(c);   // a movie, start to finish; a show, three episodes on
+  }
+  cm.day.watched = watched.map(c => c.title);
+  for (const c of watched) {
+    const pick = cm.rec?.done && cm.rec.title === titleOfCopy(c);
+    if (pick) cm.trust = Math.min(100, cm.trust + 2);
+    cmLog(pick ? `Watched ${cm.rec.by}'s pick last night, ${c.title}. They were right` : `Watched ${c.title} last night`, "good");
+  }
+  if (home.length > watched.length) cmLog(`Didn't get to ${home.filter(c => !watched.includes(c)).map(c => c.title).join(", ")}`);
+  const late = [...cm.rented].filter(([, due]) => due > 0 && shift.day > due), today = [...cm.rented].filter(([, due]) => due === shift.day);
+  const fees = late.reduce((a, [, due]) => a + (shift.day - due) * CM_RENT.late, 0);
+  if (late.length) cmLog(`A message on the machine at home: "Hi, this is VaultBuster Video calling about ${late.map(([c]) => c.title).join(" and ")}. ${late.length === 1 ? "It was" : "They were"} due back day ${Math.min(...late.map(([, d]) => d))}. That's ${cmMoney(fees)} in late fees so far, and a dollar a day. Thanks!"`, "bad");
+  const say = [watched.length && `Last night: ${watched.map(c => c.title).join(" and ")}`, late.length && `A message on the machine: ${late.length === 1 ? "a tape's" : `${late.length} tapes are`} overdue`, today.length && `Due back today: ${today.map(([c]) => c.title).join(", ")}`].filter(Boolean);
+  if (say.length) shift.greet += `. ${say.join(". ")}`;
+}
+function cmRentSlip(row, line, W) {               // the day slip's lines for it
+  const d = cm.day, out = [...(d.returned ? [row("TAPES RETURNED", d.returned)] : []), ...(d.rwFees ? [row("  REWIND FEES", cmMoney(d.rwFees))] : []),
+    ...(d.watched?.length ? ["WATCHED LAST NIGHT", ...d.watched.map(n => "  " + n.toUpperCase().slice(0, W - 2))] : [])];
+  return out.length ? [...out, line] : [];
+}
+
 // ---- the day: in off the lot just before ten; whoever opened unlocks at ten; at midnight they want you out,
 // and once you're out, the day's slip (what you spent, found, got away with) and home ----
 function cmMorning() {
@@ -12428,6 +12511,7 @@ function cmMorning() {
   cmPutAt(CM_LOT); gateLastZ = player.z; cm.inside = false;
   cmMoneyDrop(); cm.watchT = 0; cm.watched = false; cmFeature();
   shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. The store opens at 10. You've got ${cmMoney(cm.wallet)} on you`;
+  cmRentMorning();
 }
 function cmOpenUp() {
   if (!frontLock.locked) return;
@@ -12447,6 +12531,7 @@ function cmSlip() {                               // the end of your day, on the
     "YOUR DAY".padStart(21), `${WEEKDAYS[shiftDate().getDay()]} · DAY ${shift.day}`.padStart(22), "",
     row("SPENT AT THE STORE", cmMoney(d.spent)), row("  INCL. LATE FEES", cmMoney(d.fees)), row("MONEY FOUND", cmMoney(d.found)), row("IN YOUR WALLET", cmMoney(cm.wallet)), line,
     row("TAPES RENTED", d.rented), row("TAPES OUT", cm.rented.size), ...(late ? [row("  DUE BACK BY TOMORROW", late)] : []), ...(cm.owed ? [row("LATE FEES OWED", cmMoney(cm.owed))] : []), line,
+    ...cmRentSlip(row, line, W),
     row("WALKED OUT WITH", d.stolen ? `${d.stolen} THING${d.stolen > 1 ? "S" : ""}` : "NOTHING"), row("CAUGHT", d.caught ? `${d.caught} TIME${d.caught > 1 ? "S" : ""}` : "NEVER"),
     row("THE STAFF THINK YOU'RE", cm.trust >= 60 ? "A REGULAR" : cm.trust >= 25 ? "FRIENDLY" : "A NEW FACE"), line,
     ...(() => { const home = inv.filter(e => e.kind === "tape" && cm.rented.has(e.ref)).map(e => e.ref.title); return home.length ? ["TAKING HOME TONIGHT", ...home.map(n => "  " + n.toUpperCase().slice(0, W - 2))] : []; })(),
@@ -12505,12 +12590,7 @@ function cmTick(dt) {
     cm.checkT = 0.5;
     for (const e of cm.invWas) if (!inv.includes(e) && !cmPaid(e) && e.kind !== "tape" && inside && !(e.kind === "snack" && e.ref.visible)) cm.tab += cmPrice(e);
     cm.invWas = [...inv]; cmSpentTick();
-    for (const [c, due] of cm.rented) if (returnBin.includes(c) || !c.offShelf) {
-      cm.rented.delete(c); cm.day.returned++;
-      const late = due > 0 ? Math.max(0, shift.day - due) : 0;
-      if (late) cm.owed += late;
-      cmLog(`Returned ${c.title}${late ? ` · ${late} day${late > 1 ? "s" : ""} late (${cmMoney(late)} owed)` : ""}`);
-    }
+    for (const [c, due] of cm.rented) if (returnBin.includes(c) || !c.offShelf) cmRentReturn(c, due);
     for (const u of cm.paidUnits) if (!inv.some(e => e.ref === u)) { delete u.userData.paid; cm.paidUnits.delete(u); }   // (gone: the next one on that spot is the store's)
   }
   // the roof: as far as it goes, for now
@@ -12539,6 +12619,7 @@ function cmHud() {
 function cmE() {                                  // E, as a customer: what's different. -> true if handled
   if (cm.term) { cmTermClose(); return true; }
   if (aimPickup) { cmPickUp(aimPickup); return true; }
+  if (cmRentAiming()) { cmRentDrop(); return true; }
   if (cm.comboOf) {
     if (!comboDone(cm.comboOf)) toast("Type the combination on the number keys");
     else if (comboLeft(cm.comboOf)) cmTakeFrom(cm.comboOf);
@@ -12570,6 +12651,7 @@ function cmE() {                                  // E, as a customer: what's di
 function cmTip() {                                // the hover tip, as a customer -> html, or null for the usual
   if (aimPickup) return aimPickup.search ? `E — search ${aimPickup.search}` : aimPickup.mesh === "bill" ? "E — pick it up<div class=\"cat\">money on the floor</div>" : `E — take it<div class="cat">${ITEMS[aimPickup.gives.item].about}</div>`;
   if (cm.comboOf) return comboTip(cm.comboOf);
+  if (cmRentAiming()) return cmRentTip();
   if (aimEmp) { const p = aimEmp.c?.group.position, n = cmUnpaid().length + (cm.tab || cm.owed ? 1 : 0);
     const at = p && cmBehindCounter(p.x, p.z);
     return `${aimEmp.first}<div class="cat">${at && n ? "E — pay for what you've got" : cmRegular() ? "knows you by now" : "on staff"}</div>`
@@ -12599,6 +12681,7 @@ function cmSave() {
   const units = snackUnits();
   return { wallet: +cm.wallet.toFixed(2), owed: cm.owed, tab: +cm.tab.toFixed(2), strikes: cm.strikes, today: cm.today, banned: cm.banned, goal: cm.goal, found: [...cm.found],
     trust: cm.trust, seed: cm.seed, loggedIn: cm.loggedIn, pinTries: cm.pinTries, termLock: cm.termLock, tookCash: cm.tookCash, short: cm.short, rec: cm.rec && { title: copyKey(cm.rec.title), by: cm.rec.by, day: cm.rec.day, done: cm.rec.done }, teed: cm.teed, card: cm.card, alert: cm.alert, alertDone: cm.alertDone, nagged: cm.nagged, wary: [...cm.wary], ticket: cm.ticket, watchT: Math.round(cm.watchT), watched: cm.watched, hatch: cm.hatch, searched: [...cm.searched], day: cm.day,
+    rent: cm.rent,
     rented: Object.fromEntries([...cm.rented].map(([c, due]) => [copyKey(c), due])), paid: [...cm.paidUnits].map(u => units.indexOf(u)).filter(i => i >= 0) };
 }
 function cmLoad(S) {
@@ -12608,6 +12691,7 @@ function cmLoad(S) {
     for (const id of S.found || []) cm.found.add(id);
     for (const id of S.searched || []) cm.searched.add(id);
     for (const [k, due] of Object.entries(S.rented || {})) { const c = copyByKey(k); if (c) cm.rented.set(c, due); }
+    Object.assign(cm.rent, S.rent);
     const units = snackUnits(); for (const i of S.paid || []) if (units[i]) { units[i].userData.paid = true; cm.paidUnits.add(units[i]); }
   }
   for (const e of inv) if (e.kind === "item") cm.found.add(e.ref.id);   // (whatever's in your pockets, you've found)
@@ -13048,4 +13132,5 @@ window.__t = { cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, inv
   stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, drunkFumble, drunkPuke, drunkOut, golf, golfStart, golfEnd, golfMouse, golfStrike, golfTee, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
+  cmRentReturn, cmRentDrop, cmRentMorning, cmRentAtRegister, cmRentSlip, cmRentAiming, CM_RENT, cmRent, windFrac, setWindFrac, isRewound, releaseFromHand, showTape
 };
