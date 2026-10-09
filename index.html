@@ -104,6 +104,17 @@
   #titleScreen.paused { background: rgba(3, 10, 30, .55); backdrop-filter: blur(1px); }
 
   /* ---------- HUD ---------- */
+  /* customer mode: somewhere staff only, and whether you've been seen (the bar: how close they are to calling you on it) */
+  #sneak { position: fixed; z-index: 10; left: 50%; top: 14px; transform: translateX(-50%); display: none; text-align: center; pointer-events: none;
+    color: #cfe0ff; font: bold 12px Verdana, sans-serif; letter-spacing: 2px; text-shadow: 0 1px 2px #000, 0 0 6px #000c; }
+  #sneak i { display: block; width: 180px; height: 5px; margin: 5px auto 0; border-radius: 3px; background: linear-gradient(to right, #ff5a4a var(--h, 0%), #ffffff30 var(--h, 0%)); }
+  #sneak.seen { color: #ff8a7a; }
+  #notePaper { position: fixed; z-index: 11; right: 18px; bottom: 90px; display: none; white-space: pre-wrap; pointer-events: none; max-width: 300px;
+    padding: 14px 18px; background: repeating-linear-gradient(#f6f2e4 0 21px, #a9bedc 21px 22px); color: #1d2a6b; transform: rotate(-1.5deg);
+    font: 15px/22px "Comic Sans MS", "Bradley Hand", cursive; box-shadow: 0 6px 20px #000a; }
+  #cmTerm { position: fixed; z-index: 12; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; margin: 0; padding: 18px 22px; min-width: 360px;
+    background: #031a06; color: #5cff7a; border: 3px solid #2a2a2a; border-radius: 6px; font: 15px/1.45 "Courier New", monospace; text-shadow: 0 0 6px #2bff5a88; box-shadow: 0 0 40px #000c; }
+  #fade { position: fixed; inset: 0; z-index: 25; background: #000; opacity: 0; pointer-events: none; transition: opacity .4s; }
   #crosshair { position: fixed; z-index: 10; left: 50%; top: 50%; width: 6px; height: 6px;
     margin: -3px; border-radius: 50%; background: var(--bb-yellow); box-shadow: 0 0 4px #000;
     pointer-events: none; transition: opacity .5s; }
@@ -317,6 +328,10 @@
 </div>
 
 <div id="crosshair" hidden></div>
+<div id="sneak"><span></span><i></i></div>
+<div id="fade"></div>
+<div id="notePaper"></div>
+<pre id="cmTerm"></pre>
 <div id="hoverTip"></div>
 <div id="holdingTag"><div class="h">HOLDING</div><div id="holdingName"></div></div>
 <div id="checkoutTag"></div>
