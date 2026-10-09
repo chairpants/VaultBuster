@@ -5887,7 +5887,7 @@ addEventListener("keydown", e => {
   if (posTerm?.isOpen()) { posEsc = e.key === "Escape"; return posTerm.key(e); }   // typing at the register: no walking, no hotkeys
   if (shift.report) { if (["Enter", "Space", "KeyE"].includes(e.code) && !e.repeat) nextShift(); return; }   // the end-of-shift slip
   if (board.open) { if (document.pointerLockElement === canvas) boardKey(e); return; }   // arranging the staff's jobs
-  if (e.code === "KeyK" && !e.repeat && document.pointerLockElement === canvas) { sheetToggle(); return; }   // the skills sheet
+  if (e.code === "KeyK" && !e.repeat && document.pointerLockElement === canvas && !(CUSTOMER && cm.term)) { sheetToggle(); return; }   // the skills sheet (not at the register terminal: K takes the key there)
   if (document.pointerLockElement !== canvas) {   // paused / title screen: only the window-level keys
     if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
     return;
