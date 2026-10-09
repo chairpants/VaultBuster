@@ -4,6 +4,8 @@
 // Classic script (not a module) so it also runs from a file:// page;
 // index.html's inline module sets window.THREE / window.mergeGeometries first.
 const artUrl = a => (window.VAULT_ART && window.VAULT_ART[a]) || a;  // embedded covers when file://
+const loads = { n: 0, done: 0 };                   // images asked for / landed (or failed), for the loading bar (see boot)
+{ const m = THREE.DefaultLoadingManager, s = m.itemStart, e = m.itemEnd; m.itemStart = u => { loads.n++; s(u); }; m.itemEnd = u => { loads.done++; e(u); }; }
 
 // ---------------- palette / constants ----------------
 const BLUE = 0x00349c, BLUE_DK = 0x001f5c, YELLOW = 0xffd400;
@@ -11143,7 +11145,6 @@ function titleMenu() {
   tv.oninput = () => { tvSet.volume = +tv.value; tvV.textContent = `${tvSet.volume}%`; applyTv(); };   // (the same setting as the TV's own picture menu)
   $("mmSettingsBtn").onclick = () => { tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`; show("settings"); };
   $("mmSettingsBack").onclick = () => show("main");
-  $("enterHint").style.display = "none"; $("mainMenu").hidden = false;
 }
 let relockOnInput = false;                        // backed out with Escape: the next click or key (not Escape) takes the mouse back
 function backToStore() { relockOnInput = true; keys.clear(); $("crosshair").hidden = true; toast("Click or press any key to get back in", true); }
@@ -11563,6 +11564,31 @@ function ambTalkers() {                         // who's talking right now, for 
   return { at: t.slice(0, 6).map(p => ({ x: p.x, z: p.z })), crowd: custs.filter(k => k.c && k.c.group.position.z > 0.3).length };
 }
 let pausedDrawAt = 0, onFeetT = 0;
+// ---- loading: nothing's drawn till the store's ready. The covers come in first, unseen (each lands in a shared
+// atlas, and an atlas goes to the GPU whole every time one does: drawn as they trickled in, that was a run of slow
+// frames). Then, once the lights have settled (a light that's off drops out of the scene after a second, and a change in
+// how many there are recompiles every lit material), every shader's compiled and every texture's sent up, with every
+// room shown for it and a couple of customers stood in, and one frame's drawn through the bloom. Then the menu.
+// (Before, all that happened in your first seconds in the store) ----
+let booted = false;
+async function boot() {
+  const hint = $("enterHint"), frame = () => new Promise(r => requestAnimationFrame(r));
+  const bar = (p, what = "LOADING") => { hint.firstChild.textContent = `${what}… ${Math.round(p * 100)}%`; hint.style.setProperty("--p", `${(p * 100).toFixed(1)}%`); };
+  const t0 = performance.now();
+  while ((loads.done < loads.n || performance.now() - t0 < 1500) && performance.now() - t0 < 20000) { bar(0.8 * loads.done / Math.max(1, loads.n)); await frame(); }   // (capped: a slow or missing image doesn't keep the doors shut)
+  bar(0.8, "WARMING UP"); await frame();
+  const showAll = () => { const s = [...Object.values(roomGroups), roof.g].filter(g => !g.visible); s.forEach(g => g.visible = true); scene.updateMatrixWorld(); return () => s.forEach(g => g.visible = false); };   // (regionTick puts it back each frame anyway)
+  const stand = [true, false].map((f, i) => { const c = VaultCustomers.build(VaultCustomers.randomOutfit(seeded(7 + i), f)); c.group.position.set(player.x + i - 0.5, 0, player.z - 2); c.tick(0.016, 0); scene.add(c.group); return c; });
+  cullDarkLights(2);                            // (the lights that are off drop out now, not a second into the menu: the frames here are slow and short-stepped)
+  let hide = showAll(); const compiled = renderer.compileAsync(scene, camera); hide();   // (it picks its objects up straight away; the waiting's the GPU's)
+  await compiled;
+  const texs = new Set(); scene.traverse(o => { if (o.material) for (const m of [o.material].flat()) for (const v of Object.values(m)) if (v?.isTexture) texs.add(v); });
+  let i = 0; for (const t of texs) { renderer.initTexture(t); if (++i % 16 === 0) { bar(0.85 + 0.13 * i / texs.size, "WARMING UP"); await frame(); } }
+  hide = showAll(); renderWithBloom(); hide();
+  stand.forEach(c => { scene.remove(c.group); c.dispose(); });
+  booted = true; hint.style.display = "none"; $("mainMenu").hidden = false;
+}
+boot();
 renderer.setAnimationLoop(() => {
   if (paused) {                                 // (the store sounds fade out; the frame just sits there, so it's redrawn 4 times a second, not 60)
     clock.getDelta(); ambTick(0);
@@ -11739,7 +11765,7 @@ renderer.setAnimationLoop(() => {
   regionTick();
   cullDarkLights(dt);
   ambTick(dt);
-  const handBack = meHandFollow(); renderWithBloom(); handBack?.();
+  if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
 window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
