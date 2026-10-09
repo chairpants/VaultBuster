@@ -10094,7 +10094,7 @@ let aimRoofLadder = false, aimGolf = false;
 // run out and it's a mishit, low and sliced, worse off the heel. Off the toe or heel costs distance and bends it too.
 // The ball flies (gravity, drag, backspin's lift, sidespin bending it), bounces off the parapets and the deck, comes
 // down out in the world and rolls out, and you get the yardage; then there's another ball on the tee. E or right-click: done
-const GOLF = { x: 5.5, z: 12, R: 0.0214, SWEET: 0.08, PURE: 0.015, CLUB: 1.0, MAX: 32 };   // the tee; ball radius; the meter's mark and how close is pure; club length; how far out it can get (the treeline over the road)
+const GOLF = { x: 5.5, z: 12, R: 0.0214, SWEET: 0.08, PURE: 0.015, CLUB: 1.0, MAX: 48 };   // the tee; ball radius; the meter's mark and how close is pure; club length; how far out it can get (just past the treeline over the road)
 const golf = { on: false, aim: 0, c: 0, st: "idle", pow: 0, peak: 0, line: 0, theta: 0, th0: 0, t: 0, hit: null, v: new THREE.Vector3(), spin: 0, lift: 0,
   carry: null, rolled: false, cam: new THREE.Vector3(), parts: [], ball: null, club: null, lie: null, trail: null, n: 0 };
 const golfTee = new THREE.Vector3(GOLF.x, ROOF.y + 0.055 + GOLF.R, GOLF.z);   // the ball, sat on the tee
@@ -10152,10 +10152,10 @@ function golfMouse(down, button) {
   else if (!down && golf.st === "power") { if (golf.pow < 0.04) golf.st = "idle"; else { golf.peak = golf.line = golf.pow; golf.st = "back"; } }
   else if (down && golf.st === "back") golfStrike(golf.line);
 }
-function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. A chip: full power carries ~24 m, ~3 m over the deck (out front: the road)
+function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. Full power, pure: carries ~38 m, ~6 m over the deck. The strike point lofts it: W (toe) up to ~9 m and shorter, S (heel) a low runner (still clearing the parapet)
   const e0 = at == null ? null : at - GOLF.SWEET, e = e0 != null && Math.abs(e0) <= GOLF.PURE ? 0 : e0, c = golf.c;
-  let ang = 0, spin = -c * 1.5, speed = 14 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.55, what = [];
-  if (e == null) { speed *= 0.6; elev = 0.3; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
+  let ang = 0, spin = -c * 1.5, speed = 18 * golf.peak * (1 - 0.15 * Math.abs(c)), elev = 0.6 + c * (c > 0 ? 0.4 : 0.25), what = [];
+  if (e == null) { speed *= 0.6; elev = 0.3 + c * 0.1; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
   else if (e > 0) { speed *= 1 - Math.min(0.3, e * 0.8); ang = -Math.min(0.12, e * 0.25); spin += -Math.min(3, e * 6); what.push(e > 0.12 ? "way early: hooked it" : "a touch early: pulled left"); }
   else if (e < 0) { speed *= 1 - Math.min(0.3, -e * 0.8); ang = Math.min(0.12, -e * 0.4); spin += Math.min(3, -e * 20); what.push("a touch late: pushed right"); }
   else if (!c || Math.abs(c) < 0.15) what.push("pure");
@@ -10253,7 +10253,7 @@ function golfHud() {
   m.style.setProperty("--pow", `${(fill * 100).toFixed(1)}%`);
   m.style.setProperty("--line", `${((golf.st === "back" ? golf.line : 0) * 100).toFixed(1)}%`);
   m.classList.toggle("back", golf.st === "back");
-  const c = golf.c, face = Math.abs(c) < 0.15 ? "center" : `${c > 0 ? "toe" : "heel"} ${Math.round(Math.abs(c) * 100)}%`;
+  const c = golf.c, face = Math.abs(c) < 0.15 ? "center" : `${c > 0 ? "toe" : "heel"} ${Math.round(Math.abs(c) * 100)}%, ${c > 0 ? "higher" : "lower"}`;
   $("golfInfo").innerHTML = golf.st === "idle" ? `A / D — aim · W / S — strike: <b>${face}</b><br>Hold click — power · let go · click on the mark<br>E / right-click — done`
     : golf.st === "power" ? "Let go at the power you want" : golf.st === "back" ? "Click on the mark!" : "";
 }
