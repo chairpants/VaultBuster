@@ -74,6 +74,7 @@ All the sound is generated live instead of recorded: ballast hum, room tone, tra
 
 - **Simulation** starts you in a bare-bones store: no staff, the theater chained shut, a small member list. Build it up from what it earns.
 - **Sandbox** gives you $10,000 and Dana on staff from the start. Buy what you like and get playing.
+- **Customer** puts you on the other side of the counter. The store runs itself, and you walk in off the lot with your own wallet. Pay for what you take (or don't, if nobody's looking), stay out of the back, and see how far you can get. Some doors are locked and some things padlocked, and what opens them is out there somewhere. Be a good customer and they'll treat you like a regular. In Simulation, keep the store in the red three nights running and the owner fires you: you're back the next day as a customer.
 
 Three save files, like an old cartridge: pick one to **play**, **copy** or **delete** it. The store remembers where you left everything. If you like it, **star the repo** and tell someone who used to work behind a counter.
 
@@ -129,7 +130,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 
 ### Testing
 
-`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save files, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store: hiring and schedules, skill milestones, the rewinder upgrades, staff clocking out, members' visiting rhythm, day goals, the janitor's closet and the register's sale screen. It needs Node and a Chromium:
+`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save files, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store: hiring and schedules, skill milestones, the rewinder upgrades, staff clocking out, members' visiting rhythm, day goals, the janitor's closet and the register's sale screen; then a Customer store: in off the lot, paying, getting caught, and a key that keeps through a reload. It needs Node and a Chromium:
 
 ```sh
 npm install                      # playwright-core (dev only; the game itself has no build)

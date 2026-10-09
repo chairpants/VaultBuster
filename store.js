@@ -351,7 +351,10 @@ const SAVE = (() => { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY))
 // the game mode. Simulation: a bare-bones store you build up (no staff, no
 // theater, no popcorn machine, part of the library) out of what it earns.
 // Sandbox: everything open and a big budget. Saves from before modes are sandbox
-const MODE = SAVE?.mode === "simulation" ? "simulation" : "sandbox", SIM = MODE === "simulation";
+// Customer: an established store (everything bought) that runs without you; you're one of its customers (see customer mode)
+const MODE = ["simulation", "customer"].includes(SAVE?.mode) ? SAVE.mode : "sandbox", SIM = MODE === "simulation";
+// who you are in the store: on staff, or (customer mode, or put out of a job: see becomeCustomer) a customer
+const CUSTOMER = (SAVE?.role ?? (MODE === "customer" ? "customer" : "staff")) === "customer";
 const rep = { v: SAVE?.rep ?? 50 };             // store reputation 0..100 (see repStars)
 const growth = { pending: SAVE?.signups ?? (SIM ? 2 : 0), prospects: SAVE?.prospects ?? 0, pT: 30 };   // (a new simulation: a couple of curious locals on day one)  // simulation: new members who'll sign up tomorrow morning (word of mouth, ads, what you've built)
 const upg = { ...SAVE?.upg };                   // upgrades bought (see UPGRADES)
@@ -689,6 +692,7 @@ function cutoutFit(x, z, ry, b) {            // floor box around the board's sol
 }
 const frontDoor = { leaves: [], k: 0, open: false, hold: 0 };   // the storefront's double doors: k 0 shut .. 1 open (the right leaf: customers' side)
 const doors = [];                          // hinged interior doors (see makeDoor) — E swings them
+let frontWallBox = null;                   // the storefront's collider
 
 // ---------------- store shell ----------------
 function box(w, h, d, m, x, y, z) {
@@ -824,7 +828,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
   wall(XL - T / 2, XR + T / 2, Z, true, H, mat.wall, [{ c: BOH_DOORS.store, w: BOH_OPENING_W }]);   // back, with the open way through to the back hall
   wall(0, Z, XL, false, H, mat.wall);                                       // left
   wall(0, Z, XR, false, H, mat.wall);                                       // right
-  colliders.push({ x0: XL, x1: XR, z0: -T / 2, z1: T / 2 + WALL_PAD });     // front: glass + closed doors, all solid
+  colliders.push(frontWallBox = { x0: XL, x1: XR, z0: -T / 2, z1: T / 2 + WALL_PAD });     // front: glass + closed doors, all solid (a customer goes through the right-hand door: see blocked)
   // blue stripe around the walls at eye height — back and sides only; the
   // front is glass now, and a stripe there ran straight across the windows
   [[XC, 2.25, Z - T / 2 - 0.012, XW, 0],
@@ -4952,7 +4956,7 @@ function shiftScore(n, who = null) { const s = shift.stats; s.score += n; if (wh
 // Fixed height, scrolls (newest at the bottom; PageUp/PageDown), J collapses it ----
 const actLog = [], logData = [];                 // rows on screen / the same, as data for the save
 function logAct(text, kind = "", money = null, pts = null, at = null) {   // kind: "good" | "bad" | ""; money/pts: signed amounts, shown on the right; at: a saved row's time
-  const el = $("actLogList"); if (!el) return;
+  const el = $("actLogList"); if (!el || (CUSTOMER && !logAct.mine && !at)) return;   // (a customer's log: what happened to you, not the store's books)
   logData.push([at || fmtClock(shift.h), text, kind, money, pts]); if (logData.length > 60) logData.shift();
   const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
   const row = document.createElement("div"); row.className = `row ${kind}`;
@@ -4971,6 +4975,7 @@ function logToggle() {
   if (!box.classList.contains("shut")) { const el = $("actLogList"); el.scrollTop = el.scrollHeight; }
 }
 function logScroll(dir) { const el = $("actLogList"); el.scrollTop += dir * el.clientHeight * 0.8; }
+let redNights = SAVE?.redNights || 0;          // simulation: closing nights in a row with the store in the red (three, and you're fired: see becomeCustomer)
 const shift = {
   day: SAVE?.shift?.day ?? 1, h: SAVE?.shift?.h ?? SHIFT.start, warp: 0,
   date0: SAVE?.shift?.date0 ?? +new Date(1996, 8, 30, 12),   // day 1: Monday, Sept 30 1996 (noon, like the POS's), a slow start
@@ -5037,6 +5042,10 @@ const UPGRADES = [
   { id: "ad", name: "NEWSPAPER AD", cost: 120, repeat: true, desc: SIM ? "NEW MEMBERS, A BIT OF BUZZ (1/DAY)" : "+REPUTATION (ONE A DAY)" },
 ];
 if (!SIM && SAVE?.upg && !upg.v) {              // a sandbox saved back when sandbox had everything: it keeps it
+  for (const u of UPGRADES) if (!u.repeat) upg[u.id] = true;
+  upg.library = LIBRARY.length;
+}
+if (MODE === "customer" && !upg.v) {             // customer mode: a store that's been going a while
   for (const u of UPGRADES) if (!u.repeat) upg[u.id] = true;
   upg.library = LIBRARY.length;
 }
@@ -5519,13 +5528,14 @@ function shiftTick(dt) {
     if (shift.warp > shift.h) shift.h = Math.min(shift.warp, shift.h + dt / 2.5);   // L: an hour in 2.5 s
     else shift.h += dt / (shift.h < SHIFT.close ? SHIFT.hour : 3600);             // after close: real time
     const crossed = at => was < at && shift.h >= at;
-    if (crossed(SHIFT.open)) toast(frontLock.locked ? "10:00 AM — opening time. Unlock the front doors" : "10:00 AM — we're open", true);
-    if (crossed(SHIFT.lastIn)) toast("11:45 PM — last customers of the night", true);
+    if (CUSTOMER) cmClock(crossed);
+    else if (crossed(SHIFT.open)) toast(frontLock.locked ? "10:00 AM — opening time. Unlock the front doors" : "10:00 AM — we're open", true);
+    if (crossed(SHIFT.lastIn) && !CUSTOMER) toast("11:45 PM — last customers of the night", true);
     const d = shiftDate().getDay(), weekend = d === 5 || d === 6;
     if (crossed(12)) logAct("The lunch crowd's starting to come in");
     if (crossed(15)) logAct(weekend ? "Afternoon's picking up" : "School's out: here comes the after-school crowd");
     if (crossed(18.5)) logAct(weekend ? `${d === 5 ? "Friday" : "Saturday"} night rush: it's about to get busy` : "The evening rush is starting");
-    if (crossed(SHIFT.close)) toast("Midnight — closing time. Lock up and head out the front doors when you're done", true);
+    if (crossed(SHIFT.close) && !CUSTOMER) toast("Midnight — closing time. Lock up and head out the front doors when you're done", true);
   }
   showTick();
   if (started && (document.pointerLockElement === canvas || posTerm.isOpen())) { phoneTick(dt); holdsTick(); }
@@ -5539,6 +5549,11 @@ let shiftHudTxt = "";
 function shiftHud() {
   shift.goals ||= dayGoals();
   const goalsTxt = shift.goals.map(g => { const st = goalState(g); return `${st.mark} ${st.text}${st.have && st.mark !== "✓" ? ` ${st.have}` : ""}`; }).join("|");
+  if (CUSTOMER) {                                  // (out front: your own money, and where you're headed)
+    const [a, b, g] = cmHud(), t = a + b + g.join("|"); if (t === shiftHudTxt) return; shiftHudTxt = t;
+    const el = $("shiftClock"); el.innerHTML = `${a}<div class="h">${b}</div><div class="goals">${g.map(x => `<div class="${x[0] === "✓" ? "done" : ""}">${x}</div>`).join("")}</div>`;
+    el.classList.toggle("late", afterClose()); el.style.display = "block"; return;
+  }
   const late = afterClose(), txt = `${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(shift.h, late)}|${late ? "CLOSED" : shift.h < SHIFT.open ? "OPENS 10 AM" : `DAY ${shift.day}`} ${starStr(repStars())} · ${(b => (b < 0 ? "-$" : "$") + Math.abs(b).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }))(posTerm.budget())} · STORE ${shift.stats.score.toLocaleString()} · YOU ${shift.stats.you.toLocaleString()}${staff.length ? ` · STAFF ${shift.stats.dana.toLocaleString()}` : ""}`;
   if (txt + goalsTxt === shiftHudTxt) return; shiftHudTxt = txt + goalsTxt;
   const [t, sub] = txt.split("|"), el = $("shiftClock");
@@ -5619,7 +5634,7 @@ camera.rotation.y = player.yaw;
 // down shows your chest, belly and feet; on the couch it takes Dana's sitting
 // pose and the camera rides its head
 const me = VaultCustomers.build({ ...VaultCustomers.randomOutfit(seeded(1985), false), height: 1, build: 1, hat: null,
-  top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" });   // Dana's uniform, no name tag
+  ...(CUSTOMER ? {} : { top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" }) });   // Dana's uniform, no name tag (a customer: your own clothes)
 me.rig.head.visible = false; me.rig.neck.visible = false;
 me.walkLean = false;                        // the eye doesn't tip forward, so neither does the chest: the feet stay in view
 scene.add(me.group);
@@ -5877,6 +5892,7 @@ addEventListener("keydown", e => {
     if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
     return;
   }
+  if (CUSTOMER && cm.term && cmTermKey(e)) return;   // logged into the register (customer mode): its keys, not yours
   if (e.code === "Escape") { if (!escClose()) document.exitPointerLock(); return; }   // (only reaches us in fullscreen, with the keyboard lock)
   if (drunk.out) return;                     // out cold
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
@@ -5898,11 +5914,14 @@ addEventListener("keydown", e => {
   if (catchCall && /^Digit[1-5]$/.test(e.code)) catchDecide(+e.code[5]);   // deciding what happens to a shoplifter
   else if (phone.call && /^Digit[12]$/.test(e.code)) callAnswer(+e.code[5]);   // on the phone
   else if (WX_KIT_ON && !inv.length && /^Digit[1-9]$/.test(e.code)) wxKitSelect(+e.code[5] - 1);   // (WX_KIT: temporary)
+  else if (CUSTOMER && /^Digit\d$/.test(e.code) && !e.repeat && cmComboKey(e.code[5])) {}   // at a padlock: the combination
   else if (/^Digit[1-9]$/.test(e.code)) invSelect(+e.code[5] - 1);   // pick an inventory slot
   if (e.code === "Space") togglePause();
   if (e.code === "Comma") stepEpisode(-1);
   if (e.code === "Period") stepEpisode(1);
   if (e.code === "KeyQ" && !e.repeat) coQ();
+  if (e.code === "KeyX" && !e.repeat && CUSTOMER) cmSpill();
+  if (e.code === "KeyT" && !e.repeat && CUSTOMER && aimEmp && cmBehindCounter(aimEmp.c?.group.position.x ?? 0, aimEmp.c?.group.position.z ?? 9)) cmTicket(aimEmp);
   if (e.code === "KeyJ" && !e.repeat) logToggle();      // the log, bottom left
   if (e.code === "PageUp" || e.code === "PageDown") { e.preventDefault(); logScroll(e.code === "PageUp" ? -1 : 1); }        // at the counter: waive fees / offer a snack
   if (e.code === "KeyL" && !e.repeat) skipHour();   // the store lights are real switches; L fast-forwards the clock
@@ -5951,15 +5970,33 @@ addEventListener("mousemove", e => {
 });
 function blocked(x, z) {
   if (player.onRoof) return !onDeck(x, z) || roof.cols.some(c => x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r);   // up top: the deck, its parapets and its kit
+  if (CUSTOMER && outBlocked(x, z)) return true;
   for (const c of colliders) if (!c.staff)       // (you walk through the staff: they can't pin you in a corner)
-    if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) return true;
+    if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) {
+      if (c === frontWallBox && CUSTOMER && x > 0.05 + player.r && x < 1.75 - player.r && cmDoorOpen(player.z > 0)) continue;   // the customers' door
+      return true;
+    }
+  return false;
+}
+// out front, as a customer: the sidewalk and the lot, not the road beyond or round the sides of the building; and the parked cars
+const carQ = new THREE.Vector3();
+function outBlocked(x, z) {
+  if (z > 2) return false;
+  if ((x < WALL_L - 0.1 || x > STORE.x + 0.1) && z > -0.3) return true;
+  if (z > 0) return false;
+  if (z < -9.4 || x < WALL_L - 8 || x > STORE.x + 8) return true;
+  for (const { g } of carsOut?.all() || []) {
+    if (Math.abs(g.position.x - x) > 3.5 || Math.abs(g.position.z - z) > 3.5) continue;
+    const s = g.userData.car, q = g.worldToLocal(carQ.set(x, 0.5, z));
+    if (Math.abs(q.x) < s.L / 2 + player.r && Math.abs(q.z) < s.W / 2 + player.r) return true;
+  }
   return false;
 }
 function move(dt) {
   const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const rt = new THREE.Vector3(-f.z, 0, f.x);
   let ix = 0, iz = 0;
-  if (document.pointerLockElement !== canvas || roof.climb) return;
+  if (document.pointerLockElement !== canvas || roof.climb || cm.term) return;
   if (onStool) {                            // E spins you; a move key gets you up
     if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) stoolStand();
     return;
@@ -6000,7 +6037,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let aimStool = false;
+let aimStool = false, aimPickup = null;          // aimPickup: something to find (customer mode: see PICKUPS)
 let aimPostit = null, aimNotepad = false;          // a post-it by the phone / the pad by the register
 let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null, aimLadder = false, aimLadderHome = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
@@ -6231,7 +6268,8 @@ function custRideWith(cust, lead) {
   cust.path = [...lead.path.slice(0, -2).map(([x, z]) => [x, z]), INSIDE_DOOR, [CUST_DOOR.x, CUST_DOOR.z]]; cust.state = "arrive"; cust.spot = CUST_DOOR;
 }
 function frontDoorTick(dt) {                      // anyone right at the door: it swings open (the chime rings); then the closer pulls it shut
-  const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3);
+  const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3)
+    || (CUSTOMER && Math.hypot(player.x - 0.9, player.z + 0.2) < 1.3 && cmDoorOpen(player.z > 0));
   if (near && !d.open) { d.open = true; window.VaultAmbience?.door("push", "open", 0.9, 1.1, 0.1); window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); }
   if (near) d.hold = 0.7; else if (d.open && (d.hold -= dt) <= 0) d.open = false;
   const was = d.k; d.k = Math.max(0, Math.min(1, d.k + (d.open ? 2.2 : -1.3) * dt));
@@ -8535,7 +8573,7 @@ window.VaultAim = {
 };
 function pickHover() {
   aimPostit = null; aimNotepad = false;
-  hovered = null; aimStool = false; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
+  hovered = null; aimStool = false; aimPickup = null; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
@@ -8573,7 +8611,8 @@ function pickHover() {
     const a = raycaster.intersectObjects(roof.ladderParts, false)[0], wall = a && raycaster.intersectObjects(aimBlockers, false)[0];
     if (a && a.distance < 2.2 && !(wall && wall.distance < a.distance)) {
       aimRoofLadder = true; highlight.visible = false;
-      const tip = $("hoverTip"); tip.innerHTML = roofHandsFull() ? "The roof ladder<div class=\"cat\">you'll need both hands free</div>" : "E — climb up to the roof"; tip.style.display = "block";
+      if (CUSTOMER && !cm.hatch) cm.comboOf = COMBOS.hatch;   // (a customer: the hatch up top's padlocked)
+      const tip = $("hoverTip"); tip.innerHTML = cm.comboOf ? comboTip(cm.comboOf) : roofHandsFull() ? "The roof ladder<div class=\"cat\">you'll need both hands free</div>" : "E — climb up to the roof"; tip.style.display = "block";
       return;
     }
   }
@@ -8652,7 +8691,9 @@ function pickHover() {
     const wall = aim && raycaster.intersectObjects(aimBlockers, false)[0];
     if (wall && wall.distance < aim.distance) aim = undefined;   // it's on the far side of a wall or a rack's back
     aimMove = aim && aim.distance < 2.4 && aim.object.userData.movable || null;   // (a rewinder, the pad, the printer: hold E to move it)
-    if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
+    if (aim?.object.userData.pickup && aim.distance < 2) aimPickup = aim.object.userData.pickup;
+    else if (aim?.object.userData.combo && aim.distance < 1.6) cm.comboOf = aim.object.userData.combo;
+    else if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
     else if (aim?.object.userData.returns && aim.distance < 2.4) aimReturns = true;
@@ -8695,8 +8736,9 @@ function pickHover() {
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = aim.object.userData.employee;   // (the employee themself)
     else if (aim?.object.userData.customer?.c && aim.distance < 2.6 && aim.object.userData.customer.state !== "out") { aimCustomer = aim.object.userData.customer; aimCustomer.known = true; }   // walking ones too: a shoplifter doesn't stop. known: you've had their name up
     else if (aim?.object.userData.printer && aim.distance < 2.4) aimPrinter = true;
-    const tip = $("hoverTip");
-    if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
+    const tip = $("hoverTip"), cmT = CUSTOMER && cmTip();
+    if (cmT) tip.innerHTML = cmT;
+    else if (aimLamp) tip.innerHTML = `E — turn lamp ${aimLamp.userData.on ? "off" : "on"}`;
     else if (aimReturns && (held || returnBin.length)) tip.innerHTML = [held && "E — drop tape in Returns",
       returnBin.length && inv.length < INV_MAX && `CLICK — look at a tape from Returns (${returnBin.length})`].filter(Boolean).join("<br>");
     else if (aimPop) tip.innerHTML = popcornStep(aimPop, false);
@@ -10298,6 +10340,7 @@ function golfMouse(down, button) {
   else if (down && golf.st === "back") golfStrike(golf.line);
 }
 function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. Full power, pure: carries ~38 m, ~6 m over the deck. The strike point lofts it: W (toe) up to ~9 m and shorter, S (heel) a low runner (still clearing the parapet)
+  if (CUSTOMER) cmTeeOff();
   const e0 = at == null ? null : at - GOLF.SWEET, e = e0 != null && Math.abs(e0) <= GOLF.PURE ? 0 : e0, c = golf.c;
   let ang = 0, spin = -c * 1.5, speed = 18 * golf.peak * (1 - 0.15 * Math.abs(c)), elev = 0.6 + c * (c > 0 ? 0.4 : 0.25), what = [];
   if (e == null) { speed *= 0.6; elev = 0.3 + c * 0.1; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
@@ -11237,10 +11280,11 @@ function dropPopcorn() { heldPopcorn = null; popcornVisual(); }
 // appears; 1-9 or the mouse wheel swap which one is in hand. When the in-hand
 // item leaves (put back, eaten up, trashed, into the TV) the next one comes out.
 const INV_MAX = 9;
-const inv = [];                              // { kind: "tape"|"snack"|"popcorn", ref, left?, total?, thumb? }
+const inv = [];                              // { kind: "tape"|"snack"|"popcorn"|"item", ref, left?, total?, thumb? } (item: your own things, as a customer)
 let invSel = -1;                             // index of the in-hand entry; -1 = empty hand
 let invEmpty = -1;                           // which empty slot is selected while the hand is empty (for the outline)
-const invKind = () => held ? "tape" : heldSnack ? "snack" : heldPopcorn ? "popcorn" : null;
+let heldItem = null;                         // one of your own things in hand (customer mode: see ITEMS)
+const invKind = () => held ? "tape" : heldSnack ? "snack" : heldPopcorn ? "popcorn" : heldItem ? "item" : null;
 function invMakeRoom() {                     // before picking something new up: stash the in-hand item, or refuse at 9
   invSync();                                 // account for anything picked up since the last frame first
   if (inv.length >= INV_MAX) return false;
@@ -11250,6 +11294,7 @@ function invStash() {
   const e = inv[invSel]; if (!e) return;
   if (e.kind === "tape") { held = null; inspecting = false; handGroup.visible = false; }
   else if (e.kind === "snack") { e.left = snackLeft; e.total = snackTotal; e.thumb = invThumb(snackGroup); heldSnack = null; snackGroup.visible = false; snackGroup.clear(); }
+  else if (e.kind === "item") heldItem = null;
   else { e.thumb = invThumb(popcornGroup); heldPopcorn = null; popcornGroup.visible = false; }
   $("holdingTag").style.display = "none";
   invSel = -1; peek = null;                  // swapping away from a tape counts as taking it
@@ -11262,11 +11307,12 @@ function invSelect(i) {
   const e = inv[i]; invSel = i;
   if (e.kind === "tape") showTape(e.ref);
   else if (e.kind === "snack") { showSnack(e.ref); snackLeft = e.left; snackTotal = e.total; snackTag(); }
+  else if (e.kind === "item") { heldItem = e.ref; $("holdingTag").style.display = "block"; $("holdingName").textContent = e.ref.name; }
   else { heldPopcorn = e.ref; popcornVisual(); }
   invRender();
 }
 function invSync() {                         // once a frame: notice pickups and whatever left your hand
-  const kind = invKind(), ref = held || heldSnack || heldPopcorn, e = inv[invSel];
+  const kind = invKind(), ref = held || heldSnack || heldPopcorn || heldItem, e = inv[invSel];
   if (e && kind === e.kind) e.ref = ref;     // same item, maybe changed in place (a popcorn refill)
   else if (e) {                              // it's gone: the next one comes to hand
     inv.splice(invSel, 1); const next = Math.min(invSel, inv.length - 1); invSel = -1;
@@ -11274,7 +11320,7 @@ function invSync() {                         // once a frame: notice pickups and
     else if (next >= 0) invSelect(next);
     invRender();
   } else if (ref) {                          // a fresh pickup
-    inv.push({ kind, ref, thumb: kind === "snack" ? invThumb(snackGroup) : kind === "popcorn" ? invThumb(popcornGroup) : null });
+    inv.push({ kind, ref, thumb: kind === "snack" ? invThumb(snackGroup) : kind === "popcorn" ? invThumb(popcornGroup) : kind === "item" ? itemIcon(ref) : null });
     invSel = inv.length - 1; invRender();
   }
 }
@@ -11350,7 +11396,7 @@ function putBack() {                         // back into its own shelf slot (ai
     shelveCheck(held); held.desens = false; setOnShelf(held, true);   // back on the shelf: tag re-armed
     gainXp("you", "int", held.fromReturns || held.strayFix ? 6 : 3);
     if (held.fromReturns) { held.fromReturns = false; shiftScore(5, "you"); logAct(`Reshelved ${held.title}`, "good", null, 5); }   // a return put away
-    if (held.strayFix) { held.strayFix = false; shiftScore(10, "you"); logAct(`Put a misshelved ${held.title} back where it belongs`, "good", null, 10); }
+    if (held.strayFix) { held.strayFix = false; shiftScore(10, "you"); logAct(`Put a misshelved ${held.title} back where it belongs`, "good", null, 10); if (CUSTOMER) cmHelped(held); }
   }
   releaseFromHand();
 }
@@ -11444,6 +11490,7 @@ function setLamp(l, on) {
 }
 function onE() {
   if (scrub || ladder.fix || roof.climb) return;   // busy mopping / sweeping / up at a light / on the roof ladder
+  if (CUSTOMER && !seated && !player.onRoof && cmE()) return;   // as a customer: the staff, the locked doors, the register (see cmE)
   if (golf.on) { if (golf.st === "idle") golfEnd(); return; }
   if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
   if (aimGolf) { golfStart(); return; }
@@ -11573,8 +11620,9 @@ $("titleScreen").addEventListener("click", e => {
 function slotInfo(n) {                           // what's in a save slot, for the menu
   try {
     const d = JSON.parse(localStorage.getItem(slotKey(n))); if (!d || d.v !== SAVE_V) return null;
-    const nice = d.mode === "simulation" ? "Simulation" : "Sandbox";
+    const nice = { simulation: "Simulation", customer: "Customer" }[d.mode] || "Sandbox";
     if (d.fresh) return { label: `${nice} · new store`, mode: d.mode };
+    if (d.role === "customer") return { label: `${nice}${d.mode === "customer" ? "" : " · a customer now"} · day ${d.shift?.day ?? 1} · $${(d.cm?.wallet ?? 40).toFixed(2)} on you`, mode: d.mode };
     return { label: `${nice} · day ${d.shift?.day ?? 1} · $${Math.round(d.budget ?? 0).toLocaleString()} · ${starStr(repStars(d.rep ?? 50))}`, mode: d.mode };
   } catch { return null; }
 }
@@ -11596,6 +11644,7 @@ function titleMenu() {
   const MODES = {
     simulation: ["SIMULATION", "A bare-bones store: no staff, the theater locked up, part of the library. Build it up with what it earns."],
     sandbox: ["SANDBOX", "Dana on staff, $10,000 in the budget: buy whatever you like and just play store."],
+    customer: ["CUSTOMER", "You don't work here. The store runs itself; you come in off the lot with your own wallet, and play by its rules. Some doors are locked."],
   };
   const panels = { main: $("mmMain"), settings: $("mmSettings") };
   const show = k => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
@@ -11813,6 +11862,10 @@ function clockOut() {
   const chk = { bin: returnBin.length, strays: strays.length, messes: messes.length, lights: deadLights.length, empty: emptySpots().length, trash: binList().filter(b => b.n >= b.cap * 0.75).length + bagsDown.length + bagCarry.length };   // the closing walk-through: what's been left undone
   const chkPts = -10 * (chk.bin + chk.strays + chk.messes + chk.trash + chk.lights) - 2 * chk.empty;
   const hrs = staff.reduce((a, e) => a + bits(e.sched[weekday()]), 0);
+  if (SIM) { redNights = posTerm.budget() - (SIM ? +staff.reduce((a, e) => a + bits(e.sched[weekday()]) * empRate(e), 0).toFixed(2) : 0) < 0 ? redNights + 1 : 0;
+    if (redNights === 1) logAct("The owner called: the store's in the red. Three nights of that and you're done here", "bad");
+    if (redNights === 2) logAct("The owner called again: one more night in the red and you're fired", "bad");
+    if (redNights >= 3) logAct("The owner came by at close. You're fired", "bad"); }
   const wages = SIM ? +staff.reduce((a, e) => a + bits(e.sched[weekday()]) * empRate(e), 0).toFixed(2) : 0; if (wages) posTerm.sale(-wages);   // the staff's pay for the day: their scheduled hours
   if (posTerm.budget() < 0) logAct(`The store's in the red: -$${(-posTerm.budget()).toFixed(2)}. Nothing on the register can be bought until it's back up`, "bad");
   if (chkPts) { shiftScore(chkPts); logAct(`Closing check: ${[chk.bin && `${chk.bin} in the returns bin`, chk.strays && `${chk.strays} misshelved`, chk.messes && `${chk.messes} messes`, chk.lights && `${chk.lights} burnt-out light${chk.lights > 1 ? "s" : ""}`, chk.trash && `${chk.trash} lots of trash not taken out`, chk.empty && `${chk.empty} empty rack spots`].filter(Boolean).join(", ")}`, "bad", null, chkPts); }
@@ -11844,6 +11897,7 @@ function clockOut() {
     row("REPUTATION", `${starStr(repStars())} ${repD > 0 ? "+" : ""}${repD || "="}`), ...repProgress(),
     ...(SIM ? [row("NEW MEMBERS SIGNED UP", s.signups), row("WORD OF MOUTH: TOMORROW", `+${growth.pending}`),
       row("MEMBERS", nextM ? `${members} (NEXT: ${nextM})` : members)] : []),
+    ...(SIM && redNights ? [row("NIGHTS IN THE RED", `${Math.min(redNights, 3)} OF 3`), ...(redNights >= 3 ? ["", "YOU'RE FIRED.".padStart(23), "THE OWNER WANTS YOUR KEYS".padStart(29)] : [])] : []),
     row("STORE SCORE", s.score.toLocaleString()), row("  YOURS", s.you.toLocaleString()), row("  THE STAFF'S", s.dana.toLocaleString()),
     row("  LOST (WALKOUTS, THEFT)", (s.score - s.you - s.dana).toLocaleString()), "", `SHIFT GRADE:  ${grade}`.padStart(22), "", "THANK YOU - BE KIND, REWIND".padStart(30),
   ].join("\n");
@@ -11867,6 +11921,7 @@ function beginShift() {                        // first thing in the morning: 9:
     logAct(`Word's getting around: ${growth.prospects} ${growth.prospects > 1 ? "people" : "person"} might come in to sign up today`, "good");
   }
   setFrontLock(true);
+  if (CUSTOMER) { cmMorning(); shiftHudTxt = ""; return; }   // (you're out on the lot: see customer mode)
   Object.assign(player, { x: 0, z: 1.4, yaw: Math.PI, pitch: 0 }); gateLastZ = player.z;
   shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. Doors open at 10 — unlock them when you're ready${drunk.hang ? ". Ugh, your head's pounding" : ""}`;
   if (SIM && shift.day === 1) {                // a new simulation: where it goes from here
@@ -11878,11 +11933,691 @@ function beginShift() {                        // first thing in the morning: 9:
 }
 function nextShift() {
   shift.report = false; $("shiftReport").style.display = "none";
+  if (SIM && !CUSTOMER && redNights >= 3) {        // fired: tomorrow you're back, on the other side of the counter
+    redNights = 0; shift.day++; beginShift(); shift.h = SHIFT.open - 0.25;
+    return becomeCustomer("The owner let you go: three nights in the red.");
+  }
   shift.day++; beginShift(); saveState();
   const p = canvas.requestPointerLock();
   p?.catch?.(() => { $("titleScreen").style.display = "flex"; });
 }
 $("shiftNext").addEventListener("click", nextShift);
+// ---------------- customer mode: the store from the other side of the counter ----------------
+// You're not on staff: the store runs without you (a full crew covers every hour it's open, every day: see
+// cmRoster), and you come in off the lot in your own clothes with your own wallet. What you take off the shelves is
+// the store's till you pay for it at the counter (E on whoever's on the register): walk out with it and the gates
+// go off, or somebody sees you go, or (nobody looking) you get away with it. Behind the counter, the break room,
+// the janitor's closet are staff only: anyone on staff who sees you back there wants you out (once, a warning
+// back to the floor; then you're walked out and not let back in today). Being a good customer counts: the staff
+// get to know a regular (trust: slower to call you on things, and a discount), and lose it when you're caught.
+// Some doors are locked, some things padlocked, and what opens them is out there somewhere: keys, a note with a
+// combination, a badge that logs into the register, a code on its screen. Each opens the way to the next (see
+// ITEMS / KEYED / PICKUPS / COMBOS), and it all leads up to the roof. Your own things go in the same nine pockets
+// as everything else; a note in hand can be read. Money turns up too: dropped bills, change in the trash.
+// A store kept on staff can be flipped to this (becomeCustomer): in simulation, three nights in the red and the
+// owner lets you go.
+const CM_ALLOWANCE = 15;                          // $ found in your jacket each morning (after the first)
+const cm = { wallet: 40, owed: 0, tab: 0, strikes: 0, today: 0, banned: 0, heat: 0, seer: null, found: new Set(), rented: new Map(), paidUnits: new Set(),
+  goal: false, going: false, inside: false, closeT: 0, doorHint: 0, alarmWas: false, invWas: [], checkT: 0, greet: null,
+  trust: 0, seed: 0, loggedIn: false, pinTries: 0, termLock: 0, tookCash: 0, short: 0, rec: null, teed: false, wary: new Set(), alert: 0, card: false, nagged: 0, ticket: 0, watchT: 0, watched: false, hatch: false, typed: "", comboOf: null, comboWas: null, spillHint: false, term: null, searched: new Set(), day: null, heardT: 0 };
+const cmMoney = n => (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2);
+function cmLog(text, kind = "", money = null) { logAct.mine = true; try { logAct(text, kind, money); } finally { logAct.mine = false; } }
+const cmDayStats = () => ({ spent: 0, found: 0, rented: 0, returned: 0, fees: 0, caught: 0, stolen: 0, items: [] });
+cm.day = cmDayStats();
+const cmRegular = () => cm.trust >= 60;           // a regular: they know your name, and knock 10% off
+
+// ---- your own things: carried in the inventory like anything else (heldItem while one's "in hand") ----
+const ITEMS = {
+  card: { id: "card", icon: "badge", name: "VaultBuster member card", about: "your name in marker, a magnetic stripe", color: "#1b3fa0", tag: "#ffd400" },
+  breakKey: { id: "breakKey", icon: "key", name: "Break room key", about: "a brass key on a red tag: BREAK RM", color: "#d9b44a", tag: "#c0392b" },
+  closetKey: { id: "closetKey", icon: "key", name: "Janitor's key", about: "a steel key on a yellow tag: JANITOR", color: "#c4cad0", tag: "#f1c40f" },
+  comboNote: { id: "comboNote", icon: "note", name: "Folded note", about: "notebook paper, folded in four", color: "#f4f1e6",
+    note: "", spent: () => cm.found.has("combo:locker") },   // (written from this save's trail: see cmTrailSet)
+  badge: { id: "badge", icon: "badge", name: "Ray's employee badge", about: "RAY · VAULTBUSTER VIDEO #0417 · a mag stripe on the back", color: "#1b3fa0", tag: "#ffd400" },
+  pinNote: { id: "pinNote", icon: "note", name: "Post-it", about: "yellow, a little gummy", color: "#f7e36b", note: "", spent: () => cm.loggedIn },
+  printout: { id: "printout", icon: "note", spent: () => cm.hatch, name: "Register printout", about: "thermal paper, curling already", color: "#f7f7f2",
+    note: "" },
+};
+const itemIcons = {};
+function itemIcon(it) {                           // drawn: the inventory slot's picture (a key, a badge, a bit of paper)
+  if (itemIcons[it.id]) return itemIcons[it.id];
+  const c = document.createElement("canvas"); c.width = c.height = 96; const x = c.getContext("2d");
+  if (it.icon === "badge") {
+    x.save(); x.translate(48, 50); x.rotate(-0.2); x.fillStyle = "#f2f2ee"; x.fillRect(-26, -34, 52, 68);
+    x.fillStyle = it.color; x.fillRect(-26, -34, 52, 16); x.fillStyle = it.tag; x.fillRect(-14, -8, 28, 24);
+    x.fillStyle = "#333"; x.fillRect(-18, 22, 36, 4); x.fillRect(-18, 29, 24, 3); x.restore();
+  } else if (it.icon === "note") {
+    x.save(); x.translate(48, 50); x.rotate(0.15); x.fillStyle = it.color; x.fillRect(-28, -34, 56, 68);
+    x.strokeStyle = "#9db3d6"; x.lineWidth = 2; for (let y = -22; y < 32; y += 9) { x.beginPath(); x.moveTo(-24, y); x.lineTo(24, y); x.stroke(); }
+    x.strokeStyle = "#333"; x.lineWidth = 2.5; for (let y = -24; y < 20; y += 9) { x.beginPath(); x.moveTo(-20, y); x.lineTo(-20 + 14 + Math.random() * 26, y); x.stroke(); } x.restore();
+  } else {
+    x.lineWidth = 9; x.strokeStyle = it.color; x.fillStyle = it.color;
+    x.beginPath(); x.arc(30, 40, 15, 0, Math.PI * 2); x.stroke();                     // the bow
+    x.fillRect(43, 36, 40, 9); x.fillRect(66, 45, 6, 12); x.fillRect(76, 45, 6, 9);      // the blade, its teeth
+    x.fillStyle = it.tag; x.save(); x.translate(26, 64); x.rotate(-0.4); x.fillRect(-12, 0, 24, 26); x.restore();   // the tag
+  }
+  return itemIcons[it.id] = c.toDataURL();
+}
+const cmHas = id => inv.some(e => e.kind === "item" && e.ref.id === id);
+function cmGive(id) {                            // into your pockets (and in hand)
+  if (!invMakeRoom()) { toast("Your pockets are full"); return false; }
+  heldItem = ITEMS[id]; invSync();
+  $("holdingTag").style.display = "block"; $("holdingName").textContent = ITEMS[id].name;
+  cm.day.items.push(ITEMS[id].name);
+  return true;
+}
+function cmNoteTick() {                           // a note in hand: there it is, readable, down in the corner
+  const el = $("notePaper"), it = heldItem?.note ? heldItem : null;
+  if ((el.dataset.id || "") === (it?.id || "")) return;
+  el.dataset.id = it?.id || ""; el.style.display = it ? "block" : "none"; el.textContent = it ? it.note : "";
+}
+
+// ---- the doors you need a key for (staff walk through them all day: a door left open is a way in) ----
+const KEYED = [
+  { key: "breakKey", room: "break room", door: () => doors.find(d => !d.push && d.alongX && d.c === BOH_DOORS.breakroom) },
+  { key: "closetKey", room: "janitor's closet", door: () => doors.find(d => !d.push && !d.alongX && d.c === BOH_DOORS.closet) },
+];
+const keyedOf = d => KEYED.find(k => k.door() === d);
+// ---- the padlocks: a combination, typed on the number keys while you're looking at the lock ----
+const COMBOS = {
+  locker: { name: "Ray's locker", code: "", at: [BOH.x0 + 0.49, 0.93, 31.32], gives: "badge", open: "The padlock clicks open. Ray's locker: a can of Skoal, a Walkman, and his employee badge" },
+  hatch: { name: "the roof hatch", code: "", open: "The padlock on the hatch drops open. The roof's yours" },
+};
+const comboDone = c => c === COMBOS.hatch ? cm.hatch : cm.found.has("combo:locker");
+function cmComboKey(d) {                          // a digit typed at a padlock -> true if it went to one
+  const c = cm.comboOf; if (!c || comboDone(c)) return false;
+  cm.typed += d;
+  if (cm.typed.length < c.code.length) { posBeep(900); return true; }
+  if (cm.typed !== c.code) { cm.typed = ""; toast("The shackle doesn't budge"); return true; }
+  cm.typed = ""; posBeep(1400);
+  if (c === COMBOS.hatch) { cm.hatch = true; cmLog("Opened the padlock on the roof hatch", "good"); }   // (the printout's spent: see cmSpentTick)
+  else { cm.found.add("combo:locker"); cmLog(`Opened ${c.name}`, "good"); }
+  toast(c.open, true);
+  if (c.gives) setTimeout(() => cmTakeFrom(c), 1600);   // (and straight into your pockets, if there's room)
+  cmSpentTick();
+  return true;
+}
+const comboLeft = c => c.gives && comboDone(c) && !cm.found.has(c.gives);   // open, and what's in it still there
+function cmTakeFrom(c) {                           // what's in an opened lock: yours if you've room, else it waits for you
+  if (!comboLeft(c)) return;
+  if (inv.length >= INV_MAX) return toast(`No room in your pockets: ${ITEMS[c.gives].name} stays in ${c.name} for now`);
+  if (cmGive(c.gives)) { cm.found.add(c.gives); cmLog(`Took ${ITEMS[c.gives].name}`, "good"); }
+}
+// used up: the note once the locker's open, the printout once the hatch is. Out of your pockets, so they're free
+function cmSpentTick() {
+  for (const e of [...inv]) if (e.kind === "item" && e.ref.spent?.()) { invRemove(e); toast(`Tossed the ${e.ref.name.toLowerCase()}: you won't need it again`, true); }
+}
+const comboTip = c => comboLeft(c) ? `E — take ${ITEMS[c.gives].name}<div class="cat">${c.name}, open</div>` : comboDone(c) ? `${c.name[0].toUpperCase() + c.name.slice(1)}<div class="cat">open</div>`
+  : `${c.name[0].toUpperCase() + c.name.slice(1)} · a combination padlock<div class="cat">type the numbers: ${c.code.split("").map((_, i) => cm.typed[i] ?? "_").join(" ")}</div>`;
+
+// ---- what there is to find: things lying about (a key mesh, a dollar bill), and places to look (search: no mesh,
+// just somewhere to put your hand). Once found it stays found; daily ones (money) turn up fresh each morning ----
+// The trail, this save's own (see cmTrailSet): every one of these is a place to search, in every game, and most of
+// them turn up nothing (or a little change). Which ones hold the break room key, Ray's note and his PIN, and the
+// codes themselves, come from the save's seed. Searched is searched for good (bins: for the day, except what's in one)
+const SEARCHES = {
+  cushions: { area: "public", search: "between the couch cushions", at: () => [SEATS[2].x, 0.5, SEATS[2].z - 0.05], r: 0.2 },
+  coffee: { area: "public", search: "under the coffee table", at: () => [TV.x, 0.22, TV.z - 1.8], r: 0.28 },
+  tank: { area: "public", search: "under the toilet tank lid", at: () => [10.25, 0.82, 32.79], r: 0.2 },
+  "bin:restroom": { area: "public", bin: "restroom" },
+  "bin:lobby": { area: "public", bin: "lobby" },
+  jacket: { area: "break", search: "the jean jacket's pockets", at: () => [BOH.x0 + 0.17, 1.3, 31.97], r: 0.2 },
+  vest: { area: "break", search: "the spare vest's pocket", at: () => [BOH.x0 + 0.17, 1.38, 32.66], r: 0.18 },
+  pizza: { area: "break", search: "under the empty Tony's box", at: () => [4.22, 0.79, 31.67], r: 0.2 },
+  timecard: { area: "break", search: "the time cards in the rack", at: () => [6.88, 1.32, 30.0], r: 0.22 },
+  keyboard: { area: "counter", search: "under the register keyboard", at: () => [-5.45, 1.14, 3.72], r: 0.14 },
+  pad: { area: "counter", search: "under the desensitizer pad", at: () => [DESENS_AT.x, 1.13, DESENS_AT.z], r: 0.13 },
+  printer: { area: "counter", search: "around the receipt printer", at: () => [PRN_AT.x, 1.16, PRN_AT.z], r: 0.13 },
+};
+const NOTHING = ["Nothing. A gum wrapper", "Nothing but lint", "Nothing there", "Just dust", "A bottle cap. Nothing useful", "Nothing. Somebody's old receipt"];
+const PICKUPS = [];                               // (this save's search spots and what's in them: see cmTrailSet)
+const cmTrail = { key: null, note: null, pin: null, cards: "" };
+function cmTrailSet() {                           // from the save's seed: the codes, and which spot holds what
+  let sd = cm.seed; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647, pick = a => a[Math.floor(rnd() * a.length)];
+  COMBOS.locker.code = String(100 + Math.floor(rnd() * 900)); COMBOS.hatch.code = String(1000 + Math.floor(rnd() * 9000));
+  cmTrail.pin = String(1000 + Math.floor(rnd() * 9000));
+  const ids = area => Object.keys(SEARCHES).filter(k => SEARCHES[k].area === area);
+  Object.assign(cmTrail, { keyAt: pick(ids("public")), noteAt: pick(ids("break").filter(k => k !== "timecard")), pinAt: pick(ids("counter")) });
+  const dash = c => c.split("").join(" - "), L = COMBOS.locker.code;
+  ITEMS.comboNote.note = `Ray —\nYour locker combo starts\n${L[0]} - ${L[1]} - ?\nThe last number's on your time\ncard, like ALWAYS. Don't make\nme come find you!!      — D`;
+  ITEMS.pinNote.note = `RAY\nPIN ${dash(cmTrail.pin)}\n(DON'T TELL MGR)`;
+  ITEMS.printout.note = `MSG FROM: MGR\n----------------------\nROOF HATCH LOCK IS\n${dash(COMBOS.hatch.code)}\nAC GUY THURS. NOBODY\nELSE GOES UP THERE.\n----------------------`;
+  PICKUPS.length = 0;
+  for (const [id, sp] of Object.entries(SEARCHES)) {
+    if (sp.bin) continue;                         // (a trash can's searched with E on the can: see cmSearchBin)
+    const gives = id === cmTrail.keyAt ? { item: "breakKey" } : id === cmTrail.noteAt ? { item: "comboNote", cash: 1 } : id === cmTrail.pinAt ? { item: "pinNote" }
+      : id === "timecard" ? { info: `Ray's time card, in the rack. In the corner, in pencil, circled: ${L[2]}` } : { cash: rnd() < 0.25 ? 0.25 : 0, nothing: pick(NOTHING) };
+    const found = gives.item === "breakKey" ? "A key on a red tag: BREAK RM. Somebody's going to be looking for that"
+      : gives.item === "comboNote" ? "A folded note (and a dollar)" : gives.item === "pinNote" ? "A post-it with a number on it, stuck where nobody'd see it" : null;
+    PICKUPS.push({ id, ...sp, gives, found });
+  }
+}
+const CM_MONEY_SPOTS = [[-9, -3], [5.5, -2.5], [-3, -6.4], [9, -6.8], [12, -1.1], [-6, -0.9], [-3.6, 13.5], [4.2, 17], [7.8, 21.6], [-1.4, 24.6], [6.5, 9.4], [-4.8, 26.4], [3.2, 26.2], [9.6, 12.8]];
+const pickupMeshes = [];
+function pickupMesh(p) {
+  const g = new THREE.Group();
+  if (p.mesh === "key") {
+    const it = ITEMS[p.gives.item], m = new THREE.MeshPhongMaterial({ color: it.color, specular: 0xffffff, shininess: 80 });
+    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.011, 0.004, 8, 16), m); bow.position.x = -0.022; g.add(bow);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.008, 0.003), m); blade.position.x = 0.007; g.add(blade);
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.006, 0.003), m); tooth.position.set(0.016, -0.006, 0); g.add(tooth);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.009, 0.0015, 6, 14), new THREE.MeshPhongMaterial({ color: 0xaaaaaa })); ring.position.set(-0.034, -0.004, 0); g.add(ring);
+    const tag = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.032, 0.002), new THREE.MeshLambertMaterial({ color: it.tag })); tag.position.set(-0.042, -0.02, 0); tag.rotation.z = 0.3; g.add(tag);
+    if (p.lying) g.rotation.x = -Math.PI / 2;                          // flat on the porcelain
+  } else if (p.mesh === "bill") {                // a bill, folded once and dropped
+    const tex = makeTexture((ctx, W, H) => { ctx.fillStyle = "#c9d6b4"; ctx.fillRect(0, 0, W, H); ctx.strokeStyle = "#4f6b47"; ctx.lineWidth = 6; ctx.strokeRect(8, 8, W - 16, H - 16);
+      ctx.fillStyle = "#4f6b47"; ctx.beginPath(); ctx.ellipse(W / 2, H / 2, 22, 26, 0, 0, 7); ctx.fill(); ctx.font = "bold 28px Georgia"; ctx.fillText(String(p.gives.cash), 16, 40); ctx.fillText(String(p.gives.cash), W - 40, H - 16); }, 192, 84);
+    const m = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
+    for (const s of [-1, 1]) { const h = new THREE.Mesh(new THREE.PlaneGeometry(0.078, 0.066), m); h.position.set(s * 0.037, 0.006, 0); h.rotation.set(-Math.PI / 2, s * 0.25, 0); g.add(h); }
+  }
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(p.r || (p.mesh === "bill" ? 0.14 : 0.09), 8, 6), new THREE.MeshBasicMaterial()); hit.visible = false; hit.userData.pickup = p; g.add(hit);   // (a bigger target than the thing itself)
+  const [x, y, z] = p.at(); g.position.set(x, y, z); if (p.ry) g.rotation.y = p.ry;
+  scene.add(g); aimables.push(hit); pickupMeshes.push({ p, g, hit });
+}
+function cmPickupsBuild() { for (const p of PICKUPS) if (!cm.found.has(p.id)) pickupMesh(p); }
+function cmPickupGone(p) {
+  const i = pickupMeshes.findIndex(q => q.p === p), q = pickupMeshes[i];
+  if (q) { q.g.removeFromParent(); aimables.splice(aimables.indexOf(q.hit), 1); pickupMeshes.splice(i, 1); }
+}
+function cmMoneyDrop() {                          // the day's dropped money: a few bills on the lot and the floor, where nobody's noticed yet
+  for (const q of [...pickupMeshes]) if (q.p.daily) cmPickupGone(q.p);
+  let seed = 104729 * shift.day + 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const spots = CM_MONEY_SPOTS.filter(([x, z]) => !blocked(x, z)).sort(() => rnd() - 0.5).slice(0, 2 + Math.floor(rnd() * 3));
+  spots.forEach(([x, z], i) => { if (cm.searched.has(`money${shift.day}-${i}`)) return; const cash = rnd() < 0.12 ? 5 : 1;
+    pickupMesh({ id: `money${shift.day}-${i}`, daily: true, mesh: "bill", at: () => [x, floorHeightAt(x, z), z], ry: rnd() * 6.28, gives: { cash }, found: cash > 1 ? "A five, folded up on the floor. Finders keepers" : "A dollar bill. Finders keepers" }); });
+}
+function cmPickUp(p) {
+  if (p.area === "counter" && !cmBehindCounter(player.x, player.z)) return toast("You can't get at it from this side of the counter");
+  if (p.search && !p.daily) return cmSearch(p);
+  if (p.gives.item && !cmGive(p.gives.item)) return;
+  if (p.gives.cash) { cm.wallet += p.gives.cash; cm.day.found += p.gives.cash; }
+  if (p.daily) cm.searched.add(p.id); else cm.found.add(p.id);   // (the day's money: gone till tomorrow's)
+  cmPickupGone(p);
+  toast(p.found, true); cmLog(p.gives.item ? `Found: ${ITEMS[p.gives.item].name}${p.gives.cash ? ` (and ${cmMoney(p.gives.cash)})` : ""}` : `Found ${cmMoney(p.gives.cash)}`, "good", p.gives.cash || null);
+}
+function cmSearch(p) {                            // a place to look: what's there (if anything), and it's searched
+  const g = p.gives;
+  if (g.item && !cmGive(g.item)) return toast("There's something there, but your pockets are full");
+  if (g.cash) { cm.wallet += g.cash; cm.day.found += g.cash; }
+  cm.found.add(p.id); cmPickupGone(p);
+  if (g.item) { toast(`You search ${p.search}. ${p.found}`, true); cmLog(`Found ${ITEMS[g.item].name.toLowerCase()} ${p.search.replace(/^the /, "in the ")}`, "good", g.cash || null); }
+  else if (g.info) { toast(g.info, true); cmLog(g.info, "good"); }
+  else { toast(`You search ${p.search}. ${g.cash ? `A quarter. ${g.nothing.split(".")[0]} else` : g.nothing}`, !!g.cash); if (g.cash) cmLog(`Found ${cmMoney(g.cash)} ${p.search.replace(/^the /, "in the ")}`, "", g.cash); }
+  if (p.area !== "public" || g.item) cmNotice(2);
+}
+function cmSearchBin(b) {                         // a trash can: once a day, worth a look (change, now and then)
+  if (cmTrail.keyAt === `bin:${b.id}` && !cm.found.has(cmTrail.keyAt)) {   // (the key's in this one: it stays in there till you've room for it)
+    if (!cmGive("breakKey")) return toast("There's something in there, but your pockets are full");
+    cm.found.add(cmTrail.keyAt); toast(`You dig through the ${b.name}. Under the paper towels: a key on a red tag, BREAK RM`, true); cmLog(`Found the break room key in the ${b.name}`, "good"); cmNotice(4); return;
+  }
+  if (cm.searched.has(b.id)) return toast("Already been through that one today");
+  cm.searched.add(b.id);
+  let seed = 7919 * shift.day + b.id.length * 31 + b.n; const r = ((seed * 16807) % 2147483647) / 2147483647;
+  const cash = r < 0.35 ? [0.25, 0.5, 0.35, 1, 0.75][Math.floor(r * 100) % 5] : 0;
+  if (cash) { cm.wallet += cash; cm.day.found += cash; toast(`You dig through the ${b.name}: ${cmMoney(cash)} in change`, true); cmLog(`Found ${cmMoney(cash)} in the ${b.name}`, "good", cash); }
+  else toast(`You dig through the ${b.name}. Nothing but trash`);
+  cmNotice(4);
+}
+
+// ---- the crew: in customer mode the store's never short-handed. Three at least, and every hour it's open covered:
+// one opens (9-5), one closes (4-midnight), one's in for the middle of the day (noon-8) and works the floor ----
+const CM_SHIFTS = [[0, 8], [7, 8], [3, 8]];      // [first hour (from 9 AM), hours]
+const CM_FLOOR_JOBS = { cleanup: 1, returns: 2, restock: 2, floor: 2, phone: 3, register: 3 };
+function cmRoster() {
+  while (staff.length < 3) staff.push(makeEmployee(staff.length || SIM ? rollApplicant() : DANA_APP, staff.length));
+  staff.forEach((e, i) => { const [a, n] = CM_SHIFTS[i % 3]; e.sched = Array(7).fill(((1 << n) - 1) << a); if (i % 3 === 2) for (const j of e.jobs) j.pri = CM_FLOOR_JOBS[j.id] ?? j.pri; });
+}
+
+// ---- staff only: where a customer has no business being ----
+function cmStaffOnly(x = player.x, z = player.z) {
+  if (player.onRoof) return null;                 // (nobody's up there to see)
+  if (x < -2.6 && z > 0 && z < 3.65) return "behind the counter";
+  const lz = lightZoneAt(x, z);
+  return lz === "breakroom" || lz === "closet" ? `in the ${ZONE_NAMES[lz]}` : null;
+}
+const cmBehindCounter = (x, z) => x < -2.6 && z > 0 && z < 3.65;
+// can e see you? Looking your way (or right next to you), close enough, the light on where you are (or close), and
+// nothing in between: walls and shut doors always, and crouched, anything you could duck behind. Running, they
+// hear you instead: close by, whichever way they're facing (not through a wall)
+function segCrossesBox(ax, az, bx, bz, b) {     // (on the floor plan: does a→b pass through box b)
+  let t0 = 0, t1 = 1; const dx = bx - ax, dz = bz - az;
+  for (const [p, d, lo, hi] of [[ax, dx, b.x0, b.x1], [az, dz, b.z0, b.z1]]) {
+    if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) return false; continue; }
+    let u = (lo - p) / d, v = (hi - p) / d; if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 > t1) return false;
+  }
+  return true;
+}
+const cmRunning = () => (keys.has("ShiftLeft") || keys.has("ShiftRight")) && !keys.has("KeyC") && ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k));
+function cmSees(e) {
+  const c = e.c; if (!c || !c.group.visible || e.leaving) return false;
+  const p = c.group.position, dx = player.x - p.x, dz = player.z - p.z, d = Math.hypot(dx, dz), crouch = keys.has("KeyC"), w = cmWary(e) ? 1.4 : 1, heard = cmRunning() && d < 5 * w;
+  if (d > (crouch ? 7 : 12) * w) return false;
+  if (!heard && !zoneOn[lightZoneAt(player.x, player.z)] && d > 2.5) return false;   // in the dark
+  if (!heard && d > 1.4) { const ry = c.group.rotation.y; if ((Math.sin(ry) * dx + Math.cos(ry) * dz) / d < 0.35) return false; }   // not looking your way (right up close, they hear you)
+  const eye = crouch && !heard ? 1.0 : 1.6;
+  for (const b of colliders) if (!b.staff && !(b.y1 != null && b.y1 < eye) && segCrossesBox(p.x, p.z, player.x, player.z, b)) return false;
+  return true;
+}
+// a little noise out on the floor (digging through the trash, a spill): whoever sees it thinks a bit less of you
+function cmNotice(n) { const e = staff.find(cmSees); if (e) { cm.trust = Math.max(0, cm.trust - n); e.c?.setMood("meh"); } return e; }
+
+// ---- what's yours, what isn't, and what it costs ----
+const cmPrice = e => (e.kind === "tape" ? posTerm.rentPrice(e.ref) : e.kind === "snack" ? snackPrice(e.ref.userData.snack) : e.kind === "popcorn" ? 1.5 : 0) * (cmRegular() ? 0.9 : 1);
+const cmPaid = e => e.kind === "item" || (e.kind === "tape" ? cm.rented.has(e.ref) : e.kind === "snack" ? !!e.ref.userData.paid : !!e.ref?.paid);
+const cmUnpaid = () => inv.filter(e => !cmPaid(e));
+function invRemove(e) {                          // taken off you: out of the inventory (and your hand, if it was in it)
+  const i = inv.indexOf(e); if (i < 0) return;
+  if (i === invSel) invStash(); else if (invSel > i) invSel--;
+  inv.splice(i, 1); invRender();
+}
+function cmPay(e) {                               // E on whoever's on the register, across the counter from them
+  const due = cmUnpaid(), total = +(due.reduce((a, x) => a + cmPrice(x), 0) + cm.tab + cm.owed).toFixed(2);
+  if (!total) return toast(`${e.first}: "${cmRegular() ? "Hey, you! " : ""}Let me know if you need anything!"`, true);
+  if (co) return toast(`${e.first}: "Be right with you, one sec."`, true);
+  if (total > cm.wallet + 1e-9) return toast(`That comes to ${cmMoney(total)}. You've only got ${cmMoney(cm.wallet)} on you`);
+  const tapes = due.filter(x => x.kind === "tape"), snacks = due.filter(x => x.kind !== "tape"), s = shift.stats;
+  if (tapes.length && !cm.card) {                 // first rental: they sign you up, and there's your card
+    if (inv.length >= INV_MAX) return toast(`${e.first}: "I'll need to make you a card first. Free a hand?" (your pockets are full)`);
+    cm.card = true; const sel = invSel; cmGive("card"); if (sel >= 0) invSelect(sel);
+    toast(`${e.first} signs you up: "Here's your card. Don't lose it!"`, true); cmLog("Signed up for a VaultBuster card", "good");
+  }
+  for (const x of tapes) { cm.rented.set(x.ref, shift.day + 3); x.ref.desens = true; }
+  const took = cm.rec?.day === shift.day && !cm.rec.done && tapes.some(x => titleOfCopy(x.ref) === cm.rec.title);
+  if (took) { cm.rec.done = true; cm.trust = Math.min(100, cm.trust + 3); cmLog(`Took ${cm.rec.by}'s pick: ${cm.rec.title.title}`, "good"); }
+  for (const x of snacks) { if (x.kind === "snack") { x.ref.userData.paid = true; cm.paidUnits.add(x.ref); } else x.ref.paid = true; }
+  cm.wallet -= total; posTerm.sale(total);
+  s.served++; s.rentals += tapes.length; s.rentalTake += tapes.reduce((a, x) => a + cmPrice(x), 0); s.snackTake += snacks.reduce((a, x) => a + cmPrice(x), 0) + cm.tab; s.feesCollected += cm.owed;
+  const what = [tapes.length && `${tapes.length} tape${tapes.length > 1 ? "s" : ""} (due back day ${shift.day + 3})`, snacks.length && `${snacks.length} snack${snacks.length > 1 ? "s" : ""}`,
+    cm.tab && `${cmMoney(cm.tab)} for what you'd already eaten`, cm.owed && `${cmMoney(cm.owed)} in late fees`].filter(Boolean).join(", ");
+  const wasRegular = cmRegular();
+  cm.day.spent += total; cm.day.rented += tapes.length; cm.day.fees += cm.owed;
+  cm.tab = cm.owed = 0; cm.trust = Math.min(100, cm.trust + 4 + tapes.length);
+  posBeep(1900); setTimeout(() => posBeep(1500), 120); e.c?.setMood("happy");
+  toast(`${e.first} rings you up: ${cmMoney(total)}${wasRegular ? " (regular's discount)" : ""}. "${took ? (cm.rec.by === e.first ? "Ooh, good choice. Told you!" : `${cm.rec.by} told you about that one, huh?`) : "Thanks! Be kind, rewind."}"`, true);
+  cmLog(`Paid ${cmMoney(total)}: ${what}`, "", -total);
+  if (!wasRegular && cmRegular()) { toast(`${e.first}: "You're in here all the time! I'll knock ten percent off from now on."`, true); cmLog("The staff know me now: a regular's 10% off", "good"); }
+}
+
+// ---- getting caught, and getting away with it ----
+const CM_FLOOR = { x: -4.2, z: 6.6, yaw: -Math.PI / 2 }, CM_LOT = { x: 2.6, z: -3.4, yaw: Math.PI };
+function cmFade(then) {                          // a blink to black while you're moved
+  const f = $("fade"); f.style.opacity = 1;
+  setTimeout(() => { then(); gateLastZ = player.z; cm.inside = player.z > 0.05; setTimeout(() => { f.style.opacity = 0; }, 250); }, 450);
+}
+function cmPutAt(p) { if (seated) seated = false; Object.assign(player, { x: p.x, z: p.z, yaw: p.yaw, pitch: 0 }); keys.clear(); }
+function cmCaught(why, by) {                     // why: "staff" (somewhere you shouldn't be) | "theft"
+  const name = by?.first || "The clerk", taken = cmUnpaid();
+  cmTermClose();
+  for (const e of taken) {                        // the store's things go back to the store
+    if (e.kind === "tape") { returnBin.push(e.ref); refreshReturnsBin(); }
+    else if (e.kind === "snack" && !stockCarry.has(e.ref)) e.ref.visible = true;
+    invRemove(e);
+  }
+  cm.tab = 0; cm.heat = 0; cm.strikes++; cm.today++; cm.day.caught++; if (by?.id) cm.wary.add(by.id);
+  cm.trust = Math.max(0, cm.trust - (why === "theft" ? 40 : 15));
+  by?.c?.setMood("angry");
+  if (why === "staff" && cm.today === 1) {
+    toast(`${name}: "Whoa, you can't be back here. Employees only." They walk you back out to the floor`);
+    cmLog(`Caught somewhere I shouldn't have been. ${name} let me off with a warning`, "bad");
+    cmFade(() => cmPutAt(CM_FLOOR));
+  } else {
+    cm.banned = shift.day;
+    toast(why === "theft" ? `${name}: "Hey! You didn't pay for that." They take it back and walk you out. Don't come back today` : `${name}: "Okay, that's it. Out." You're walked out, and not welcome back today`);
+    cmLog(why === "theft" ? `Caught walking out without paying${taken.length ? ` (${taken.length} thing${taken.length > 1 ? "s" : ""} taken back)` : ""}. Thrown out for the day` : `Caught in back again. Thrown out for the day`, "bad");
+    cmFade(() => cmPutAt(CM_LOT));
+  }
+}
+function cmGotAway(unpaid) {                      // out the door with it and nobody saw
+  const tapes = unpaid.filter(e => e.kind === "tape");
+  for (const e of unpaid) { if (e.kind === "tape") { cm.rented.set(e.ref, 0); e.ref.desens = true; } else if (e.kind === "snack") { e.ref.userData.paid = true; cm.paidUnits.add(e.ref); } else e.ref.paid = true; }
+  shift.stats.stolen += tapes.length; cm.day.stolen += unpaid.length; cm.tab = 0;
+  toast("Nobody saw a thing. It's yours now", true);
+  cmLog(`Walked out without paying: ${unpaid.map(e => e.kind === "tape" ? e.ref.title : e.kind === "snack" ? e.ref.userData.snack.name : "popcorn").join(", ") || "what I'd eaten"}`, "bad");
+}
+
+// ---- a drink, spilled on purpose: somebody on staff will come and mop it up (and they're not at the register) ----
+function cmSpill() {
+  if (!heldSnack || !isDrink(heldSnack.userData.snack) || !snackLeft || !cm.inside || player.onRoof) return false;
+  const e = inv[invSel], x = player.x - Math.sin(player.yaw) * 0.7, z = player.z - Math.cos(player.yaw) * 0.7;
+  if (blocked(x, z)) { toast("No room to spill it there"); return true; }
+  if (!cmPaid(e)) cm.tab += cmPrice(e);
+  messAdd("spill", x, z); snackLeft = 0; snackTag();
+  const by = cmNotice(10);
+  toast(by ? `${by.first}: "Whoa, careful! I'll grab the mop."` : "Oops. Somebody'll be along with a mop", !by);
+  return true;
+}
+
+// ---- the movies: the staff put on a feature every night the theater's open (picked in the morning, in the deck at
+// 8). A ticket's T at the register; with one, a seat in the auditorium while it's on is a night out ----
+function cmFeature() {                            // the morning: tonight's film, if nobody's picked one
+  if (!owned("theater") || show.day === shift.day) return;
+  const films = catalog.filter(t => t.seasons?.[0]?.episodes?.length === 1 && !libLocked(t) && onShelfCopy(t));
+  if (!films.length) return;
+  let seed = 15485863 * shift.day + 11; const r = ((seed * 16807) % 2147483647) / 2147483647;
+  showSet(films[Math.floor(r * films.length)]);
+}
+const cmShowToday = () => owned("theater") && show.title && show.day === shift.day;
+const cmTicketOpen = () => cmShowToday() && !show.status && shift.h < SHOW.at && !afterClose();
+function cmTicket(e) {
+  if (!cmTicketOpen()) return toast(cmShowToday() ? `${e.first}: "Sorry, we're done selling for tonight."` : `${e.first}: "No show tonight, sorry."`, true);
+  if (cm.ticket === shift.day) return toast(`${e.first}: "You've already got one! Eight o'clock, the doors open at quarter till."`, true);
+  if (show.sold >= Math.min(10, theaterSeats.length)) return toast(`${e.first}: "Sold out tonight, sorry!"`, true);
+  const price = SHOW.ticket * (cmRegular() ? 0.9 : 1);
+  if (price > cm.wallet + 1e-9) return toast(`A ticket's ${cmMoney(price)}. You've only got ${cmMoney(cm.wallet)}`);
+  cm.wallet -= price; posTerm.sale(price); show.sold++; shift.stats.tickets++; cm.ticket = shift.day; cm.day.spent += price;
+  posBeep(1900); e.c?.setMood("happy");
+  toast(`${e.first}: "One for ${show.title.title}, eight o'clock. Enjoy the show!"`, true);
+  cmLog(`Bought a ticket for ${show.title.title} at 8 PM`, "", -price);
+}
+function cmShowTick(dt) {
+  if (!cmShowToday()) return;
+  if (["arriving", "late"].includes(show.status) && shift.h >= SHOW.at - 0.02 && !filmOn() && cm.started !== shift.day) {   // the staff start it, once (whatever's in the VCR comes out to Returns)
+    const c = onShelfCopy(show.title); cm.started = shift.day;
+    if (c) { const old = playing?.tape; setOnShelf(c, false); playEpisode(0, c); showTableBox(c); if (old && old !== c) { returnBin.push(old); refreshReturnsBin(); } }
+  }
+  if (show.status === "on" && cm.ticket === shift.day && seated && lightZoneAt(player.x, player.z) === "theater") cm.watchT += dt;
+  if (show.status === "done" && cm.ticket === shift.day && !cm.watched) {
+    cm.watched = true;
+    if (cm.watchT > 20) { cm.trust = Math.min(100, cm.trust + 5); cm.day.items.push(`SAW ${show.title.title.toUpperCase()}`); cmLog(`Saw ${show.title.title} in the theater`, "good"); toast(`The lights come up. ${show.title.title}: not bad at all`, true); }
+    else cmLog(`Bought a ticket for ${show.title.title} and never sat down for it`);
+  }
+}
+
+// ---- ask them what's good: whoever you talk to (away from the register) has a pick for you, once a day. Rent it
+// and they'll remember you took them up on it ----
+function cmRecommend(e) {
+  if (cm.rec?.day === shift.day) return toast(`${e.first}: "${cm.rec.done ? `Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${cm.rec.title.category}. You won't regret it.`}"`, true);
+  let seed = 31 * shift.day + e.first.charCodeAt(0) * 7 + 3; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const films = catalog.filter(t => t.seasons?.[0]?.episodes?.length === 1 && !libLocked(t) && onShelfCopy(t));
+  if (!films.length) return toast(`${e.first}: "Finding everything okay?"`, true);
+  const t = films[Math.floor(rnd() * films.length)];
+  cm.rec = { title: t, by: e.first, day: shift.day, done: false };
+  toast(`${e.first}: "Have you seen ${t.title}? It's over in ${t.category}. Trust me."`, true);
+  cmLog(`${e.first} says to rent ${t.title} (${t.category})`);
+}
+
+// ---- the end of the trail (for now): up on the roof, a ball off the mat ----
+function cmTeeOff() {
+  if (cm.teed) return;
+  cm.teed = true; cm.day.items.push("TEED OFF FROM THE ROOF");
+  cmLog("Teed off from the roof of the video store. Nobody will ever believe it", "good");
+  setTimeout(() => toast(`Teed off from the roof. That's the whole trail: ${shift.day} day${shift.day > 1 ? "s" : ""}, caught ${cm.strikes} time${cm.strikes === 1 ? "" : "s"}. (More to find, one day)`, true), 2500);
+}
+// ---- a good customer: a misshelved tape put back where it goes is noticed (more if someone sees you do it) ----
+function cmHelped(t) {
+  const by = staff.find(cmSees); cm.trust = Math.min(100, cm.trust + (by ? 4 : 2));
+  if (by) { by.c?.setMood("happy"); toast(`${by.first}: "Oh, thanks! People just stick them anywhere."`, true); }
+  cmLog(`Put a misshelved ${t.title} back where it goes`, "good");
+}
+// ---- the staff remember: whoever caught you today keeps an eye on you; and the morning after Ray's badge goes
+// missing, everyone's on the lookout ----
+const cmWary = e => cm.wary.has(e.id) || cm.alert === shift.day;
+
+// ---- the register, with a badge: logged in as Ray. What the store knows ----
+function cmTermOpen() {
+  if (!cmBehindCounter(player.x, player.z)) return toast("You'd have to be behind the counter to use it");
+  if (cm.termLock === shift.day) return toast("The register's locked: SEE MANAGER. Not today");
+  cm.term = { page: cm.loggedIn ? "menu" : "login", pin: "" }; cmTermDraw(); keys.clear();
+}
+function cmNoSale() {                             // the drawer pops with a ding: anyone close enough hears it
+  drawerOpen = 1; posBeep(1200); setTimeout(() => posBeep(1500), 100);
+  for (const e of staff) if (e.c && !e.leaving && Math.hypot(e.c.group.position.x - player.x, e.c.group.position.z - player.z) < 9) { cm.heat = Math.min(0.95, cm.heat + 0.45); cm.wary.add(e.id); e.c.setMood("shock"); }
+  cmLog("Rang NO SALE on the register", "bad");
+}
+function cmTermClose() { if (!cm.term) return; cm.term = null; $("cmTerm").style.display = "none"; drawerOpen = 0; }
+function cmTermDraw() {
+  const t = cm.term, el = $("cmTerm"); if (!t) return;
+  const head = `VAULTBUSTER VIDEO #0417      ${t.page === "login" ? "SIGN IN " : "USER: RAY"}\n` + "=".repeat(38) + "\n";
+  const late = [...cm.rented].filter(([, due]) => due > 0 && shift.day > due);
+  const body = t.page === "msgs" ? `MESSAGES (1)\n\nFROM: MGR\nRE: roof\n\nRoof hatch lock is ${COMBOS.hatch.code.split("").join("-")}.\nAC guy Thurs. NOBODY else goes\nup there. I mean it.\n\n[P] PRINT IT   [B] BACK`
+    : t.page === "you" ? `CUSTOMER LOOKUP: WALK-IN\n\nRENTALS OUT ...... ${cm.rented.size}\nOVERDUE .......... ${late.length}\nFEES OWED ........ ${cmMoney(cm.owed)}\nTRUST ............ ${cm.trust >= 60 ? "REGULAR" : cm.trust >= 25 ? "FRIENDLY" : "NEW FACE"}\n\n${cm.owed ? "[W] WAIVE FEES   " : ""}[B] BACK`
+    : t.page === "sched" ? "TODAY'S SCHEDULE\n\n" + staff.map((e, i) => { const m = e.sched[weekday()], a = Math.log2(m & -m), n = bits(m); return `${e.first.toUpperCase().padEnd(10)} ${m ? `${fmtClock(SCHED_H0 + a)} - ${fmtClock(SCHED_H0 + a + n)}` : "OFF"}${e.lunchDay === shift.day ? "  (LUNCH TAKEN)" : n >= 5 && m ? "  LUNCH ~MIDDAY" : ""}`; }).join("\n") + "\n\nLUNCH: 30 MIN, BREAK ROOM\n\n[B] BACK"
+    : t.page === "login" ? `BADGE ..... RAY (ACCEPTED)\nPIN ....... ${[0, 1, 2, 3].map(i => t.pin[i] ? "*" : "_").join(" ")}\n\nTYPE THE PIN ON THE NUMBER KEYS\n${cm.pinTries ? `${3 - cm.pinTries} TRIES LEFT\n` : ""}\n[E] CANCEL`
+    : t.page === "drawer" ? `NO SALE\n\nTHE DRAWER'S OPEN. TWENTIES, TENS,\nROLLS OF QUARTERS${cm.found.has("drawerKey") ? "" : ", AND UNDER THE\nTRAY: A STEEL KEY ON A YELLOW TAG"}.\n\n${cm.found.has("drawerKey") ? "" : "[K] TAKE THE KEY\n"}${cm.tookCash === shift.day ? "" : "[M] TAKE A TWENTY\n"}[B] SHUT THE DRAWER`
+    : "[1] MESSAGES\n[2] CUSTOMER LOOKUP\n[3] SCHEDULE\n[4] NO SALE (OPEN THE DRAWER)\n\n[E] LOG OUT";
+  el.textContent = head + body + (t.msg ? `\n\n> ${t.msg}` : ""); el.style.display = "block";
+}
+function cmTermKey(e) {                           // -> true if the terminal took the key
+  const t = cm.term; if (!t) return false;
+  if (e.repeat) return true;
+  const k = e.code;
+  if (k === "KeyE" || k === "KeyQ" || k === "Escape") { cmTermClose(); return true; }
+  t.msg = "";
+  if (t.page === "login") {
+    if (/^Digit\d$/.test(k)) t.pin += k[5];
+    if (t.pin.length === 4) {
+      if (t.pin === cmTrail.pin) { cm.loggedIn = true; t.page = "menu"; cmLog("Logged into the register as Ray", "bad"); cmSpentTick(); }
+      else if (++cm.pinTries >= 3) { cm.termLock = shift.day; cm.pinTries = 0; cmTermClose(); toast("INVALID PIN. TERMINAL LOCKED: SEE MANAGER. It won't take another try today"); cmLog("Locked myself out of the register for the day", "bad"); return true; }
+      else { t.msg = "INVALID PIN"; posBeep(400); }
+      t.pin = "";
+    }
+  }
+  else if (t.page === "menu") { if (k === "Digit1") t.page = "msgs"; else if (k === "Digit2") t.page = "you"; else if (k === "Digit3") t.page = "sched"; else if (k === "Digit4") { t.page = "drawer"; cmNoSale(); } }
+  else if (t.page === "drawer" && k === "KeyB") { drawerOpen = 0; t.page = "menu"; }
+  else if (t.page === "drawer" && k === "KeyK" && !cm.found.has("drawerKey")) {
+    if (inv.length >= INV_MAX) t.msg = "YOUR POCKETS ARE FULL";
+    else { cmGive("closetKey"); cm.found.add("drawerKey"); t.msg = "THE JANITOR'S KEY. (it's in your pocket)"; cmLog("Took the janitor's key out of the cash drawer", "good"); }
+  }
+  else if (t.page === "drawer" && k === "KeyM" && cm.tookCash !== shift.day) {
+    cm.tookCash = shift.day; cm.wallet += 20; posTerm.sale(-20); cm.day.stolen++; cm.short = shift.day; t.msg = "A TWENTY. (nobody saw. probably)";
+    cmLog("Took a twenty out of the register", "bad", 20);
+  }
+  else if (k === "KeyB") t.page = "menu";
+  else if (t.page === "msgs" && k === "KeyP") {
+    if (cmHas("printout") || cm.hatch) t.msg = cm.hatch ? "PAPER JAM. (you don't need it anyway)" : "ALREADY PRINTED";
+    else if (inv.length >= INV_MAX) t.msg = "PRINTED... but your pockets are full. (free one up and print it again)";
+    else { posBeep(1200); cmGive("printout"); cm.found.add("printout"); t.msg = "PRINTED. (it's in your pocket)"; cmLog("Printed the manager's message off the register", "good"); }
+  }
+  else if (t.page === "you" && k === "KeyW" && cm.owed) { t.msg = `WAIVED ${cmMoney(cm.owed)}`; cmLog(`Waived my own late fees on the register (${cmMoney(cm.owed)})`, "bad"); cm.owed = 0; }
+  cmTermDraw();
+  return true;
+}
+
+// ---- the day: in off the lot just before ten; whoever opened unlocks at ten; at midnight they want you out,
+// and once you're out, the day's slip (what you spent, found, got away with) and home ----
+function cmMorning() {
+  shift.h = SHIFT.open - 0.25;
+  cm.searched.clear();
+  if (shift.day > 1) { cm.wallet += CM_ALLOWANCE; cmLog(`Found ${cmMoney(CM_ALLOWANCE)} in my jacket`, "good", CM_ALLOWANCE); }
+  if (cm.found.has("badge") && !cm.alertDone) { cm.alertDone = true; cm.alert = shift.day; cmLog("Overheard at the counter: Ray's badge went missing out of his locker. Everybody's keeping their eyes open today", "bad"); }
+  if (cm.short && cm.short === shift.day - 1) { cm.alert = shift.day; cmLog("Overheard: the drawer came up twenty short last night. Everybody's watching the counter today", "bad"); }
+  cm.wary.clear(); cm.nagged = 0; cm.pinTries = 0;
+  cm.today = 0; cm.heat = 0; cm.closeT = 0; cm.going = false; cm.day = cmDayStats(); cmTermClose();
+  for (const k of KEYED) { const d = k.door(); if (d?.open) toggleDoor(d); d && (d.byYou = false); }   // the back's locked up overnight
+  cmPutAt(CM_LOT); gateLastZ = player.z; cm.inside = false;
+  cmMoneyDrop(); cm.watchT = 0; cm.watched = false; cmFeature();
+  shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. The store opens at 10. You've got ${cmMoney(cm.wallet)} on you`;
+}
+function cmOpenUp() {
+  if (!frontLock.locked) return;
+  setFrontLock(false);
+  const who = staff.find(e => e.c && !e.leaving);
+  toast(`10:00 AM — ${who ? `${who.first} flips the sign` : "the sign flips"}: they're open`, true);
+}
+function cmNextDay() {
+  if (cm.going) return; cm.going = true;
+  cmFade(() => { cmPutAt(CM_LOT); cmSlip(); });
+}
+function cmSlip() {                               // the end of your day, on the same slip the staff get
+  const d = cm.day, W = 34, row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v, line = "-".repeat(W);
+  const late = [...cm.rented].filter(([, due]) => due > 0 && shift.day >= due).length;
+  keys.clear(); shift.report = true; $("hoverTip").style.display = "none"; document.exitPointerLock();
+  $("shiftSlip").textContent = [
+    "YOUR DAY".padStart(21), `${WEEKDAYS[shiftDate().getDay()]} · DAY ${shift.day}`.padStart(22), "",
+    row("SPENT AT THE STORE", cmMoney(d.spent)), row("  INCL. LATE FEES", cmMoney(d.fees)), row("MONEY FOUND", cmMoney(d.found)), row("IN YOUR WALLET", cmMoney(cm.wallet)), line,
+    row("TAPES RENTED", d.rented), row("TAPES OUT", cm.rented.size), ...(late ? [row("  DUE BACK BY TOMORROW", late)] : []), ...(cm.owed ? [row("LATE FEES OWED", cmMoney(cm.owed))] : []), line,
+    row("WALKED OUT WITH", d.stolen ? `${d.stolen} THING${d.stolen > 1 ? "S" : ""}` : "NOTHING"), row("CAUGHT", d.caught ? `${d.caught} TIME${d.caught > 1 ? "S" : ""}` : "NEVER"),
+    row("THE STAFF THINK YOU'RE", cm.trust >= 60 ? "A REGULAR" : cm.trust >= 25 ? "FRIENDLY" : "A NEW FACE"), line,
+    ...(() => { const home = inv.filter(e => e.kind === "tape" && cm.rented.has(e.ref)).map(e => e.ref.title); return home.length ? ["TAKING HOME TONIGHT", ...home.map(n => "  " + n.toUpperCase().slice(0, W - 2))] : []; })(),
+    ...(d.items.length ? ["FOUND TODAY", ...d.items.map(n => "  " + n.toUpperCase())] : ["FOUND NOTHING NEW TODAY"]), "",
+    `${cm.goal ? "✓" : "☐"} GET UP ON THE ROOF`.padStart(26), ...(cm.goal ? [`${cm.teed ? "✓" : "☐"} TEE OFF FROM UP THERE`.padStart(27)] : []), "", "SEE YOU TOMORROW".padStart(25),
+  ].join("\n");
+  $("shiftNext").textContent = "NEXT DAY ▸";
+  $("shiftReport").style.display = "flex";
+}
+function cmDoorOpen(fromInside) { return fromInside || (!frontLock.locked && cm.banned !== shift.day); }   // (out's always fine: they let you out)
+
+function cmTick(dt) {
+  cmNoteTick(); cmShowTick(dt);
+  if (cm.comboOf !== cm.comboWas) { cm.typed = ""; cm.comboWas = cm.comboOf; }   // (looked away: start the combination over)
+  if (heldSnack && !cm.spillHint && isDrink(heldSnack.userData.snack) && cm.inside) { cm.spillHint = true; toast("X — spill it on the floor (somebody'll come with a mop)", true); }
+  if (!started || document.pointerLockElement !== canvas || shift.report) return;
+  const inside = player.onRoof || player.z > 0.05;
+  // out through the doors with something you haven't paid for
+  if (cm.inside && !inside) {
+    const unpaid = cmUnpaid();
+    if (unpaid.length || cm.tab > 0) { const seer = staff.find(cmSees); if (seer) cmCaught("theft", seer); else cmGotAway(unpaid); }
+  }
+  if (!cm.inside && inside && cm.nagged !== shift.day && cm.banned !== shift.day) {   // in the door with something overdue: they mention it
+    const late = [...cm.rented].filter(([, due]) => due > 0 && shift.day > due);
+    if (late.length) { cm.nagged = shift.day; const by = staff.find(e => e.c && !e.leaving);
+      toast(`${by ? by.first : "The clerk"}: "Hey, just so you know, ${late.length === 1 ? `${late[0][0].title} is` : `${late.length} of your tapes are`} overdue!"`); }
+  }
+  cm.inside = inside;
+  // the gates going off as you walk through them: everyone's eyes on you
+  const alarm = gateAlarm.on && Math.abs(player.z - GATE_Z) < 1.5 && inv.some(e => e.kind === "tape" && !cmPaid(e));
+  if (alarm && !cm.alarmWas) { const by = staff.find(e => e.c && !e.leaving); if (by) cmCaught("theft", by); }
+  cm.alarmWas = alarm;
+  // staff only: seen back there, the meter fills (slower for someone they know); out of sight it drains. Full: caught
+  const where = cmStaffOnly(), seer = where ? staff.find(cmSees) : null;
+  if (seer) {
+    if (cm.heat === 0) { seer.c.setMood("shock"); toast(`${seer.first}: "${cmRegular() ? "Uh, hey... " : "Hey! "}Can I help you?"`); }
+    cm.heat = Math.min(1, cm.heat + dt / (1.1 * (1 + cm.trust / 100) / (cmWary(seer) ? 1.5 : 1)));
+    if (cm.heat >= 1) cmCaught("staff", seer);
+  } else cm.heat = Math.max(0, cm.heat - dt * 0.35);
+  cm.seer = seer;
+  const sn = $("sneak"); sn.style.display = where || cm.heat > 0 ? "block" : "none";
+  if (where || cm.heat > 0) { sn.className = seer ? "seen" : ""; sn.firstChild.textContent = seer ? `SEEN · ${seer.first.toUpperCase()}` : `STAFF ONLY · ${(where || "").toUpperCase()}${cmRunning() ? " · THEY CAN HEAR YOU RUN" : ""}`; sn.lastChild.style.setProperty("--h", `${(cm.heat * 100).toFixed(0)}%`); }
+  // a door on a closer: one the staff left open swings shut once nobody's in it (unless you unlocked it yourself)
+  for (const k of KEYED) {
+    const d = k.door(); if (!d?.open || d.byYou) { if (d) d.closeT = 0; continue; }
+    const [x, , z] = doorAt(d), near = Math.hypot(player.x - x, player.z - z) < 1.6 || staff.some(e => e.c && Math.hypot(e.c.group.position.x - x, e.c.group.position.z - z) < 1.8);
+    if (near) d.closeT = 0; else if ((d.closeT = (d.closeT || 0) + dt) > 3) { d.closeT = 0; if (!playerIn(d.shut)) toggleDoor(d); }
+  }
+  // locked out: say so at the doors
+  if (!inside && Math.hypot(player.x - 0.9, player.z) < 1.3 && !cmDoorOpen(false) && (cm.doorHint -= dt) <= 0) {
+    cm.doorHint = 4; toast(cm.banned === shift.day ? "You've been thrown out for today" : afterClose() ? "CLOSED · open 10 AM to midnight" : "CLOSED · opens at 10 AM");
+  }
+  // every half second: what's left your hands. Eaten before it's paid for goes on your tab; a rental back in the
+  // returns slot (or on its shelf) is returned, late fees and all
+  if ((cm.checkT -= dt) <= 0) {
+    cm.checkT = 0.5;
+    for (const e of cm.invWas) if (!inv.includes(e) && !cmPaid(e) && e.kind !== "tape" && inside && !(e.kind === "snack" && e.ref.visible)) cm.tab += cmPrice(e);
+    cm.invWas = [...inv]; cmSpentTick();
+    for (const [c, due] of cm.rented) if (returnBin.includes(c) || !c.offShelf) {
+      cm.rented.delete(c); cm.day.returned++;
+      const late = due > 0 ? Math.max(0, shift.day - due) : 0;
+      if (late) cm.owed += late;
+      cmLog(`Returned ${c.title}${late ? ` · ${late} day${late > 1 ? "s" : ""} late (${cmMoney(late)} owed)` : ""}`);
+    }
+    for (const u of cm.paidUnits) if (!inv.some(e => e.ref === u)) { delete u.userData.paid; cm.paidUnits.delete(u); }   // (gone: the next one on that spot is the store's)
+  }
+  // the roof: as far as it goes, for now
+  if (player.onRoof && !cm.goal) { cm.goal = true; toast("You made it up on the roof. Nobody knows you're here", true); cmLog("Made it up on the roof", "good"); cm.day.items.push("THE ROOF"); }
+  // the end of the night: they want you out; once you're out (or they've walked you out), home
+  if (afterClose()) {
+    if (!inside) cmNextDay();
+    else if ((cm.closeT += dt) > 25) { toast("They walk you to the door. Good night!", true); cmFade(() => cmPutAt(CM_LOT)); cm.closeT = -99; }
+    else if (cm.closeT > 0 && cm.closeT - dt <= 0) toast(`${staff.find(e => e.c)?.first || "The clerk"}: "We're closed! Time to head out."`);
+  }
+}
+function cmClock(crossed) {                       // shiftTick's hour marks, from out front
+  if (crossed(SHIFT.open)) cmOpenUp();
+  if (crossed(SHIFT.lastIn)) toast("11:45 PM — the store closes at midnight", true);
+  if (crossed(SHIFT.close)) setFrontLock(true);
+}
+function cmHud() {
+  const late = afterClose(), h = shift.h;
+  const status = cm.banned === shift.day ? "THROWN OUT TODAY" : late ? "CLOSED" : h < SHIFT.open ? "OPENS 10 AM" : "OPEN";
+  const unpaid = cmUnpaid().reduce((a, e) => a + cmPrice(e), 0);
+  return [`${WEEKDAYS[shiftDate().getDay()]} ${fmtClock(h, late)}`,
+    `${status} · WALLET ${cmMoney(cm.wallet)}${unpaid ? ` · UNPAID ${cmMoney(unpaid)}` : ""}${cm.tab ? ` · TAB ${cmMoney(cm.tab)}` : ""}${cm.owed ? ` · LATE FEES ${cmMoney(cm.owed)}` : ""}${cmRegular() ? " · REGULAR" : ""}`,
+    [`${cm.goal ? "✓" : "☐"} Get up on the roof`, ...(cm.goal ? [`${cm.teed ? "✓" : "☐"} Tee off from up there`] : []),
+      ...(cm.rec?.day === shift.day ? [`${cm.rec.done ? "✓" : "☐"} ${cm.rec.by}'s pick: ${cm.rec.title.title}`] : []), ...(cmShowToday() && !["done", "failed"].includes(show.status) ? [`${cm.ticket === shift.day ? "✓ Ticket" : "☐ Tonight"}: ${show.title.title}, 8 PM`] : [])]];
+}
+function cmE() {                                  // E, as a customer: what's different. -> true if handled
+  if (cm.term) { cmTermClose(); return true; }
+  if (aimPickup) { cmPickUp(aimPickup); return true; }
+  if (cm.comboOf) {
+    if (!comboDone(cm.comboOf)) toast("Type the combination on the number keys");
+    else if (comboLeft(cm.comboOf)) cmTakeFrom(cm.comboOf);
+    else if (cm.comboOf === COMBOS.locker) toast("Ray's locker. Nothing else in there worth taking");
+    else return false;                            // (the hatch, open: up you go)
+    return true;
+  }
+  if (aimEmp) {
+    const p = aimEmp.c?.group.position;
+    if (p && cmBehindCounter(p.x, p.z) && player.x < -2.3 && player.z > 4.2 && player.z < 6.5) cmPay(aimEmp);
+    else if (cmUnpaid().length || afterClose()) toast(`${aimEmp.first}: "${afterClose() ? "We're closed, sorry!" : "I can ring you up at the register!"}"`, true);
+    else cmRecommend(aimEmp);
+    return true;
+  }
+  if (aimCustomer) { toast(aimCustomer.kid ? "The kid stares at you" : `${memberName(aimCustomer.member).split(" ")[0]}: "Hey."`, true); return true; }
+  if (aimDoor && keyedOf(aimDoor) && !aimDoor.open) {
+    const k = keyedOf(aimDoor);
+    if (!cmHas(k.key)) { aimDoor.rattle = 0.35; doorSnd(aimDoor, "wood", "rattle"); toast(`Locked. The ${k.room} needs a key`); return true; }
+    toggleDoor(aimDoor); aimDoor.byYou = true; return true;
+  }
+  if (aimDoor && keyedOf(aimDoor)) { toggleDoor(aimDoor); aimDoor.byYou = false; return true; }
+  if (aimBin) { cmSearchBin(aimBin); return true; }
+  if (aimLock) { toast("The deadbolt's the staff's to work"); return true; }
+  if (aimExit) return true;                       // (just walk out)
+  if (aimPOS) { if (cmHas("badge") || cm.loggedIn) cmTermOpen(); else toast("The register's logged out. It wants an employee badge"); return true; }
+  if (aimPhone) { toast("Not your phone"); return true; }
+  return false;
+}
+function cmTip() {                                // the hover tip, as a customer -> html, or null for the usual
+  if (aimPickup) return aimPickup.search ? `E — search ${aimPickup.search}` : aimPickup.mesh === "bill" ? "E — pick it up<div class=\"cat\">money on the floor</div>" : `E — take it<div class="cat">${ITEMS[aimPickup.gives.item].about}</div>`;
+  if (cm.comboOf) return comboTip(cm.comboOf);
+  if (aimEmp) { const p = aimEmp.c?.group.position, n = cmUnpaid().length + (cm.tab || cm.owed ? 1 : 0);
+    const at = p && cmBehindCounter(p.x, p.z);
+    return `${aimEmp.first}<div class="cat">${at && n ? "E — pay for what you've got" : cmRegular() ? "knows you by now" : "on staff"}</div>`
+      + (at && cmTicketOpen() && cm.ticket !== shift.day ? `T — a ticket for ${show.title.title}, 8 PM (${cmMoney(SHOW.ticket * (cmRegular() ? 0.9 : 1))})` : ""); }
+  if (aimCustomer) return `${aimCustomer.kid ? "A kid" : memberName(aimCustomer.member)}<div class="cat">shopping</div>`;
+  if (aimDoor && keyedOf(aimDoor)) { const k = keyedOf(aimDoor); return aimDoor.open ? "E — close the door" : cmHas(k.key) ? `E — unlock the ${k.room}<div class="cat">${ITEMS[k.key].name}</div>` : "Locked"; }
+  if (aimBin) return cm.searched.has(aimBin.id) && !(cmTrail.keyAt === `bin:${aimBin.id}` && !cm.found.has(cmTrail.keyAt)) ? `The ${aimBin.name}<div class="cat">already looked today</div>` : `E — dig through the ${aimBin.name}`;
+  if (aimLock) return "The front doors' deadbolt";
+  if (aimExit) return null;
+  if (aimPOS) return cm.termLock === shift.day ? "The register<div class=\"cat\">locked: see manager</div>" : cmHas("badge") || cm.loggedIn ? `E — ${cm.loggedIn ? "use the register" : "swipe Ray's badge"}` : "The register<div class=\"cat\">logged out · wants an employee badge</div>";
+  return null;
+}
+// the switch: off the staff for good, and back in as a customer (the same store, its staff, its stock). What you had
+// on you was the store's: it goes back. Then the page reloads into it, out on the lot
+function becomeCustomer(why = "") {
+  if (CUSTOMER) return;
+  for (const e of [...inv]) { if (e.kind === "tape") returnBin.push(e.ref); else if (e.kind === "snack" && !stockCarry.has(e.ref)) e.ref.visible = true; invRemove(e); }
+  refreshReturnsBin(); saveState();
+  let d; try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch {}
+  d = d?.v === SAVE_V ? d : { v: SAVE_V, mode: MODE };
+  Object.assign(d, { role: "customer", inv: [], player: { ...CM_LOT, pitch: 0 }, cm: { wallet: 40, greet: why ? `${why} You're a customer here now` : "You're a customer here now" } });
+  saveOff = true;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(d)); sessionStorage.setItem("vaultbuster-play", "1"); } catch {}
+  location.reload();
+}
+function cmSave() {
+  const units = snackUnits();
+  return { wallet: +cm.wallet.toFixed(2), owed: cm.owed, tab: +cm.tab.toFixed(2), strikes: cm.strikes, today: cm.today, banned: cm.banned, goal: cm.goal, found: [...cm.found],
+    trust: cm.trust, seed: cm.seed, loggedIn: cm.loggedIn, pinTries: cm.pinTries, termLock: cm.termLock, tookCash: cm.tookCash, short: cm.short, rec: cm.rec && { title: copyKey(cm.rec.title), by: cm.rec.by, day: cm.rec.day, done: cm.rec.done }, teed: cm.teed, card: cm.card, alert: cm.alert, alertDone: cm.alertDone, nagged: cm.nagged, wary: [...cm.wary], ticket: cm.ticket, watchT: Math.round(cm.watchT), watched: cm.watched, hatch: cm.hatch, searched: [...cm.searched], day: cm.day,
+    rented: Object.fromEntries([...cm.rented].map(([c, due]) => [copyKey(c), due])), paid: [...cm.paidUnits].map(u => units.indexOf(u)).filter(i => i >= 0) };
+}
+function cmLoad(S) {
+  if (S) {
+    Object.assign(cm, { wallet: S.wallet ?? 40, owed: S.owed || 0, tab: S.tab || 0, strikes: S.strikes || 0, today: S.today || 0, banned: S.banned || 0, goal: !!S.goal, greet: S.greet || null,
+      trust: S.trust || 0, loggedIn: !!S.loggedIn, pinTries: S.pinTries || 0, termLock: S.termLock || 0, tookCash: S.tookCash || 0, short: S.short || 0, rec: S.rec && copyByKey(S.rec.title) ? { ...S.rec, title: copyByKey(S.rec.title) } : null, teed: !!S.teed, card: !!S.card, alert: S.alert || 0, alertDone: !!S.alertDone, nagged: S.nagged || 0, wary: new Set(S.wary || []), ticket: S.ticket || 0, watchT: S.watchT || 0, watched: !!S.watched, hatch: !!S.hatch, day: { ...cmDayStats(), ...S.day } });
+    for (const id of S.found || []) cm.found.add(id);
+    for (const id of S.searched || []) cm.searched.add(id);
+    for (const [k, due] of Object.entries(S.rented || {})) { const c = copyByKey(k); if (c) cm.rented.set(c, due); }
+    const units = snackUnits(); for (const i of S.paid || []) if (units[i]) { units[i].userData.paid = true; cm.paidUnits.add(units[i]); }
+  }
+  for (const e of inv) if (e.kind === "item") cm.found.add(e.ref.id);   // (whatever's in your pockets, you've found)
+  cm.inside = player.z > 0.05; cm.invWas = [...inv];
+  cm.seed = S?.seed || 1 + Math.floor(Math.random() * 2147483645);   // (a new customer: a trail of their own)
+  cmTrailSet(); cmRoster(); cmPickupsBuild(); cmSpentTick(); cmMoneyDrop(); cmFeature();
+  { const g = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial()); g.visible = false; g.position.set(...COMBOS.locker.at); g.userData.combo = COMBOS.locker; scene.add(g); aimables.push(g); }   // Ray's padlock (the lockers are drawn with the break room)
+  if (cm.greet) { shift.greet = cm.greet; cm.greet = null; }
+}
+
 // ---------------- save / restore (localStorage) ----------------
 // The store remembers itself between visits: where you're standing, lights
 // and lamps, doors / flap / cooler, your inventory (and which slot is in
@@ -11914,9 +12649,9 @@ function saveState() {
   const units = snackUnits();
   const item = (e, i) => e.kind === "tape" ? { kind: "tape", key: copyKey(e.ref) }
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
-    : { kind: "popcorn", pop: e.ref };
+    : e.kind === "item" ? { kind: "item", id: e.ref.id } : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    v: SAVE_V, mode: MODE, redNights: redNights || undefined, role: CUSTOMER ? "customer" : undefined, cm: CUSTOMER ? cmSave() : undefined, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg, drunk: { gut: +drunk.gut.toFixed(3), blood: +drunk.blood.toFixed(3), hang: drunk.hang, owe: drunk.owe },
@@ -11969,8 +12704,9 @@ function loadState(S) {
     const units = snackUnits();
     for (const it of S.inv || []) {          // re-pick each item up in order, exactly as if you'd grabbed it
       const c = it.kind === "tape" && copyByKey(it.key), u = it.kind === "snack" && units[it.i];
-      if ((it.kind === "tape" && !c) || (it.kind === "snack" && !u) || !invMakeRoom()) continue;
+      if ((it.kind === "tape" && !c) || (it.kind === "snack" && !u) || (it.kind === "item" && !ITEMS[it.id]) || !invMakeRoom()) continue;
       if (c) { setOnShelf(c, false); showTape(c); }
+      else if (it.kind === "item") heldItem = ITEMS[it.id];
       else if (u) { u.visible = false; showSnack(u); snackLeft = it.left; snackTotal = it.total; snackTag(); }
       else { heldPopcorn = it.pop; popcornVisual(); }
       invSync();
@@ -12009,6 +12745,7 @@ function loadState(S) {
 }
 function resetSave() { saveOff = true; try { localStorage.removeItem(SAVE_KEY); } catch {} location.reload(); }
 loadState(SAVE);
+if (CUSTOMER) cmLoad(SAVE?.cm);
 if (!SAVE?.stock) for (const e of stockProducts()) backstock[e.name] ??= CASE_QTY;   // a new store: a case of everything in the cupboards
 if (!SAVE?.shift) beginShift();              // a new store (or one saved before the shift clock): day 1, first thing
 gateLastZ = player.z;                        // restored position isn't a walk through the gates
@@ -12268,7 +13005,7 @@ renderer.setAnimationLoop(() => {
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
-  custTick(dt); frontDoorTick(dt);
+  custTick(dt); frontDoorTick(dt); if (CUSTOMER) cmTick(dt);
   empTick(dt);
   trashTick(dt);
   deadLightTick(dt);
@@ -12301,7 +13038,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
-window.__t = { carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
