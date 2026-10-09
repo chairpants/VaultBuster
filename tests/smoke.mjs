@@ -283,6 +283,26 @@ check("a regular gets 10% off; getting caught costs you that", await ev(() => {
   __t.cm.trust = 70; const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
   const full = __t.posTerm.rentPrice(t), w = __t.cm.wallet; __t.cmPay(__t.staff[0]); const paid = +(w - __t.cm.wallet).toFixed(2);
   const before = __t.cm.trust; __t.cmCaught("staff", __t.staff[0]); return Math.abs(paid - full * 0.9) < 0.01 && __t.cm.trust < before; }));
+// rentals (customer mode)
+const rentOne = `const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked && t.seasons[0].episodes.length === 1); __t.pickup(t); __t.showTape(t); __t.invSync(); __t.cm.wallet = 200; __t.cmPay(__t.staff[0]);`;
+await ev(() => { for (const e of [...__t.inv()]) if (e.kind === "tape") __t.invRemove(e); __t.cm.rented.clear(); __t.shift.h = 15; __t.shift.day = Math.max(__t.shift.day, 5);   // (far enough in for a tape to be days late)
+  Object.assign(__t.player, { x: __t.CM_RENT.drop.x, z: __t.CM_RENT.drop.z - 1.1, yaw: Math.PI, pitch: -0.35 }); });
+if (await ev(() => !!document.pointerLockElement)) check("a night drop out front, on the walk by the doors: there to aim at", await page.waitForFunction(() => __t.cmRentAiming(), null, { timeout: 20000 }).then(() => true, () => false));
+check("taken home, watched overnight: wound to its end, on the morning's greeting and the day's slip", await ev(r => {
+  eval(r); __t.cmMorning(); const c = __t.inv().find(e => e.kind === "tape").ref;
+  __t.cmSlip(); const slip = document.getElementById("shiftSlip").textContent; __t.shift.report = false; document.getElementById("shiftReport").style.display = "none";
+  return __t.windFrac(c) > 0.97 && __t.cm.day.watched.includes(c.title) && /Last night/.test(__t.shift.greet) && slip.includes("WATCHED LAST NIGHT"); }, rentOne));
+check("...down the night drop it's returned; not rewound, it's a rewind fee", await ev(() => {
+  const c = __t.inv().find(e => e.kind === "tape" && __t.cm.rented.has(e.ref)).ref; __t.showTape(c); __t.invSync();
+  __t.cm.owed = 0; __t.shift.h = 15; __t.cmRentDrop(); __t.invSync();
+  return !__t.cm.rented.has(c) && __t.returnBin.includes(c) && Math.abs(__t.cm.owed - __t.CM_RENT.rewind) < 1e-9 && __t.cm.rent.rw === 1 && !__t.inv().some(e => e.ref === c); }));
+check("...rewound and a day late, dropped before they open: no fees (it counts as yesterday)", await ev(r => {
+  eval(r); const c = __t.held(); __t.setWindFrac(c, 0); __t.cm.rented.set(c, __t.shift.day - 1); __t.shift.h = 9.8; const o = __t.cm.owed; __t.cmRentDrop(); __t.shift.h = 15;
+  return !__t.cm.rented.has(c) && __t.cm.owed === o; }, rentOne));
+check("overdue: the store calls the house, and the clerk brings up the rewind fee as you pay it", await ev(r => {
+  eval(r); __t.cm.rented.set(__t.held(), __t.shift.day - 2); __t.cmMorning(); return /machine/.test(__t.shift.greet); }, rentOne)
+  && await ev(() => { __t.cm.owed = __t.CM_RENT.rewind; __t.cm.rent.rw = 1; __t.cm.wallet = 50; __t.cmPay(__t.staff[0]); return __t.cm.owed === 0 && __t.cm.rent.rw === 0; })
+  && await page.waitForFunction(() => /for rewinding/.test(document.getElementById("toast").textContent) && /still out/.test(document.getElementById("toast").textContent), null, { timeout: 15000 }).then(() => true, () => false));
 // the staff (customer mode)
 const said = () => ev(() => document.getElementById("toast").textContent);
 check("the staff get to know you a day at a time: once a day each, your name by the second day, then a word about their day", await ev(() => {
