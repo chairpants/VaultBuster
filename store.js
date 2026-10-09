@@ -12234,6 +12234,7 @@ function cmPay(e) {                               // E on whoever's on the regis
   cm.day.spent += total; cm.day.rented += tapes.length; cm.day.fees += cm.owed;
   cm.tab = cm.owed = 0; cm.trust = Math.min(100, cm.trust + 4 + tapes.length);
   posBeep(1900); setTimeout(() => posBeep(1500), 120); e.c?.setMood("happy");
+  cmStaffMet(e);                                  // (they know you a little better: see the staff)
   toast(`${e.first} rings you up: ${cmMoney(total)}${wasRegular ? " (regular's discount)" : ""}. "${took ? (cm.rec.by === e.first ? "Ooh, good choice. Told you!" : `${cm.rec.by} told you about that one, huh?`) : "Thanks! Be kind, rewind."}"`, true);
   cmLog(`Paid ${cmMoney(total)}: ${what}`, "", -total);
   if (!wasRegular && cmRegular()) { toast(`${e.first}: "You're in here all the time! I'll knock ten percent off from now on."`, true); cmLog("The staff know me now: a regular's 10% off", "good"); }
@@ -12349,6 +12350,7 @@ function cmHelped(t) {
   const by = staff.find(cmSees); cm.trust = Math.min(100, cm.trust + (by ? 4 : 2));
   if (by) { by.c?.setMood("happy"); toast(`${by.first}: "Oh, thanks! People just stick them anywhere."`, true); }
   cmLog(`Put a misshelved ${t.title} back where it goes`, "good");
+  cmStaffShelved();
 }
 // ---- the staff remember: whoever caught you today keeps an eye on you; and the morning after Ray's badge goes
 // missing, everyone's on the lookout ----
@@ -12414,6 +12416,178 @@ function cmTermKey(e) {                           // -> true if the terminal too
   return true;
 }
 
+// ---- customer mode: the staff, as people. Each of them gets to know you on their own (a day at a time: talk to
+// them, or have them ring you up), apart from what the store thinks of you (cm.trust). Known a couple of days,
+// they've got your name and a word about their day; a bit better, a small favor, and something for it (a tip about
+// the trail, a comp for the show). Idle at the counter, they talk about you (overheard close by: who caught you
+// passes it on, a good word makes the other one warmer). And a regular they know well can ask for an application:
+// an answer a morning later, and a yes puts you on staff (becomeCustomer, the other way) ----
+cm.crew = {}; cm.fav = null; cm.app = null;       // (saved with cm: see cmStaffSave) crew: { [their id]: { k: how well they know you, day: the last day that went up, n: lines said } }
+const CM_KNOW = { name: 2, favor: 3, apply: 4 };   // how well they need to know you for each
+const CM_NAMES = ["Sam", "Alex", "Chris", "Pat", "Jamie", "Casey", "Robin", "Terry", "Jordan", "Lee", "Corey", "Jesse"];
+const cmStaffYou = () => CM_NAMES[cm.seed % CM_NAMES.length];   // your name (the one in marker on your card)
+const cmStaffOf = e => cm.crew[e.id] ||= { k: 0, day: 0, n: 0 };
+const cmStaffOn = () => staff.filter(e => e.c && !e.leaving);
+const cmStaffWho = a => cmStaffOf(a).k >= CM_KNOW.name ? cmStaffYou() : "that customer";   // how a talks about you
+function cmStaffMet(e) {                          // talked to, or rung up by: once a day, they know you a little better
+  const s = cmStaffOf(e); if (s.day === shift.day || cm.wary.has(e.id)) return s;
+  s.day = shift.day; s.k++;
+  if (s.k === CM_KNOW.name) cmLog(`${e.first} knows my name now`, "good");
+  return s;
+}
+const CM_MSGS = [["your mom called. Call her back", "Ugh. Thanks"], ["the manager wants you to call him", "Oh no. What did I do"], ["your ride's running late tonight", "Great. Thanks for telling me"],
+  ["you left your headlights on", "Oh, come on. Thanks"], ["it's your turn to take the trash out", "It is NOT. ...Fine"], ["Tony's is doing two-for-one tonight", "Now we're talking"]];
+function cmStaffFavorAsk(e) {                     // known well enough: once a day (store-wide), a small favor
+  if (cm.favDay === shift.day || cmStaffOf(e).k < CM_KNOW.favor) return false;
+  const pick = a => a[(shift.day + e.first.length) % a.length], other = cmStaffOn().find(o => o !== e);
+  if (shift.day % 2 && other) {                   // pass a message on to whoever else is in
+    const [msg, reply] = pick(CM_MSGS);
+    cm.fav = { kind: "msg", by: e.id, byName: e.first, to: other.id, toName: other.first, msg, reply, day: shift.day, done: false };
+    toast(`${e.first}: "${cmStaffYou()}, do me a favor? If you see ${other.first}, tell them ${msg}. I can't leave the counter."`, true);
+  } else {                                        // a tape somebody stuck in the wrong spot: back where it goes
+    let st = strays[0];
+    if (!st) {
+      const ts = catalog.filter(t => !libLocked(t) && onShelfCopy(t)), c = ts.length && onShelfCopy(pick(ts)), at = c && ts.map(onShelfCopy).find(x => x && x.category !== c.category);
+      if (!at) return false;
+      setOnShelf(c, false); misshelve(c, null, at); st = strays.at(-1);
+    }
+    cm.fav = { kind: "shelf", by: e.id, byName: e.first, title: st.copy.title, cat: st.at?.category || "the wrong section", day: shift.day, done: false };
+    toast(`${e.first}: "${cmStaffYou()}, do me a favor? Somebody stuck ${st.copy.title} over in ${cm.fav.cat}. If you're over there, put it back where it goes?"`, true);
+  }
+  cm.favDay = shift.day; e.c?.setMood("happy");
+  cmLog(`${e.first} asked me a favor: ${cm.fav.kind === "msg" ? `tell ${cm.fav.toName} ${cm.fav.msg}` : `put ${cm.fav.title} back where it goes`}`);
+  return true;
+}
+function cmStaffShelved() { if (cm.fav?.kind === "shelf" && !cm.fav.done) { cm.fav.done = true; setTimeout(() => toast(`That's the favor for ${cm.fav?.byName}. Go tell them`, true), 2200); } }   // (from cmHelped: any misshelved tape you put back will do)
+function cmStaffHint() {                          // what they know about the trail: the next thing you haven't found
+  const sp = SEARCHES[cmTrail.keyAt];
+  if (!cm.found.has(cmTrail.keyAt) && !cmHas("breakKey")) return `Ray lost the break room key again. If I had to bet? ${sp?.search ? sp.search[0].toUpperCase() + sp.search.slice(1) : `It went out with the ${sp?.bin} trash`}`;
+  if (!cm.found.has("combo:locker")) return "Ray can't ever remember his locker combination. He writes the last number on his time card, I swear";
+  if (!cm.loggedIn) return "Ray's got his register PIN on a post-it somewhere behind the counter. If the manager ever finds it...";
+  if (!cm.found.has("drawerKey")) return "You know where the janitor's key lives? In the register drawer, under the tray. Don't ask me why";
+  if (!cm.hatch) return "The manager left a message about the roof on the register. Nobody's supposed to go up there";
+  if (!cm.teed) return "There's a golf mat up on the roof. Ray hits balls off it on his break. Into the trees, mostly";
+  return null;
+}
+function cmStaffThanks(e, f) {                    // the favor, done: what they owe you
+  f.paid = true; cmStaffOf(e).k++; cm.trust = Math.min(100, cm.trust + 5); e.c?.setMood("love");
+  const hint = cmStaffHint(), comp = !hint && cmTicketOpen() && cm.ticket !== shift.day && show.sold < Math.min(10, theaterSeats.length);
+  if (comp) { cm.ticket = shift.day; show.sold++; shift.stats.tickets++; }
+  toast(`${e.first}: "Thanks, ${cmStaffYou()}. I owe you one. ${hint ? `Here's something: ${hint}."` : comp ? `Here, on me: ${show.title.title}, eight o'clock."` : "Seriously.\""}`, true);
+  cmLog(hint ? `Did ${e.first} a favor. They let me in on something: ${hint}` : comp ? `Did ${e.first} a favor: a free ticket for ${show.title.title} tonight` : `Did ${e.first} a favor`, "good");
+}
+function cmStaffLine(e) {                         // a word about their day: what's going on first, then what they're like
+  const s = cmStaffOf(e), m = e.sched[weekday()], end = SCHED_H0 + 32 - Math.clz32(m), other = cmStaffOn().find(o => o !== e);
+  const top = SKILL_IDS.reduce((a, k) => (e.skills[k]?.lvl ?? 1) > (e.skills[a]?.lvl ?? 1) ? k : a, SKILL_IDS[0]), cat = catalog[(shift.day * 7 + e.first.length) % catalog.length]?.category || "Horror";
+  const now = [
+    ["lunch", "lunchSit"].includes(e.state) && "Mm. On my lunch. Gimme a sec",
+    cm.rec?.by === e.first && cm.rec.day === shift.day && (cm.rec.done ? `So? Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${cm.rec.title.category}. You won't regret it`),
+    messes.length && (messes.length > 2 ? "It's a mess in here today. I'll get to it. I'll get to it" : "Somebody spilled something again. Story of my life"),
+    e.lunchDay === shift.day ? "Tony's for lunch again. I can't keep doing this" : shift.h > 11.5 && shift.h < 14.5 && bits(m) >= 5 && "I'm starving. My lunch better be soon",
+    cmShowToday() && (shift.h < SHOW.at ? `We're showing ${show.title.title} at eight.${cm.ticket === shift.day ? " You've got a ticket? Nice" : " Tickets at the register"}` : show.status === "on" && "The movie's on in there. I'm missing the good part"),
+    m && end - shift.h > 0 && end - shift.h < 1 && "Less than an hour and I'm out of here",
+    custs.length >= 5 && "Crazy in here today, huh?",
+  ];
+  const them = [
+    { cha: "I could talk movies all day. Seriously, try me", int: `I've seen every tape in ${cat}. Some of them twice`, dex: "I can rewind four tapes and ring somebody up at the same time. It's a gift",
+      str: "I moved every shelf in this place last month. My back hasn't forgiven me", con: "Double shift tomorrow. I don't even mind anymore", wis: "You can always tell who's going to bring their tapes back late. Always" }[top],
+    other && `I was just telling ${other.first} about ${CHAT_TOPICS[(shift.day + s.n) % CHAT_TOPICS.length]}`,
+    s.k >= CM_KNOW.apply && "You're in here more than I am. We should put your picture up by the register",
+  ];
+  const all = [...now, ...them].filter(Boolean);
+  return all[s.n++ % all.length];
+}
+function cmStaffTalk(e) {                         // E on one of them, away from the register: whatever's between you, else a pick, else small talk
+  const s = cmStaffOf(e), f = cm.fav, me = cmStaffYou(), a = cm.app;
+  if (f?.kind === "msg" && f.to === e.id && !f.done) {   // the message, passed on
+    f.done = true; cmStaffMet(e); e.c?.setMood("shock");
+    return toast(`You tell ${e.first} ${f.msg}. ${e.first}: "${f.reply}. Tell ${f.byName} thanks."`, true);
+  }
+  if (f?.by === e.id && f.done && !f.paid) return cmStaffThanks(e, f);
+  if (cm.wary.has(e.id)) { e.c?.setMood("angry"); return toast(`${e.first}: "Mm-hm. I've got my eye on you."`); }
+  if (a?.ans && !a.told) {                        // the answer to your application
+    a.told = true; cmStaffMet(e);
+    if (a.ans === "no") { a.again = shift.day + 5; e.c?.setMood("meh"); cmLog("Heard back about my application: they went with somebody else", "bad"); return toast(`${e.first}: "Hey, ${me}... the manager went with somebody else. Sorry. Try again next week?"`); }
+    e.c?.setMood("love"); cmLog("Heard back about my application: they want me", "good");
+    return toast(`${e.first}: "${me}! The manager read your application. You're hired, if you want it. We're short today: say the word and grab a vest." (E again to take the job)`, true);
+  }
+  if (a?.ans === "yes" && a.told) return cmStaffJoin();
+  const met = s.day !== shift.day; cmStaffMet(e);
+  if (s.k >= CM_KNOW.name && !s.named) { s.named = true; e.c?.setMood("happy"); return toast(`${e.first}: "I'm ${e.first}, by the way. ${cm.card ? `And you're ${me}, right? It's on your card."` : `And you are?" "${me}." "Nice to meet you, ${me}."`}`, true); }
+  if (cm.rec?.day !== shift.day) return cmRecommend(e);   // (their pick: once a day)
+  if (cmRegular() && s.k >= CM_KNOW.apply && !cm.found.has("badge") && (!a || a.ans === "no" && a.told && shift.day >= a.again)) {   // a job application (not with Ray's badge in your pocket)
+    cm.app = { day: shift.day, by: e.first, strikes: cm.strikes, ans: null }; e.c?.setMood("happy");
+    cmLog(`Filled out a job application. ${e.first}'s giving it to the manager`, "good");
+    return toast(`${e.first}: "You know we're hiring, right? You're in here more than half of us. Here, fill this out, I'll give it to the manager." You hand it back. "Give it a day."`, true);
+  }
+  if (!f && cmStaffFavorAsk(e)) return;
+  const line = cmStaffLine(e);
+  toast(`${e.first}: "${met && s.k >= CM_KNOW.name ? `Hey, ${me}! ` : ""}${line}${/[.?!]$/.test(line) ? "" : "."}"`, true);
+}
+const cmStaffPending = e => cm.app?.ans && (!cm.app.told || cm.app.ans === "yes") || cm.fav?.kind === "msg" && cm.fav.to === e.id && !cm.fav.done || cm.fav?.by === e.id && cm.fav.done && !cm.fav.paid;
+function cmStaffTip(e) {                          // the hover tip's second line, on one of them
+  const s = cmStaffOf(e), f = cm.fav;
+  if (cm.app?.ans === "yes" && cm.app.told) return "E — take the job";
+  if (f?.kind === "msg" && f.to === e.id && !f.done) return `E — pass on ${f.byName}'s message`;
+  if (f?.by === e.id && f.done && !f.paid) return "E — tell them it's done";
+  return cm.wary.has(e.id) ? "keeping an eye on you" : s.k >= CM_KNOW.name ? "knows your name" : s.k ? "knows your face" : cmRegular() ? "knows you by now" : "on staff";
+}
+const CM_GOSSIP_R = 4.5;                          // close enough to hear them
+function cmStaffGossip(a, b) {                    // a talking to b about you: -> { line, kind, then } or null
+  const you = cmStaffWho(a), good = { kind: "good", then: () => { const s = cmStaffOf(b); if (s.word !== shift.day) { s.word = shift.day; s.k++; } } };
+  if (cm.wary.has(a.id) && !cm.wary.has(b.id) && cm.day.caught) return { line: `...so I caught ${you} today. Keep an eye out, okay?`, kind: "bad", then: () => cm.wary.add(b.id) };
+  if (cm.alert === shift.day) return { line: "...Ray swears his badge was in his locker. Who even does that?", kind: "bad" };
+  if (cm.fav?.by === a.id && cm.fav.done && cm.fav.day === shift.day) return { ...good, line: `...and ${you} ${cm.fav.kind === "msg" ? "passed on a message for me" : "put a tape back for me"}. Didn't even have to ask twice` };
+  if (cm.rec?.done && cm.rec.by === a.first && cm.rec.day === shift.day) return { ...good, line: `...${you} actually rented my pick. Somebody listens to me` };
+  if (cm.app && !cm.app.ans) return { line: `...did you hear? ${you === "that customer" ? "One of the regulars" : you} put in an application`, kind: "" };
+  if (cm.ticket === shift.day) return { line: `...${you}'s got a ticket for tonight. Save them a good seat`, kind: "" };
+  if (cmRegular()) return { ...good, line: `...that's the regular I was telling you about. ${you === "that customer" ? "In here" : `${you}'s in here`} every day` };
+  if (cm.strikes >= 2) return { line: "...isn't that the one who got thrown out?", kind: "bad", then: () => b.c?.setMood("meh") };
+  return null;
+}
+function cmStaffTick(dt) {                        // (from cmTick) the gossip; a hello by name as you come in; whoever's wary of you thinks a bit less of you
+  if (cm.inside && !cmStaffTick.was) cmStaffTick.hiT = 20;
+  cmStaffTick.was = cm.inside;
+  if (cmStaffTick.hiT > 0 && (cmStaffTick.hiT -= dt) > 0 && cm.hiDay !== shift.day && !afterClose()) {
+    const e = staff.find(e => e.c && cmStaffOf(e).k >= CM_KNOW.name && !cm.wary.has(e.id) && Math.hypot(e.c.group.position.x - player.x, e.c.group.position.z - player.z) < 7 && cmSees(e));
+    if (e) { cm.hiDay = shift.day; cmStaffTick.hiT = 0; e.c.setMood("happy"); toast(`${e.first}: "Hey, ${cmStaffYou()}!"`, true); }
+  }
+  for (const id of cm.wary) { const s = cm.crew[id] ||= { k: 0, day: 0, n: 0 }; if (s.cold !== shift.day) { s.cold = shift.day; s.k = Math.max(0, s.k - 1); } }
+  for (const a of staff) {
+    const b = a.chatWith; if (!b || !a.c || !b.c) continue;
+    if (a.gossipAt !== a.chatAt && b.gossipAt !== b.chatAt) {   // a chat just started: is it about you? (once a chat, the first of them to speak)
+      a.gossipAt = a.chatAt; b.gossipAt = b.chatAt; const g = a.gossip = cmStaffGossip(a, b); b.gossip = null; if (g) g.then?.();
+    }
+    const g = a.gossip; if (!g || g.heard || !cm.inside || player.onRoof) continue;
+    const p = a.c.group.position, q = b.c.group.position;
+    if (Math.min(Math.hypot(p.x - player.x, p.z - player.z), Math.hypot(q.x - player.x, q.z - player.z)) > CM_GOSSIP_R) continue;
+    g.heard = true; toast(`Overheard, ${a.first} to ${b.first}: "${g.line}"`, g.kind !== "bad");
+    cmLog(`Overheard ${a.first} telling ${b.first}: "${g.line.replace(/^\.\.\./, "")}"`, g.kind);
+  }
+}
+function cmStaffMorning() {                       // (from cmMorning) yesterday's favor's gone stale; an application's been read
+  if (cm.fav && !cm.fav.done) cm.fav = null;
+  for (const e of staff) e.gossip = null;
+  const a = cm.app; if (!a || a.ans || shift.day <= a.day) return;
+  a.ans = cm.trust >= 60 && cm.strikes === a.strikes && cm.short !== shift.day - 1 ? "yes" : "no"; a.told = false;
+  shift.greet = (shift.greet ? shift.greet + ". " : "") + "The store called about your application: ask anyone on staff";
+}
+function cmStaffJoin() {                          // hired: the vest, the name tag, the other side of the counter. What you had on you goes back (rentals returned), and the page reloads into it
+  if (!CUSTOMER) return;
+  for (const e of [...inv]) { if (e.kind === "tape") returnBin.push(e.ref); else if (e.kind === "snack" && !stockCarry.has(e.ref)) e.ref.visible = true; invRemove(e); }
+  for (const c of cm.rented.keys()) if (c.offShelf && !returnBin.includes(c)) returnBin.push(c);
+  cm.rented.clear(); refreshReturnsBin(); staff.forEach((e, i) => { e.sched = defaultSched(i); });
+  cmLog("Took the job. I work here now", "good"); saveState();
+  let d; try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch {}
+  if (d?.v !== SAVE_V) return;
+  Object.assign(d, { role: "staff", inv: [], cm: undefined, redNights: undefined });
+  saveOff = true;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(d)); sessionStorage.setItem("vaultbuster-play", "1"); } catch {}
+  location.reload();
+}
+const cmStaffSave = () => ({ crew: cm.crew, fav: cm.fav, app: cm.app, favDay: cm.favDay, hiDay: cm.hiDay });
+function cmStaffLoad(S) { if (S) Object.assign(cm, { crew: S.crew || {}, fav: S.fav || null, app: S.app || null, favDay: S.favDay || 0, hiDay: S.hiDay || 0 }); }
+
 // ---- the day: in off the lot just before ten; whoever opened unlocks at ten; at midnight they want you out,
 // and once you're out, the day's slip (what you spent, found, got away with) and home ----
 function cmMorning() {
@@ -12428,6 +12602,7 @@ function cmMorning() {
   cmPutAt(CM_LOT); gateLastZ = player.z; cm.inside = false;
   cmMoneyDrop(); cm.watchT = 0; cm.watched = false; cmFeature();
   shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. The store opens at 10. You've got ${cmMoney(cm.wallet)} on you`;
+  cmStaffMorning();
 }
 function cmOpenUp() {
   if (!frontLock.locked) return;
@@ -12475,6 +12650,7 @@ function cmTick(dt) {
       toast(`${by ? by.first : "The clerk"}: "Hey, just so you know, ${late.length === 1 ? `${late[0][0].title} is` : `${late.length} of your tapes are`} overdue!"`); }
   }
   cm.inside = inside;
+  cmStaffTick(dt);
   // the gates going off as you walk through them: everyone's eyes on you
   const alarm = gateAlarm.on && Math.abs(player.z - GATE_Z) < 1.5 && inv.some(e => e.kind === "tape" && !cmPaid(e));
   if (alarm && !cm.alarmWas) { const by = staff.find(e => e.c && !e.leaving); if (by) cmCaught("theft", by); }
@@ -12547,10 +12723,11 @@ function cmE() {                                  // E, as a customer: what's di
     return true;
   }
   if (aimEmp) {
+    if (cmStaffPending(aimEmp) && !cmUnpaid().length && !cm.tab && !cm.owed) { cmStaffTalk(aimEmp); return true; }   // (something between you: even across the counter)
     const p = aimEmp.c?.group.position;
     if (p && cmBehindCounter(p.x, p.z) && player.x < -2.3 && player.z > 4.2 && player.z < 6.5) cmPay(aimEmp);
     else if (cmUnpaid().length || afterClose()) toast(`${aimEmp.first}: "${afterClose() ? "We're closed, sorry!" : "I can ring you up at the register!"}"`, true);
-    else cmRecommend(aimEmp);
+    else cmStaffTalk(aimEmp);
     return true;
   }
   if (aimCustomer) { toast(aimCustomer.kid ? "The kid stares at you" : `${memberName(aimCustomer.member).split(" ")[0]}: "Hey."`, true); return true; }
@@ -12572,7 +12749,7 @@ function cmTip() {                                // the hover tip, as a custome
   if (cm.comboOf) return comboTip(cm.comboOf);
   if (aimEmp) { const p = aimEmp.c?.group.position, n = cmUnpaid().length + (cm.tab || cm.owed ? 1 : 0);
     const at = p && cmBehindCounter(p.x, p.z);
-    return `${aimEmp.first}<div class="cat">${at && n ? "E — pay for what you've got" : cmRegular() ? "knows you by now" : "on staff"}</div>`
+    return `${aimEmp.first}<div class="cat">${at && n ? "E — pay for what you've got" : cmStaffTip(aimEmp)}</div>`
       + (at && cmTicketOpen() && cm.ticket !== shift.day ? `T — a ticket for ${show.title.title}, 8 PM (${cmMoney(SHOW.ticket * (cmRegular() ? 0.9 : 1))})` : ""); }
   if (aimCustomer) return `${aimCustomer.kid ? "A kid" : memberName(aimCustomer.member)}<div class="cat">shopping</div>`;
   if (aimDoor && keyedOf(aimDoor)) { const k = keyedOf(aimDoor); return aimDoor.open ? "E — close the door" : cmHas(k.key) ? `E — unlock the ${k.room}<div class="cat">${ITEMS[k.key].name}</div>` : "Locked"; }
@@ -12597,7 +12774,7 @@ function becomeCustomer(why = "") {
 }
 function cmSave() {
   const units = snackUnits();
-  return { wallet: +cm.wallet.toFixed(2), owed: cm.owed, tab: +cm.tab.toFixed(2), strikes: cm.strikes, today: cm.today, banned: cm.banned, goal: cm.goal, found: [...cm.found],
+  return { crew: cmStaffSave(), wallet: +cm.wallet.toFixed(2), owed: cm.owed, tab: +cm.tab.toFixed(2), strikes: cm.strikes, today: cm.today, banned: cm.banned, goal: cm.goal, found: [...cm.found],
     trust: cm.trust, seed: cm.seed, loggedIn: cm.loggedIn, pinTries: cm.pinTries, termLock: cm.termLock, tookCash: cm.tookCash, short: cm.short, rec: cm.rec && { title: copyKey(cm.rec.title), by: cm.rec.by, day: cm.rec.day, done: cm.rec.done }, teed: cm.teed, card: cm.card, alert: cm.alert, alertDone: cm.alertDone, nagged: cm.nagged, wary: [...cm.wary], ticket: cm.ticket, watchT: Math.round(cm.watchT), watched: cm.watched, hatch: cm.hatch, searched: [...cm.searched], day: cm.day,
     rented: Object.fromEntries([...cm.rented].map(([c, due]) => [copyKey(c), due])), paid: [...cm.paidUnits].map(u => units.indexOf(u)).filter(i => i >= 0) };
 }
@@ -12607,6 +12784,7 @@ function cmLoad(S) {
       trust: S.trust || 0, loggedIn: !!S.loggedIn, pinTries: S.pinTries || 0, termLock: S.termLock || 0, tookCash: S.tookCash || 0, short: S.short || 0, rec: S.rec && copyByKey(S.rec.title) ? { ...S.rec, title: copyByKey(S.rec.title) } : null, teed: !!S.teed, card: !!S.card, alert: S.alert || 0, alertDone: !!S.alertDone, nagged: S.nagged || 0, wary: new Set(S.wary || []), ticket: S.ticket || 0, watchT: S.watchT || 0, watched: !!S.watched, hatch: !!S.hatch, day: { ...cmDayStats(), ...S.day } });
     for (const id of S.found || []) cm.found.add(id);
     for (const id of S.searched || []) cm.searched.add(id);
+    cmStaffLoad(S.crew);
     for (const [k, due] of Object.entries(S.rented || {})) { const c = copyByKey(k); if (c) cm.rented.set(c, due); }
     const units = snackUnits(); for (const i of S.paid || []) if (units[i]) { units[i].userData.paid = true; cm.paidUnits.add(units[i]); }
   }
@@ -12651,7 +12829,7 @@ function saveState() {
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
     : e.kind === "item" ? { kind: "item", id: e.ref.id } : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, mode: MODE, redNights: redNights || undefined, role: CUSTOMER ? "customer" : undefined, cm: CUSTOMER ? cmSave() : undefined, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    v: SAVE_V, mode: MODE, redNights: redNights || undefined, role: CUSTOMER ? "customer" : MODE === "customer" ? "staff" : undefined, cm: CUSTOMER ? cmSave() : undefined, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg, drunk: { gut: +drunk.gut.toFixed(3), blood: +drunk.blood.toFixed(3), hang: drunk.hang, owe: drunk.owe },
@@ -13048,4 +13226,5 @@ window.__t = { cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, inv
   stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, drunkFumble, drunkPuke, drunkOut, golf, golfStart, golfEnd, golfMouse, golfStrike, golfTee, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
+  cmStaffTalk, cmStaffTick, cmStaffMorning, cmStaffJoin, cmStaffOf, cmStaffYou, cmStaffHint, cmStaffTip, cmStaffMet, CM_KNOW, CM_GOSSIP_R, messes,
 };
