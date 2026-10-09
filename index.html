@@ -216,6 +216,16 @@
   body.nohud #toast { display: none !important; }
 
   /* ---------- inventory bar: shows once you carry 2+ things ---------- */
+  /* golf on the roof: the swing meter (fill = power; the line runs back down it; the mark near the bottom is the sweet spot) */
+  #golfHud { position: fixed; z-index: 11; right: 34px; bottom: 90px; display: flex; align-items: flex-end; gap: 14px; pointer-events: none; }
+  #golfHud[hidden] { display: none; }
+  #golfMeter { position: relative; width: 26px; height: 280px; border: 3px solid #fff; border-radius: 5px; background: #0008; box-shadow: 0 2px 8px #000a; overflow: hidden; }
+  #golfMeter .fill { position: absolute; left: 0; right: 0; bottom: 0; height: var(--pow, 0%); background: linear-gradient(to top, #3fcf6a, var(--bb-yellow) 70%, #e23232); }
+  #golfMeter .mark { position: absolute; left: 0; right: 0; bottom: calc(8% - 1.5%); height: 3%; background: #fff; box-shadow: 0 0 6px #fff; }
+  #golfMeter .line { position: absolute; left: -2px; right: -2px; bottom: var(--line, 0%); height: 3px; background: #ff2e88; display: none; }
+  #golfHud.back .line { display: block; }
+  #golfInfo { color: #fff; font: bold 13px Arial, sans-serif; text-align: right; line-height: 1.6; text-shadow: 0 2px 4px #000; max-width: 260px; }
+  #golfInfo b { color: var(--bb-yellow); }
   #invBar { position: fixed; z-index: 11; left: 50%; bottom: 14px; transform: translateX(-50%); display: none; gap: 6px; pointer-events: none; }
   #invBar .slot { position: relative; width: 58px; height: 58px; background: #ffffff40; border: 3px solid #ffffff40; border-radius: 4px;
     box-shadow: 0 2px 8px #0008; display: flex; align-items: center; justify-content: center; }
@@ -310,6 +320,7 @@
 <div id="hireScreen"></div>
 <div id="actLog"><div class="h" onclick="logToggle()">LOG<span class="n"></span><span class="k">J hide · PgUp/PgDn</span></div><div id="actLogList"></div></div>
 <div id="shiftReport"><pre id="shiftSlip"></pre><button id="shiftNext">NEXT SHIFT ▸</button></div>
+<div id="golfHud" hidden><div id="golfInfo"></div><div id="golfMeter"><i class="fill"></i><i class="mark"></i><i class="line"></i></div></div>
 <div id="invBar"></div>
 <div id="toast"></div>
 <div id="tvHint"></div>
