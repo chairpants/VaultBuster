@@ -11908,6 +11908,7 @@ function beginShift() {                        // first thing in the morning: 9:
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
   drunk.gut = drunk.blood = 0; drunk.hang = drunk.owe; drunk.owe = false;   // slept it off; a hangover's what's left (see hungover)
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
+  for (const k of [...custs]) { if (!k.paid) for (const t of k.tapes) setOnShelf(t, true); k.tapes = []; k.tagged = false; custGone(k); }   // anyone still in at close went home too (unpaid tapes back on the shelf; ponytail: their snacks wait for a restock)
   posTerm.setDate(shiftDate()); calendarDraw(); corkDraw(); postersSwap(); decorDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
   { const sn = season(); for (const h of sn.today) logAct(`It's circled on the calendar: ${h.label}. ${h.rush > 1 ? "Expect a crowd" : "Expect a quiet one"}`, h.rush > 1 ? "good" : "");
