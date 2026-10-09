@@ -75,7 +75,7 @@ All the sound is generated live instead of recorded: ballast hum, room tone, tra
 - **Simulation** starts you in a bare-bones store: no staff, the theater chained shut, a small member list. Build it up from what it earns.
 - **Sandbox** gives you $10,000 and Dana on staff from the start. Buy what you like and get playing.
 
-Three save slots, and the store remembers where you left everything. If you like it, **star the repo** and tell someone who used to work behind a counter.
+Three save files, like an old cartridge: pick one to **play**, **copy** or **delete** it. The store remembers where you left everything. If you like it, **star the repo** and tell someone who used to work behind a counter.
 
 ---
 
@@ -129,7 +129,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 
 ### Testing
 
-`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save slots, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store: hiring and schedules, skill milestones, the rewinder upgrades, staff clocking out, members' visiting rhythm, day goals, the janitor's closet and the register's sale screen. It needs Node and a Chromium:
+`tests/smoke.mjs` loads the game headless from `file://` and drives each system through its test hooks: the menu and save files, a full checkout, restocking, a phone hold, moving counter gear, save/reload, the restroom, and a fresh Simulation store: hiring and schedules, skill milestones, the rewinder upgrades, staff clocking out, members' visiting rhythm, day goals, the janitor's closet and the register's sale screen. It needs Node and a Chromium:
 
 ```sh
 npm install                      # playwright-core (dev only; the game itself has no build)

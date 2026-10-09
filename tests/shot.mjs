@@ -15,7 +15,7 @@ const ready = () => page.waitForFunction(() => !document.getElementById("mainMen
 await page.goto(URL, { timeout: 300000 }); await ready();
 await page.evaluate(m => { localStorage.clear(); localStorage.setItem("vaultbuster-save", JSON.stringify({ v: 3, mode: m, fresh: true })); }, flag("--mode") ? opt("--mode") : "sandbox");
 await page.reload({ timeout: 300000 }); await ready();
-await page.click("#mmContinue"); await page.waitForTimeout(2500);
+await page.click("#mmFiles .acts .go"); await page.waitForTimeout(2500);
 if (flag("--setup")) { const r = await page.evaluate(opt("--setup")).catch(e => { if (!/serialize/.test(e.message)) throw e; }); if (r !== undefined) console.log(r); }   // (whatever it comes to, printed, if it can be)
 await page.evaluate(([x, z, yaw, pitch]) => Object.assign(__t.player, { x, z, yaw, pitch }), [x, z, yaw, pitch]);
 await page.waitForTimeout(2000);
