@@ -10192,9 +10192,16 @@ function golfTick(dt) {
   me.reachTo(grip, 0, { lean: false }); me.reachAlso(grip, 1);
   if (golf.st === "flight") golfFly(dt);
   else if (golf.st === "done" && (golf.t += dt) > 2.4) { golfReTee(); }
-  // the camera: behind the ball at address; in flight it stays put and follows the ball
-  golf.cam.copy(golfTee).addScaledVector(F, -2.4).addScaledVector(Rt, 0.55).setY(ROOF.y + 1.55);   // (off to the right of the line: you're on the left of the picture)
+  // the camera: behind the ball at address; in flight it chases the ball, a few metres back along the way it's gone
+  const home = golfTee.clone().addScaledVector(F, -2.4).addScaledVector(Rt, 0.55).setY(ROOF.y + 1.55);   // (off to the right of the line: you're on the left of the picture)
   player.x = stance.x; player.z = stance.z;
+  if (golf.st === "flight" || golf.st === "done") {
+    const b = golf.ball.position, out = new THREE.Vector3(b.x - golfTee.x, 0, b.z - golfTee.z), far = out.length();
+    const back = far > 0.5 ? out.divideScalar(far) : F, chase = b.clone().addScaledVector(back, -Math.min(4, 2.4 + far * 0.05));
+    chase.y = Math.max(b.y + 1.3, (onDeck(chase.x, chase.z) ? ROOF.y : 0) + 0.6);   // (ponytail: no wall/tree collision: it can pass through the parapet or a tree)
+    if (golf.st === "flight") golf.cam.addScaledVector(golf.v, dt);   // (carried along with it, so the easing below is only the swing round behind it, not a lag)
+    golf.cam.lerp(chase, Math.min(1, dt * 3));
+  } else golf.cam.copy(home);
   if (golf.st === "flight" || golf.st === "done") {
     const to = golf.ball.position.clone().sub(golf.cam), yaw = Math.atan2(-to.x, -to.z), pitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
     let dy = yaw - player.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
