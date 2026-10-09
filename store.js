@@ -5601,6 +5601,8 @@ function meTick(dt) {
   } else if (seated) {                        // on the cushion, a hair inboard like Dana so the elbows clear the arm
     g.position.set(seatAt.y != null ? seatAt.x : Math.sign(seatAt.x) * Math.max(0, Math.abs(seatAt.x) - 0.04), seatAt.y || 0, seatAt.z); g.rotation.y = seatAt.ry || 0;
     me.setPose("sit", seatAt.hipY ? { hipY: seatAt.hipY } : undefined);
+  } else if (golf.on) {                      // at address on the roof (see golfTick)
+    g.position.copy(golfStance()); g.rotation.y = golf.aim - Math.PI / 2 + Math.PI; me.setPose("idle");
   } else if (roof.climb) {                   // on the closet ladder, facing the rungs
     g.position.set(roof.cam.x, roof.cam.y - 1.65, roof.cam.z + 0.21); g.rotation.y = Math.PI; me.setPose("idle");
   } else if (ladder.on) {                    // up on the top step, facing the ladder
@@ -5627,7 +5629,7 @@ let meHolding = false;
 const meGrip = new THREE.Vector3();
 function meHandFollow() {
   const g = [handGroup, snackGroup, popcornGroup, coHand, postitHeld?.mesh].find(o => o?.visible && o.parent === camera);
-  if (!g || toolHeld || ladder.on || roof.climb) { if (meHolding && !toolHeld && !ladder.on) me.reachTo(null); meHolding = false; return null; }
+  if (!g || toolHeld || ladder.on || roof.climb || golf.on) { if (meHolding && !toolHeld && !ladder.on && !golf.on) me.reachTo(null); meHolding = false; return null; }
   camera.updateMatrixWorld();
   me.reachTo(camera.localToWorld(meGrip.copy(g.position)), 0, { lean: false }); meHolding = true;   // (lands next tick)
   me.group.updateMatrixWorld(true); me.rig.arms[0].hand.getWorldPosition(meGrip);
@@ -5909,7 +5911,7 @@ canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoo
 });
 let lastActive = 0;                          // last mouse-look or key — the crosshair hides after a few still seconds
 addEventListener("mousemove", e => {
-  if (document.pointerLockElement !== canvas) return;
+  if (document.pointerLockElement !== canvas || golf.on) return;   // (golfing: the camera's the swing's)
   lastActive = performance.now();
   const k = 0.0022 * SETTINGS.sens / 100;   // (SETTINGS: sensitivity, invert)
   player.yaw -= e.movementX * k;
@@ -5934,7 +5936,7 @@ function move(dt) {
     if (!ladder.fix && ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) ladderDown();
     return;
   }
-  if (seated || inspecting || scrub || drunk.out) return;   // stand up with E first; (scrubbing: you stay put till it's done)
+  if (seated || inspecting || scrub || drunk.out || golf.on) return;   // stand up with E first; (scrubbing: you stay put till it's done)
   if (keys.has("KeyW") || keys.has("ArrowUp")) iz += 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) iz -= 1;
   if (keys.has("KeyD") || keys.has("ArrowRight")) ix += 1;
@@ -8521,11 +8523,14 @@ function pickHover() {
   }
   raycaster.setFromCamera(aimNDC, camera);
   aimRoofLadder = false;
-  if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down) is all there is
+  aimGolf = false;
+  if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down) and the golf mat are all there is
     highlight.visible = false; const tip = $("hoverTip");
-    const a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children), false)[0];
-    aimRoofLadder = !!a && a.distance < 2.4;
-    tip.innerHTML = aimRoofLadder ? "E — climb back down" : ""; tip.style.display = aimRoofLadder ? "block" : "none";
+    if (golf.on) { tip.style.display = "none"; return; }
+    const a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts), false)[0];
+    aimGolf = !!a && a.distance < 2.4 && golf.parts.includes(a.object);
+    aimRoofLadder = !!a && a.distance < 2.4 && !aimGolf;
+    tip.innerHTML = aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off") : ""; tip.style.display = aimRoofLadder || aimGolf ? "block" : "none";
     return;
   }
   {                                          // the fixed ladder in the closet, up to the roof
@@ -8718,8 +8723,10 @@ function pickHover() {
   }
 }
 canvas.addEventListener("contextmenu", e => e.preventDefault());
+canvas.addEventListener("mouseup", e => { if (golf.on && document.pointerLockElement === canvas) golfMouse(false, e.button); });
 canvas.addEventListener("mousedown", e => {
   if (document.pointerLockElement !== canvas || drunk.out) return;
+  if (golf.on) { golfMouse(true, e.button); return; }
   if (cmove.item) { if (e.button === 0) movePlace(); else if (e.button === 2) moveCancel(`The ${cmove.item.name}'s back where it was`); return; }
   if (e.button === 2) {                                    // right click puts down whatever's in hand (and backs out of things, like Escape)
     if (board.open) { boardClose(); return; }             // Dana's job board
@@ -10077,7 +10084,171 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     roof.smoke = { pts, geo, sm, p: [], acc: 0, at: V(fx, ph + 2.2, fz) };
   }
 }
-let aimRoofLadder = false;
+let aimRoofLadder = false, aimGolf = false;
+// ---------------- golf on the roof ----------------
+// A chipped square of fake turf out on the deck with a tee in it and a club lying beside it. E on either: golf. You're
+// at address (the camera behind the ball, looking down the line); A/D walk you round the ball to aim, W/S slide the club
+// face along it (toe ... heel). The swing's three clicks: hold to wind the power up and let go at the power you want; a
+// line runs back down the meter from there, and the last click wants to land on the mark just above the bottom. On it:
+// pure, and straight. A touch early it's pulled and draws left; a touch late it's pushed and fades right; let the line
+// run out and it's a mishit, low and sliced, worse off the heel. Off the toe or heel costs distance and bends it too.
+// The ball flies (gravity, drag, backspin's lift, sidespin bending it), bounces off the parapets and the deck, comes
+// down out in the world and rolls out, and you get the yardage; then there's another ball on the tee. E or right-click: done
+const GOLF = { x: 5.5, z: 12, R: 0.0214, SWEET: 0.08, PURE: 0.015, CLUB: 1.0 };   // the tee; ball radius; the meter's mark and how close is pure; club length
+const golf = { on: false, aim: 0, c: 0, st: "idle", pow: 0, peak: 0, line: 0, theta: 0, th0: 0, t: 0, hit: null, v: new THREE.Vector3(), spin: 0, lift: 0,
+  carry: null, rolled: false, cam: new THREE.Vector3(), parts: [], ball: null, club: null, lie: null, trail: null, n: 0 };
+const golfTee = new THREE.Vector3(GOLF.x, ROOF.y + 0.055 + GOLF.R, GOLF.z);   // the ball, sat on the tee
+{
+  const Y = ROOF.y, { x, z } = GOLF, lam = c => new THREE.MeshLambertMaterial({ color: c });
+  const turf = makeTexture((ctx, W, H) => {        // short green blades, every which shade
+    ctx.fillStyle = "#2f8a3a"; ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 6000; i++) { ctx.fillStyle = `hsl(${112 + Math.random() * 20} ${40 + Math.random() * 30}% ${20 + Math.random() * 24}%)`; ctx.fillRect(Math.random() * W, Math.random() * H, 1, 2 + Math.random() * 3); }
+  }, 256, 256);
+  turf.wrapS = turf.wrapT = THREE.RepeatWrapping; turf.repeat.set(1.4, 1.4);
+  const pts = [];                                   // a square, its corners and edges chipped off here and there
+  for (let i = 0; i < 32; i++) { const a = (i + 0.5) / 32 * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), r = 0.6 / Math.max(Math.abs(c), Math.abs(s)) * (Math.random() < 0.35 ? 0.86 + Math.random() * 0.1 : 1); pts.push(new THREE.Vector2(c * r, s * r)); }
+  const mat = new THREE.Mesh(new THREE.ExtrudeGeometry(new THREE.Shape(pts), { depth: 0.018, bevelEnabled: false }), new THREE.MeshLambertMaterial({ map: turf }));
+  mat.rotation.x = -Math.PI / 2; mat.rotation.z = 0.12; mat.position.set(x, Y, z); roof.g.add(mat);
+  const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.003, 0.05, 10), lam(0xf4f1e8)); tee.position.set(x, Y + 0.035, z); roof.g.add(tee);
+  golf.ball = new THREE.Mesh(new THREE.SphereGeometry(GOLF.R, 16, 12), new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x333333, shininess: 60 }));
+  golf.ball.position.copy(golfTee); scene.add(golf.ball); golf.ball.visible = false;   // (only up top: see golfTick)
+  const club = () => {                              // the grip at the origin, the shaft down -y, the head at its foot toeing out along +x
+    const g = new THREE.Group(), L = GOLF.CLUB;
+    const add = (geo, m, px, py, pz) => { const o = new THREE.Mesh(geo, m); o.position.set(px, py, pz); g.add(o); return o; };
+    add(new THREE.CylinderGeometry(0.012, 0.01, 0.26, 10), lam(0x1c1c1e), 0, -0.13, 0);                               // grip
+    add(new THREE.CylinderGeometry(0.006, 0.0045, L - 0.24, 8), new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 }), 0, -0.26 - (L - 0.26) / 2, 0);   // shaft
+    add(new THREE.BoxGeometry(0.105, 0.035, 0.03), new THREE.MeshPhongMaterial({ color: 0x3a3d42, specular: 0xaaaaaa, shininess: 70 }), 0.04, -L, 0);   // the head
+    return g;
+  };
+  golf.lie = club(); golf.lie.rotation.set(0, 0.4, Math.PI / 2); golf.lie.position.set(x + 0.75, Y + 0.012, z - 0.45); roof.g.add(golf.lie);   // on the deck beside the mat
+  golf.club = club(); golf.club.visible = false; scene.add(golf.club);
+  for (const o of [mat, tee, ...golf.lie.children]) golf.parts.push(o);
+  const tg = new THREE.BufferGeometry(); tg.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(120 * 3), 3)); tg.setDrawRange(0, 0);
+  golf.trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })); golf.trail.frustumCulled = false; scene.add(golf.trail);
+}
+const golfF = () => new THREE.Vector3(-Math.sin(golf.aim), 0, -Math.cos(golf.aim));   // down the line
+const golfRt = () => new THREE.Vector3(Math.cos(golf.aim), 0, -Math.sin(golf.aim));   // to its right
+const golfStance = () => golfTee.clone().addScaledVector(golfRt(), -0.72).setY(ROOF.y);   // a right-hander: on the left of the line, facing the ball
+function golfStart() {
+  if (roofHandsFull()) { toast("Your hands are full"); return; }
+  invStash(); invRender(); keys.clear();
+  Object.assign(golf, { on: true, c: 0, st: "idle", pow: 0, theta: 0 });
+  golfReTee();
+  me.rig.head.visible = me.rig.neck.visible = true;   // (you can see yourself from back here)
+  golf.lie.visible = false; golf.club.visible = true; $("golfHud").hidden = false;
+}
+function golfEnd() {
+  golf.on = false; me.reachTo(null); me.reachAlso(null); me.rig.head.visible = me.rig.neck.visible = false;
+  golf.club.visible = false; golf.lie.visible = true; $("golfHud").hidden = true;
+  const p = golfStance(); player.x = p.x; player.z = p.z; player.yaw = golf.aim - Math.PI / 2; player.pitch = -0.45;   // left where you stood, looking at the ball
+}
+function golfReTee() {
+  golf.ball.position.copy(golfTee); golf.v.set(0, 0, 0); golf.st = "idle"; golf.carry = null; golf.trail.geometry.setDrawRange(0, 0);
+}
+function golfMouse(down, button) {
+  if (button === 2) { if (down && golf.st === "idle") golfEnd(); return; }
+  if (button !== 0) return;
+  if (down && golf.st === "idle") { golf.st = "power"; golf.pow = 0; }
+  else if (!down && golf.st === "power") { if (golf.pow < 0.04) golf.st = "idle"; else { golf.peak = golf.line = golf.pow; golf.st = "back"; } }
+  else if (down && golf.st === "back") golfStrike(golf.line);
+}
+function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out
+  const e0 = at == null ? null : at - GOLF.SWEET, e = e0 != null && Math.abs(e0) <= GOLF.PURE ? 0 : e0, c = golf.c;
+  let ang = 0, spin = -c * 1.5, speed = 60 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.2, what = [];
+  if (e == null) { speed *= 0.6; elev = 0.12; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
+  else if (e > 0) { speed *= 1 - Math.min(0.3, e * 0.8); ang = -Math.min(0.12, e * 0.25); spin += -Math.min(3, e * 6); what.push(e > 0.12 ? "way early: hooked it" : "a touch early: pulled left"); }
+  else if (e < 0) { speed *= 1 - Math.min(0.3, -e * 0.8); ang = Math.min(0.12, -e * 0.4); spin += Math.min(3, -e * 20); what.push("a touch late: pushed right"); }
+  else if (!c || Math.abs(c) < 0.15) what.push("pure");
+  if (Math.abs(c) >= 0.15) what.push(`off the ${c > 0 ? "toe" : "heel"}`);
+  const dir = golfF().multiplyScalar(Math.cos(ang)).addScaledVector(golfRt(), Math.sin(ang));
+  golf.hit = { v: dir.multiplyScalar(speed * Math.cos(elev)).setY(speed * Math.sin(elev)), spin, what };
+  golf.st = "down"; golf.t = 0; golf.th0 = golf.theta;
+}
+function golfTick(dt) {
+  golf.ball.visible = player.onRoof || golf.on;
+  if (!golf.on) return;
+  const F = golfF(), Rt = golfRt(), stance = golfStance();
+  if (golf.st === "idle") {                        // aim (A/D: round the ball), the strike point (W/S: along the face)
+    const turn = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
+    golf.aim -= turn * dt * 0.9;
+    const slide = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
+    golf.c = Math.max(-1, Math.min(1, golf.c + slide * dt * 1.2));
+  }
+  if (golf.st === "power") golf.pow = Math.min(1, golf.pow + dt / 1.1);
+  if (golf.st === "back" && (golf.line -= dt * 0.85) <= 0) { golf.line = 0; golfStrike(null); }
+  // the club: arms and shaft one lever from between the shoulders, swung in the plane of the line and the ball
+  const pivot = stance.clone().setY(ROOF.y + 1.38), d0 = golfTee.clone().sub(pivot).normalize(), n = new THREE.Vector3().crossVectors(d0, F).normalize();
+  const want = golf.st === "power" || golf.st === "back" ? -2.6 * (golf.st === "power" ? golf.pow : golf.peak) : golf.st === "idle" ? 0 : golf.st === "flight" || golf.st === "done" ? 2.3 : null;   // (after the strike: on up to the finish, and held)
+  if (want != null) golf.theta += (want - golf.theta) * Math.min(1, dt * 10);
+  if (golf.st === "down") {                        // the downswing: through the ball and up to the finish
+    golf.t += dt; const k = Math.min(1, golf.t / 0.32), was = golf.theta;
+    golf.theta = golf.th0 + (2.3 - golf.th0) * k * k;
+    if (was < 0 && golf.theta >= 0) { golf.v.copy(golf.hit.v); golf.spin = golf.hit.spin; golf.lift = 0.09; golf.n = 0; golf.rolled = false; golf.st = "flight"; golf.t = 0; }
+  }
+  const d = d0.clone().applyAxisAngle(n, golf.theta), L = golfTee.distanceTo(pivot);
+  const grip = pivot.clone().addScaledVector(d, L - GOLF.CLUB), yA = d.clone().negate(), xA = Rt.clone().addScaledVector(yA, -Rt.dot(yA)).normalize();
+  golf.club.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xA, yA, new THREE.Vector3().crossVectors(xA, yA)));
+  golf.club.position.copy(grip).addScaledVector(xA, -0.04 - golf.c * 0.035);   // (the head toes out 4 cm: centred on the ball, less the strike point)
+  me.reachTo(grip, 0, { lean: false }); me.reachAlso(grip, 1);
+  if (golf.st === "flight") golfFly(dt);
+  else if (golf.st === "done" && (golf.t += dt) > 2.4) { golfReTee(); }
+  // the camera: behind the ball at address; in flight it stays put and follows the ball
+  golf.cam.copy(golfTee).addScaledVector(F, -2.4).addScaledVector(Rt, 0.55).setY(ROOF.y + 1.55);   // (off to the right of the line: you're on the left of the picture)
+  player.x = stance.x; player.z = stance.z;
+  if (golf.st === "flight" || golf.st === "done") {
+    const to = golf.ball.position.clone().sub(golf.cam), yaw = Math.atan2(-to.x, -to.z), pitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
+    let dy = yaw - player.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    player.yaw += dy * Math.min(1, dt * 6); player.pitch += (Math.max(-0.6, pitch) - player.pitch) * Math.min(1, dt * 6);
+  } else { player.yaw = golf.aim; player.pitch += (-0.3 - player.pitch) * Math.min(1, dt * 6); }
+  golfHud();
+}
+function golfFly(dt) {
+  const b = golf.ball.position, v = golf.v;
+  golf.t += dt;
+  for (let i = 0; i < 4; i++) {
+    const h = dt / 4, sp = v.length(), air = !golf.rolled;
+    if (air) {
+      v.addScaledVector(v, -0.0025 * sp * h);       // drag
+      const hl = Math.hypot(v.x, v.z) || 1, side = golf.spin * sp / 40;   // sidespin: off to the right of the way it's going (+: a fade / slice)
+      const ax = -v.z / hl * side, az = v.x / hl * side; v.x += ax * h; v.z += az * h;
+      v.y += (golf.lift * sp - 9.8) * h;            // backspin holds it up
+    }
+    const nx = b.x + v.x * h, ny = b.y + v.y * h, nz = b.z + v.z * h;
+    if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < ROOF.y + ROOF.wall + GOLF.R) {   // the parapet: off it and back
+      if (!onDeck(nx, b.z)) v.x *= -0.4;
+      if (!onDeck(b.x, nz)) v.z *= -0.4;
+      v.y *= 0.7; continue;
+    }
+    const fl = (onDeck(nx, nz) ? ROOF.y : 0) + GOLF.R;
+    b.set(nx, ny, nz);
+    if (golf.rolled || b.y < fl) {
+      b.y = fl;
+      if (golf.carry == null) golf.carry = Math.hypot(b.x - golfTee.x, b.z - golfTee.z);
+      golf.spin = 0; golf.lift = 0;
+      if (!golf.rolled && v.y < -1.5) { v.y *= -0.3; v.x *= 0.45; v.z *= 0.45; }   // a bounce: it bites
+      else {                                         // rolling out
+        v.y = 0; golf.rolled = true;
+        const hs = Math.hypot(v.x, v.z), k = Math.max(0, hs - 5 * h) / (hs || 1); v.x *= k; v.z *= k;
+      }
+    }
+  }
+  const tp = golf.trail.geometry.attributes.position;   // the trail, a point every so often
+  if (golf.n < 120 && !golf.rolled) { tp.setXYZ(golf.n++, b.x, b.y, b.z); tp.needsUpdate = true; golf.trail.geometry.setDrawRange(0, golf.n); }
+  if ((golf.rolled && Math.hypot(v.x, v.z) < 0.05) || golf.t > 25) {   // it's stopped: how far
+    const yd = Math.hypot(b.x - golfTee.x, b.z - golfTee.z) / 0.9144, carry = (golf.carry ?? 0) / 0.9144;
+    toast(`${Math.round(yd)} yards${carry > 1 ? ` (${Math.round(carry)} in the air)` : ""} · ${golf.hit.what.join(", ")}`, golf.hit.what[0] === "pure");
+    golf.st = "done"; golf.t = 0;
+  }
+}
+function golfHud() {
+  const m = $("golfHud"), fill = golf.st === "power" ? golf.pow : golf.st === "back" ? golf.peak : 0;
+  m.style.setProperty("--pow", `${(fill * 100).toFixed(1)}%`);
+  m.style.setProperty("--line", `${((golf.st === "back" ? golf.line : 0) * 100).toFixed(1)}%`);
+  m.classList.toggle("back", golf.st === "back");
+  const c = golf.c, face = Math.abs(c) < 0.15 ? "center" : `${c > 0 ? "toe" : "heel"} ${Math.round(Math.abs(c) * 100)}%`;
+  $("golfInfo").innerHTML = golf.st === "idle" ? `A / D — aim · W / S — strike: <b>${face}</b><br>Hold click — power · let go · click on the mark<br>E / right-click — done`
+    : golf.st === "power" ? "Let go at the power you want" : golf.st === "back" ? "Click on the mark!" : "";
+}
 function roofClimb(dir) {                          // up (1) or down (-1) the closet ladder
   if (dir > 0 && roofHandsFull()) { toast("Hands full: you need them both for the ladder"); return; }
   roof.climb = { dir, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
@@ -10958,7 +11129,9 @@ function setLamp(l, on) {
 }
 function onE() {
   if (scrub || ladder.fix || roof.climb) return;   // busy mopping / sweeping / up at a light / on the roof ladder
+  if (golf.on) { if (golf.st === "idle") golfEnd(); return; }
   if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
+  if (aimGolf) { golfStart(); return; }
   if (player.onRoof) return;
   if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
@@ -11154,6 +11327,7 @@ let relockOnInput = false;                        // backed out with Escape: the
 function backToStore() { relockOnInput = true; keys.clear(); $("crosshair").hidden = true; toast("Click or press any key to get back in", true); }
 let posEsc = false;                              // the key that closed the POS was Escape
 function escClose() {                          // Escape closes whatever's open over the store; true if something was
+  if (golf.on && golf.st === "idle") { golfEnd(); return true; }
   if (cmove.item) { moveCancel(`The ${cmove.item.name}'s back where it was`); return true; }
   if (held && inspecting) { inspecting = false; peek = null; return true; }
   if (tvMenu) { tvMenu = false; return true; }
@@ -11713,9 +11887,10 @@ renderer.setAnimationLoop(() => {
   thSeatTick(dt);
   toolTick(dt);
   ladderTick(dt);
-  roofTick(dt);
+  roofTick(dt); golfTick(dt);
   meTick(dt); bagTick(dt);
   if (roof.climb) camera.position.copy(roof.cam);
+  else if (golf.on) camera.position.copy(golf.cam);
   else if (onStool) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(-Math.sin(stool.angle) * 0.06, 0.03, -Math.cos(stool.angle) * 0.06));   // over the collar, a touch forward of it
   else if (ladder.on) {                          // up the steps: the eye where it always is, 21 cm ahead of your body (toward the ladder)
     const k = ladder.lift, e = k * k * (3 - 2 * k);
@@ -11778,7 +11953,7 @@ window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wx
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, drunkFumble, drunkPuke, drunkOut, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, drunkFumble, drunkPuke, drunkOut, golf, golfStart, golfEnd, golfMouse, golfStrike, golfTee, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
