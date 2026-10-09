@@ -10111,7 +10111,7 @@ const golfTee = new THREE.Vector3(GOLF.x, ROOF.y + 0.055 + GOLF.R, GOLF.z);   //
   mat.rotation.x = -Math.PI / 2; mat.rotation.z = 0.12; mat.position.set(x, Y, z); roof.g.add(mat);
   const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.003, 0.05, 10), lam(0xf4f1e8)); tee.position.set(x, Y + 0.035, z); roof.g.add(tee);
   golf.ball = new THREE.Mesh(new THREE.SphereGeometry(GOLF.R, 16, 12), new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x333333, shininess: 60 }));
-  golf.ball.position.copy(golfTee); scene.add(golf.ball); golf.ball.visible = false;   // (only up top: see golfTick)
+  golf.ball.position.copy(golfTee); roof.g.add(golf.ball); golf.ball.visible = false;   // (only up top: see golfTick; in roof.g, or roomSort files it with the store under it and hides it)
   const club = () => {                              // the grip at the origin, the shaft down -y, the head at its foot toeing out along +x
     const g = new THREE.Group(), L = GOLF.CLUB;
     const add = (geo, m, px, py, pz) => { const o = new THREE.Mesh(geo, m); o.position.set(px, py, pz); g.add(o); return o; };
@@ -10121,10 +10121,10 @@ const golfTee = new THREE.Vector3(GOLF.x, ROOF.y + 0.055 + GOLF.R, GOLF.z);   //
     return g;
   };
   golf.lie = club(); golf.lie.rotation.set(0, 0.4, Math.PI / 2); golf.lie.position.set(x + 0.75, Y + 0.012, z - 0.45); roof.g.add(golf.lie);   // on the deck beside the mat
-  golf.club = club(); golf.club.visible = false; scene.add(golf.club);
+  golf.club = club(); golf.club.visible = false; roof.g.add(golf.club);
   for (const o of [mat, tee, ...golf.lie.children]) golf.parts.push(o);
   const tg = new THREE.BufferGeometry(); tg.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(120 * 3), 3)); tg.setDrawRange(0, 0);
-  golf.trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })); golf.trail.frustumCulled = false; scene.add(golf.trail);
+  golf.trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 })); golf.trail.frustumCulled = false; roof.g.add(golf.trail);
 }
 const golfF = () => new THREE.Vector3(-Math.sin(golf.aim), 0, -Math.cos(golf.aim));   // down the line
 const golfRt = () => new THREE.Vector3(Math.cos(golf.aim), 0, -Math.sin(golf.aim));   // to its right
