@@ -5724,17 +5724,85 @@ function stoolTick(dt) {
 // drunk: a beer goes down a sip at a time into your stomach, and on into your blood over the next half minute or so;
 // you burn off about a beer every four minutes (real ones: two and a half store hours). Past a beer and a bit in your blood it shows, worse the
 // more there is: a beer now and then is nothing, a couple back to back is a buzz, three or four in a row and you're gone.
-// (Drinks, not real BAC: 1 = a whole beer)
-const drunk = { gut: 0, blood: 0, lvl: 0 };
+// (Drinks, not real BAC: 1 = a whole beer.) And it has consequences, more the drunker you are:
+//   drunk: you stumble now and then on your feet, and fumble what's in your hand (a drink or popcorn spills, a snack's
+//     dropped); customers near you notice (a shocked face each, points off, and it counts against the night's reputation)
+//   wasted: you throw up on the floor (a mess for the mop; it takes the edge off)
+//   past that (5 beers in your blood): you black out. The screen goes, the store runs on a couple of hours without you,
+//     and you come to on the floor
+//   blacked out, or clocked out drunk: the next shift's hungover till lunch: slow on your feet, a throbbing headache
+const drunk = { gut: SAVE?.drunk?.gut || 0, blood: SAVE?.drunk?.blood || 0, lvl: 0, peak: 0, hang: !!SAVE?.drunk?.hang, owe: !!SAVE?.drunk?.owe,
+  stumbleT: 5, lurch: 0, lx: 0, lz: 0, fumbleT: 12, pukeT: 25, seenT: 0, out: 0 };
+const DRUNK_OUT = 5, OUT_S = 7;                  // beers in the blood to black out; real seconds out (the store runs 2 hours in them)
 function drunkTick(dt) {
   const a = drunk.gut * Math.min(1, dt / 30);
   drunk.gut -= a; drunk.blood = Math.max(0, drunk.blood + a - dt / 240);
   const k = Math.max(0, Math.min(1, (drunk.blood - 1.2) / 3));
   const lvl = k > 0.6 ? 3 : k > 0.2 ? 2 : drunk.blood > 0.9 ? 1 : 0;
-  if (lvl > drunk.lvl) toast(["", "A nice little buzz", "You're getting drunk", "You're wasted. Maybe sit down for a while"][lvl], lvl < 2);
-  drunk.lvl = lvl;
+  if (lvl > drunk.lvl && !drunk.out) toast(["", "A nice little buzz", "You're getting drunk", "You're wasted. Maybe sit down for a while"][lvl], lvl < 2);
+  drunk.lvl = lvl; drunk.peak = Math.max(drunk.peak, lvl);
+  if (drunk.out) { if ((drunk.out -= dt) <= 0) drunkWake(); return k; }
+  if (drunk.blood >= DRUNK_OUT) { drunkOut(); return k; }
+  const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw), up = !seated && !onStool && !ladder.on && !roof.climb;
+  if (drunk.lurch > 0) {                         // a stumble: a step off sideways you didn't mean to take
+    drunk.lurch -= dt;
+    const nx = player.x + drunk.lx * dt, nz = player.z + drunk.lz * dt;
+    if (!blocked(nx, player.z)) player.x = nx;
+    if (!blocked(player.x, nz)) player.z = nz;
+  }
+  if (lvl >= 2 && up) {
+    const walking = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(c => keys.has(c));
+    if (walking && (drunk.stumbleT -= dt * k * 2) <= 0) {
+      drunk.stumbleT = 3 + Math.random() * 5;
+      const s = Math.random() < 0.5 ? 1 : -1;
+      drunk.lurch = 0.45; drunk.lx = -fz * s * 1.6 + fx * 0.6; drunk.lz = fx * s * 1.6 + fz * 0.6;   // off to one side, and on a bit
+      player.yaw += s * 0.25; player.pitch = Math.max(-1.4, player.pitch - 0.18); me.stagger(-s);
+    }
+    if ((drunk.fumbleT -= dt * k * (walking ? 2 : 1)) <= 0) { drunk.fumbleT = 10 + Math.random() * 15; drunkFumble(); }
+  }
+  if (lvl >= 3 && (drunk.pukeT -= dt * k) <= 0) { drunk.pukeT = 25 + Math.random() * 30; drunkPuke(); }
+  if (lvl >= 2 && (drunk.seenT -= dt) <= 0) {     // customers who can see you: about one in three notice, each second (at the register, nearly all)
+    drunk.seenT = 1;
+    for (const c of custs) if (c.c && !c.sawDrunk && Math.hypot(c.c.group.position.x - player.x, c.c.group.position.z - player.z) < (co?.cust === c ? 3 : 4.5) && Math.random() < (co?.cust === c ? 0.8 : 0.3)) drunkSeen(c, co?.cust === c ? 2 : 1);
+  }
   return k;
 }
+function drunkSeen(c, n = 1, how = "noticed you're drunk") {   // n: how bad (at the register: worse)
+  c.sawDrunk = true; c.c.setMood("shock"); c.hi = 2.5;
+  shift.stats.drunkSeen = (shift.stats.drunkSeen || 0) + n; shiftScore(-5 * n, "you");
+  logAct(`A customer ${how}${co?.cust === c ? ", right at the register" : ""}`, "bad", null, -5 * n);
+}
+function drunkFumble() {                         // whatever's in hand: drinks and popcorn spill, a snack hits the floor
+  const x = player.x - Math.sin(player.yaw) * 0.45, z = player.z - Math.cos(player.yaw) * 0.45;
+  if (heldSnack && snackLeft && !stockCarry.has(heldSnack)) {
+    const p = heldSnack.userData.snack;
+    if (isDrink(p)) { messAdd("spill", x, z); snackLeft = 0; snackTag(); toast(`Whoops: you spilled your ${p.kind === "Beer" ? "beer" : p.name}`); }
+    else { messAdd("wrapper", x, z); dropSnack(true); toast(`Whoops: you dropped your ${p.name}`); }
+  } else if (heldPopcorn?.kind === "box" && heldPopcorn.fill) {
+    messAdd("popcorn", x, z); heldPopcorn.fill = 0; heldPopcorn.toppings = []; popcornVisual(); toast("Whoops: popcorn everywhere");
+  }
+}
+function drunkPuke() {
+  messAdd("vomit", player.x - Math.sin(player.yaw) * 0.6, player.z - Math.cos(player.yaw) * 0.6);
+  drunk.gut = 0; drunk.blood = Math.max(0, drunk.blood - 0.6);   // (what hadn't gone in yet, and a bit that had)
+  player.pitch = Math.max(-1.4, player.pitch - 0.5); me.stagger(1);
+  toast("You threw up. On the floor. Of the store");
+  shiftScore(-10, "you"); logAct("Threw up on the store floor", "bad", null, -10);
+  for (const c of custs) if (c.c && Math.hypot(c.c.group.position.x - player.x, c.c.group.position.z - player.z) < 7) { if (c.sawDrunk) { c.c.setMood("angry"); c.hi = 3; } else drunkSeen(c, 2, "watched you throw up"); }
+}
+function drunkOut() {                            // the lights go out; the store runs on 2 hours (shiftTick's fast-forward) while you're on the floor
+  drunkFumble(); keys.clear();
+  drunk.out = OUT_S; drunk.owe = true; shift.warp = Math.min(SHIFT.close, Math.max(shift.warp, shift.h) + 2);
+  shiftScore(-50, "you"); shift.stats.drunkSeen = (shift.stats.drunkSeen || 0) + 3;
+}
+function drunkWake() {
+  drunk.out = 0; drunk.gut = 0; drunk.blood = 2.4;
+  eyeY = 0.25; player.pitch = 0.5;              // on the floor, looking up; the eye eases back up to standing
+  logAct("Blacked out on the job. A couple of hours, gone", "bad", null, -50);
+  toast(`You come to on the floor. It's ${fmtClock(shift.h)}. What happened?`);
+}
+const drunkDim = () => drunk.out ? Math.min(1, (OUT_S - drunk.out) / 1.2, drunk.out / 0.4 + 0.3) : 0;   // fade out, hold, then a little light before you're up
+const hungover = () => drunk.hang && shift.h < 13;     // till lunch
 // dizzy: a hard spin on the stool builds it up (a nudge doesn't); once the spinning
 // eases off the room keeps drifting the other way, the view sways and blurs, and
 // walking forward pulls you off to one side or the other. Wears off over ~20 s
@@ -5749,7 +5817,8 @@ function dizzyTick(dt) {
   if (spin > 0.5 && !dizzy.said) { dizzy.said = true; toast("Whoa... the room's still spinning", true); }
   if (!k) { dizzy.said = false; dizzy.ph = Math.random() * Math.PI * 2; }   // next time it may pull the other way first
   if (k && !onStool && !seated && (keys.has("KeyW") || keys.has("ArrowUp"))) player.yaw += k * 1.3 * dt * Math.sin(dizzy.t * 0.7 + dizzy.ph);   // walking: pulled left, then right...
-  const blur = k > 0.05 ? `blur(${(k * 2.5).toFixed(1)}px)` : "";
+  const dim = Math.max(drunkDim(), hungover() ? 0.18 * Math.max(0, Math.sin(dizzy.t * 1.2)) ** 6 : 0);   // blacked out / a hangover's throb
+  const blur = [k > 0.05 && `blur(${(k * 2.5).toFixed(1)}px)`, dim > 0.01 && `brightness(${(1 - dim).toFixed(2)})`].filter(Boolean).join(" ");
   if (blur !== dizzy.blur) canvas.style.filter = dizzy.blur = blur;
   return k;
 }
@@ -5769,6 +5838,7 @@ addEventListener("keydown", e => {
     return;
   }
   if (e.code === "Escape") { if (!escClose()) document.exitPointerLock(); return; }   // (only reaches us in fullscreen, with the keyboard lock)
+  if (drunk.out) return;                     // out cold
   if (["Space", "ArrowUp", "ArrowDown"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "KeyE" && !e.repeat && cmove.item) { /* carrying one: click sets it down */ }
@@ -5858,7 +5928,7 @@ function move(dt) {
     if (!ladder.fix && ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) ladderDown();
     return;
   }
-  if (seated || inspecting || scrub) return;   // stand up with E first; (scrubbing: you stay put till it's done)
+  if (seated || inspecting || scrub || drunk.out) return;   // stand up with E first; (scrubbing: you stay put till it's done)
   if (keys.has("KeyW") || keys.has("ArrowUp")) iz += 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) iz -= 1;
   if (keys.has("KeyD") || keys.has("ArrowRight")) ix += 1;
@@ -5866,7 +5936,7 @@ function move(dt) {
   if (!ix && !iz) return;
   const sp = ((keys.has("ShiftLeft") || keys.has("ShiftRight")) ? 5.2 * (has("you", "con", 5) ? 1.15 : 1) : 3.1) * (1 + 0.02 * (lv("you", "con") - 1));   // (CON: quicker on your feet; Second Wind)
   const crouched = keys.has("KeyC");
-  const spd = sp * (crouched ? 0.55 : 1);
+  const spd = sp * (crouched ? 0.55 : 1) * (hungover() ? 0.75 : 1);
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
   const x0 = player.x, z0 = player.z;
   if (!blocked(player.x + dx, player.z)) player.x += dx;
@@ -8643,7 +8713,7 @@ function pickHover() {
 }
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("mousedown", e => {
-  if (document.pointerLockElement !== canvas) return;
+  if (document.pointerLockElement !== canvas || drunk.out) return;
   if (cmove.item) { if (e.button === 0) movePlace(); else if (e.button === 2) moveCancel(`The ${cmove.item.name}'s back where it was`); return; }
   if (e.button === 2) {                                    // right click puts down whatever's in hand (and backs out of things, like Escape)
     if (board.open) { boardClose(); return; }             // Dana's job board
@@ -10206,7 +10276,7 @@ function strayTake(s) {                          // off the shelf and into a han
 // theater. E cleans one up; Dana does too when things are quiet. A messy store
 // puts customers off
 const messes = [];                               // { kind, mesh, x, y, z }
-const MESS_TOOL = { spill: "mop", popcorn: "sweeper", puddle: "mop" };
+const MESS_TOOL = { spill: "mop", popcorn: "sweeper", puddle: "mop", vomit: "mop" };
 const messCan = o => !MESS_TOOL[o.kind] || MESS_TOOL[o.kind] === toolHeld;   // do you have what it takes, in hand?   // messes that want a tool from the janitor's closet (staff just see to it)
 const MESS = {
   spill: { label: "spilled soda", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0x4a2410, transparent: true, opacity: 0.85, depthWrite: false });
@@ -10219,6 +10289,10 @@ const MESS = {
   popcorn: { label: "spilled popcorn", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0xf6e7a8 });
     for (let i = 0; i < 14; i++) { const k = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), m); k.position.set((Math.random() - 0.5) * 0.35, 0.012, (Math.random() - 0.5) * 0.35); g.add(k); } return g; } },
   towel: { label: "paper towel", make: () => { const t = new THREE.Mesh(new THREE.IcosahedronGeometry(0.035, 0), new THREE.MeshLambertMaterial({ color: 0xf6f3ea })); t.position.y = 0.03; t.rotation.set(1, 2, 0); return t; } },
+  vomit: { label: "puke", make: () => { const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: 0xb59a3c, transparent: true, opacity: 0.92, depthWrite: false }), b = new THREE.MeshLambertMaterial({ color: 0x8a6a2a });
+    for (let i = 0; i < 5; i++) { const d = new THREE.Mesh(new THREE.CircleGeometry(0.06 + Math.random() * 0.12, 16), m); d.rotation.x = -Math.PI / 2; d.position.set((Math.random() - 0.5) * 0.35, 0.002 + i * 0.0005, (Math.random() - 0.5) * 0.35); g.add(d); }
+    for (let i = 0; i < 9; i++) { const c = new THREE.Mesh(new THREE.IcosahedronGeometry(0.012, 0), b); c.position.set((Math.random() - 0.5) * 0.3, 0.006, (Math.random() - 0.5) * 0.3); c.scale.y = 0.5; g.add(c); }   // (chunks)
+    return g; } },
   cup: { label: "empty cup", make: () => { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.14, 12), new THREE.MeshLambertMaterial({ color: 0xd9d9d9 })); c.rotation.z = Math.PI / 2; c.position.y = 0.045; return c; } },
 };
 // ---- the janitor's closet at work: a tool in hand (one at a time), and the ceiling lights that burn out ----
@@ -11198,6 +11272,8 @@ function openPOS() {
 // ends the day: the shift slip (what came in, what walked out, a grade), then
 // the next morning, 9:00 with the doors still locked (an hour to get things ready)
 function clockOut() {
+  if (drunk.peak >= 2) drunk.owe = true;         // (tomorrow you'll feel it)
+  drunk.peak = 0;
   keys.clear(); shift.report = true; $("hoverTip").style.display = "none";
   document.exitPointerLock();
   const chk = { bin: returnBin.length, strays: strays.length, messes: messes.length, lights: deadLights.length, empty: emptySpots().length, trash: binList().filter(b => b.n >= b.cap * 0.75).length + bagsDown.length + bagCarry.length };   // the closing walk-through: what's been left undone
@@ -11213,7 +11289,7 @@ function clockOut() {
   const row = (k, v) => k + " " + ".".repeat(Math.max(1, W - k.length - String(v).length - 2)) + " " + v;
   const tried = s.served + s.walkouts, score = (tried ? 100 * s.served / tried : 100) - 15 * s.stolen;
   const gradeOf = sc => sc >= 93 ? "A" : sc >= 85 ? "B" : sc >= 75 ? "C" : sc >= 60 ? "D" : "F";
-  const repD = !s.visitors ? 0 : Math.max(-10, Math.min(8, { A: 5, B: 3, C: 1, D: -2, F: -5 }[gradeOf(score)] - 2 * s.stolen - Math.floor((chk.messes + chk.trash) / 2) - (s.refunds ? 3 : 0) + (show.status === "done" && show.sold ? 2 : 0)));
+  const repD = !s.visitors ? 0 : Math.max(-10, Math.min(8, { A: 5, B: 3, C: 1, D: -2, F: -5 }[gradeOf(score)] - 2 * s.stolen - Math.floor((chk.messes + chk.trash) / 2) - (s.refunds ? 3 : 0) - Math.min(5, Math.ceil((s.drunkSeen || 0) / 2)) + (show.status === "done" && show.sold ? 2 : 0)));
   const repWas = repStars(); rep.v = Math.max(0, Math.min(100, rep.v + repD));
   const wom = SIM && s.visitors ? ({ A: 3, B: 2, C: 1 }[gradeOf(score)] || 0) + (repStars() >= 4) + (repStars() >= 5) : 0;   // a good night gets talked about
   growth.pending += wom; growth.prospects = Math.floor(growth.prospects / 2);   // whoever meant to come in today and didn't: half of them lose interest
@@ -11241,6 +11317,7 @@ function clockOut() {
 }
 function beginShift() {                        // first thing in the morning: 9:00, doors locked, you just inside them
   shift.h = SHIFT.start; shift.warp = 0; shift.stats = shiftStats(); shift.goals = dayGoals();
+  drunk.gut = drunk.blood = 0; drunk.hang = drunk.owe; drunk.owe = false;   // slept it off; a hangover's what's left (see hungover)
   for (const e of staff) { withEmp(e, empDespawn); e.sentHome = false; }   // (they went home overnight: in when their shifts start)
   posTerm.setDate(shiftDate()); calendarDraw(); corkDraw(); postersSwap(); decorDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
   logAct(`— ${WEEKDAYS[shiftDate().getDay()]}, day ${shift.day} —`);
@@ -11257,7 +11334,7 @@ function beginShift() {                        // first thing in the morning: 9:
   }
   setFrontLock(true);
   Object.assign(player, { x: 0, z: 1.4, yaw: Math.PI, pitch: 0 }); gateLastZ = player.z;
-  shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. Doors open at 10 — unlock them when you're ready`;
+  shift.greet = `${WEEKDAYS[shiftDate().getDay()]} · day ${shift.day}. Doors open at 10 — unlock them when you're ready${drunk.hang ? ". Ugh, your head's pounding" : ""}`;
   if (SIM && shift.day === 1) {                // a new simulation: where it goes from here
     logAct("Your store's bare bones for now: no staff, the theater's locked, and part of the library's still to come");
     logAct("Everything it earns goes in the budget. Spend it on the register: U for upgrades, O to order snacks");
@@ -11308,7 +11385,7 @@ function saveState() {
     v: SAVE_V, mode: MODE, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
-    you: { skills: you.skills }, rep: rep.v, upg,
+    you: { skills: you.skills }, rep: rep.v, upg, drunk: { gut: +drunk.gut.toFixed(3), blood: +drunk.blood.toFixed(3), hang: drunk.hang, owe: drunk.owe },
     counterItems: Object.fromEntries(counterItemsList().map(it => { const f = cmove.item === it ? cmove.from : null; return [it.id, f ? [f.x, f.z, f.ry] : [+it.g.position.x.toFixed(3), +it.g.position.z.toFixed(3), +it.g.rotation.y.toFixed(3)]]; })), members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
     lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats, goals: shift.goals }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
@@ -11671,7 +11748,7 @@ window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wx
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, drunkFumble, drunkPuke, drunkOut, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
