@@ -11179,7 +11179,7 @@ function trashTick(dt) {
   }
   for (const e of staff) {                        // staff on a trash run: they get the doors, and an interrupted run puts the bag down
     if (!e.trash) continue;
-    if (!TRASH_STATES.includes(e.state) || !e.c) {
+    if (!TRASH_STATES.includes(e.state === "repath" ? e.repath?.state : e.state) || !e.c) {   // (blocked, waiting to repath to the bin or the chute: still on the run)
       const t = e.trash.t; if (t.claim === e) t.claim = null;
       if (e.trash.bag && e.c) { e.c.holdItem(null); const p = e.c.group.position; bagPlace(e.trash.bag.bin, e.trash.bag.n, p.x, p.z); }
       e.trash = null; continue;
