@@ -10094,7 +10094,7 @@ let aimRoofLadder = false, aimGolf = false;
 // run out and it's a mishit, low and sliced, worse off the heel. Off the toe or heel costs distance and bends it too.
 // The ball flies (gravity, drag, backspin's lift, sidespin bending it), bounces off the parapets and the deck, comes
 // down out in the world and rolls out, and you get the yardage; then there's another ball on the tee. E or right-click: done
-const GOLF = { x: 5.5, z: 12, R: 0.0214, SWEET: 0.08, PURE: 0.015, CLUB: 1.0 };   // the tee; ball radius; the meter's mark and how close is pure; club length
+const GOLF = { x: 5.5, z: 12, R: 0.0214, SWEET: 0.08, PURE: 0.015, CLUB: 1.0, MAX: 32 };   // the tee; ball radius; the meter's mark and how close is pure; club length; how far out it can get (the treeline over the road)
 const golf = { on: false, aim: 0, c: 0, st: "idle", pow: 0, peak: 0, line: 0, theta: 0, th0: 0, t: 0, hit: null, v: new THREE.Vector3(), spin: 0, lift: 0,
   carry: null, rolled: false, cam: new THREE.Vector3(), parts: [], ball: null, club: null, lie: null, trail: null, n: 0 };
 const golfTee = new THREE.Vector3(GOLF.x, ROOF.y + 0.055 + GOLF.R, GOLF.z);   // the ball, sat on the tee
@@ -10152,10 +10152,10 @@ function golfMouse(down, button) {
   else if (!down && golf.st === "power") { if (golf.pow < 0.04) golf.st = "idle"; else { golf.peak = golf.line = golf.pow; golf.st = "back"; } }
   else if (down && golf.st === "back") golfStrike(golf.line);
 }
-function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. A wedge: full power carries ~80 yd, ~28 m up
+function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. A chip: full power carries ~24 m, ~3 m over the deck (out front: the road)
   const e0 = at == null ? null : at - GOLF.SWEET, e = e0 != null && Math.abs(e0) <= GOLF.PURE ? 0 : e0, c = golf.c;
-  let ang = 0, spin = -c * 1.5, speed = 26 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.9, what = [];
-  if (e == null) { speed *= 0.6; elev = 0.45; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
+  let ang = 0, spin = -c * 1.5, speed = 14 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.55, what = [];
+  if (e == null) { speed *= 0.6; elev = 0.3; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
   else if (e > 0) { speed *= 1 - Math.min(0.3, e * 0.8); ang = -Math.min(0.12, e * 0.25); spin += -Math.min(3, e * 6); what.push(e > 0.12 ? "way early: hooked it" : "a touch early: pulled left"); }
   else if (e < 0) { speed *= 1 - Math.min(0.3, -e * 0.8); ang = Math.min(0.12, -e * 0.4); spin += Math.min(3, -e * 20); what.push("a touch late: pushed right"); }
   else if (!c || Math.abs(c) < 0.15) what.push("pure");
@@ -10226,6 +10226,7 @@ function golfFly(dt) {
       if (!onDeck(b.x, nz)) v.z *= -0.4;
       v.y *= 0.7; continue;
     }
+    if (Math.hypot(nx - golfTee.x, nz - golfTee.z) > GOLF.MAX) { v.x *= -0.15; v.z *= -0.15; continue; }   // into the trees: it drops out of them (ponytail: a ring round the tee, not the real treeline)
     const fl = (onDeck(nx, nz) ? ROOF.y : 0) + GOLF.R;
     b.set(nx, ny, nz);
     if (golf.rolled || b.y < fl) {
