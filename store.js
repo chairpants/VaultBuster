@@ -10152,10 +10152,10 @@ function golfMouse(down, button) {
   else if (!down && golf.st === "power") { if (golf.pow < 0.04) golf.st = "idle"; else { golf.peak = golf.line = golf.pow; golf.st = "back"; } }
   else if (down && golf.st === "back") golfStrike(golf.line);
 }
-function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out
+function golfStrike(at) {                          // the last click (at = where the line was), or null: it ran out. A wedge: full power carries ~80 yd, ~28 m up
   const e0 = at == null ? null : at - GOLF.SWEET, e = e0 != null && Math.abs(e0) <= GOLF.PURE ? 0 : e0, c = golf.c;
-  let ang = 0, spin = -c * 1.5, speed = 60 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.2, what = [];
-  if (e == null) { speed *= 0.6; elev = 0.12; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
+  let ang = 0, spin = -c * 1.5, speed = 26 * golf.peak * (1 - 0.3 * Math.abs(c)), elev = 0.9, what = [];
+  if (e == null) { speed *= 0.6; elev = 0.45; ang = 0.06; spin = 7 + Math.max(0, -c) * 4 - Math.max(0, c) * 3; what.push("mishit", "sliced it"); }
   else if (e > 0) { speed *= 1 - Math.min(0.3, e * 0.8); ang = -Math.min(0.12, e * 0.25); spin += -Math.min(3, e * 6); what.push(e > 0.12 ? "way early: hooked it" : "a touch early: pulled left"); }
   else if (e < 0) { speed *= 1 - Math.min(0.3, -e * 0.8); ang = Math.min(0.12, -e * 0.4); spin += Math.min(3, -e * 20); what.push("a touch late: pushed right"); }
   else if (!c || Math.abs(c) < 0.15) what.push("pure");
