@@ -5721,6 +5721,20 @@ function stoolTick(dt) {
   }
   stool.top.rotation.y = stool.angle;             // (Dana scoots it round by hand, too)
 }
+// drunk: a beer goes down a sip at a time into your stomach, and on into your blood over the next half minute or so;
+// you burn off about a beer every four minutes (real ones: two and a half store hours). Past a beer and a bit in your blood it shows, worse the
+// more there is: a beer now and then is nothing, a couple back to back is a buzz, three or four in a row and you're gone.
+// (Drinks, not real BAC: 1 = a whole beer)
+const drunk = { gut: 0, blood: 0, lvl: 0 };
+function drunkTick(dt) {
+  const a = drunk.gut * Math.min(1, dt / 30);
+  drunk.gut -= a; drunk.blood = Math.max(0, drunk.blood + a - dt / 240);
+  const k = Math.max(0, Math.min(1, (drunk.blood - 1.2) / 3));
+  const lvl = k > 0.6 ? 3 : k > 0.2 ? 2 : drunk.blood > 0.9 ? 1 : 0;
+  if (lvl > drunk.lvl) toast(["", "A nice little buzz", "You're getting drunk", "You're wasted. Maybe sit down for a while"][lvl], lvl < 2);
+  drunk.lvl = lvl;
+  return k;
+}
 // dizzy: a hard spin on the stool builds it up (a nudge doesn't); once the spinning
 // eases off the room keeps drifting the other way, the view sways and blurs, and
 // walking forward pulls you off to one side or the other. Wears off over ~20 s
@@ -5728,10 +5742,11 @@ const dizzy = { v: 0, t: 0, blur: "", said: false, ph: 0 };
 function dizzyTick(dt) {
   if (onStool && stool.vel > 5) dizzy.v = Math.min(1, dizzy.v + dt * stool.vel / STOOL.MAX / 8);   // ~8 s flat out to max
   else dizzy.v = Math.max(0, dizzy.v - dt / 20);
-  const k = Math.max(0, (dizzy.v - 0.3) / 0.7);   // the first few seconds of spinning are free
+  const spin = Math.max(0, (dizzy.v - 0.3) / 0.7);   // the first few seconds of spinning are free
+  const k = Math.max(spin, drunkTick(dt));         // drunk: the same sway, blur and pull, without the room going round
   dizzy.t += dt;
-  if (k && !(onStool && stool.vel > 2)) player.yaw -= k * 0.7 * dt * (1 + 0.4 * Math.sin(dizzy.t * 0.9));   // the room keeps going round the other way
-  if (k > 0.5 && !dizzy.said) { dizzy.said = true; toast("Whoa... the room's still spinning", true); }
+  if (spin && !(onStool && stool.vel > 2)) player.yaw -= spin * 0.7 * dt * (1 + 0.4 * Math.sin(dizzy.t * 0.9));   // the room keeps going round the other way
+  if (spin > 0.5 && !dizzy.said) { dizzy.said = true; toast("Whoa... the room's still spinning", true); }
   if (!k) { dizzy.said = false; dizzy.ph = Math.random() * Math.PI * 2; }   // next time it may pull the other way first
   if (k && !onStool && !seated && (keys.has("KeyW") || keys.has("ArrowUp"))) player.yaw += k * 1.3 * dt * Math.sin(dizzy.t * 0.7 + dizzy.ph);   // walking: pulled left, then right...
   const blur = k > 0.05 ? `blur(${(k * 2.5).toFixed(1)}px)` : "";
@@ -8731,6 +8746,7 @@ function consumeSnack() {
   if (stockCarry.has(heldSnack)) { toast("That's stock: E on an empty spot on the rack to put it out"); return; }
   if (snackLeft === snackTotal && isDrink(heldSnack.userData.snack) && drinkTemp(heldSnack) > DRINK_WARM) toast(`Ugh. It's warm (${Math.round(drinkTemp(heldSnack))}°F)`);
   snackLeft--; biteAnim = 0.4; biteGroup = snackGroup; biteDrink = isDrink(heldSnack.userData.snack);
+  if (heldSnack.userData.snack.kind === "Beer") drunk.gut += 1 / snackTotal;   // (see drunkTick)
   snackTag();
 }
 
@@ -11655,7 +11671,7 @@ window.__t = { roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wx
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,
   doors, toggleDoor, colliders, cutout, cutoutPickUp, cutoutPutDown, cutoutCarryTick, cutoutSpot: () => cutoutSpot,
   setFrontLock, me, stool, stoolPickUp, stoolPutDown, stoolSit, stoolPush, stoolStand, onStool: () => onStool, sitOn: i => { seatAt = SEATS[i]; seated = true; player.yaw = Math.PI; player.pitch = 0; },
-  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
+  stopSaving: () => { saveOff = true; }, setZone, zoneOn, bath, seatAt: () => seatAt, seated: () => seated, meBody: () => me, cmove, counterItemsList, moveStart, movePlace, roomSort, scene, DESENS_AT, PRN_AT, player, camera, holdPull, jobBoardMesh: () => jobBoardMesh, aimables, JOBS, board, boardOpen, boardKey, danaBestJob, danaJobNow, phone, holds, phoneAnswer, callAnswer, holdPlace, phoneTick, growth, doors, colliders, show, rep, upg, upgBuy, showSet, coStart, coolerThermo: () => coolerThermo, drinkTempTick, drinkTemp, stockTake, stockPlace, emptySpots, backstock, boxes, boxCarry, boxPick, boxUnpack, stockOrder, strays, misshelve, messes, messAdd, messClean, TOOLS, toolTake, toolReturn, toolTick, scrubStart, scrub: () => scrub, withEmp, empNext, has, custPickMember, toolHeld: () => toolHeld, TROFFERS, deadLights, lightDie, lightFix, ladder, LADDER, ladderPickUp, ladderPutDown, ladderStore, ladderClimb, ladderDown, ladderTick, ladderStep, snackUnits, grabSnack, consumeSnack, invMakeRoom, drunk, inv: () => inv, stockCarry, custAsks, custWant, custAskGo, custHandTape, custAllOut, rushLevel, custMax, catchDecide, catchCall: () => catchCall, navGrid, navPath, shift, clockOut, beginShift, gateAlarm, startGateAlarm, co: () => co, coAct, coOffer, coFees, coStep: () => coStep(), printer, custSneak, custCatch, custs, custLine, empTick, custTick, empToggle, custSpawn, custGo, CUST_COUNTER, setOnShelf, refreshReturnsBin, returnBin, rewinders, posTerm, rentedCopies, custInteract, custGone, snackSpots, custDone,
   staffChatTick, empLunchDue, LUNCH_CHAIRS, snackLane, stockSlotIn, snackSpots, custBringAlong, custTagAlong, custChatTick, kidFor, postits, postitAdd, postitCall, postitPickUp, postitToss, postitPutBack, postitHeld: () => postitHeld, callOutcome, memberHabits, phoneOutTick,
   staff, you, gainXp, lv, xpToNext, SKILLS, onDuty, sendHome, setSched, schedHours, weekday, SHIFT, trashBins, trashAdd, binBag, bagCarry, bagsDown, bagsSetDown, bagPickUp, chuteDrop, chute, trashTick, trashJob, hiring, hireOpen, hirePick, hireCost, sheet, sheetToggle, rollApplicant, STAT_TOTAL,
 };
