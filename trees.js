@@ -50,7 +50,7 @@ window.VaultTrees = (() => {
     return m;
   };
 
-  function build({ scene, layer, rows, x0, x1, avoid }) {
+  function build({ scene, layer, rows, x0, x1, avoid, road = [-14.8, -8.8], lot = [-32, 36, -12.3], lotY = 0 }) {   // road: its far and near z (with the verge); lot: its x span and curb z
     const R = Math.random, trees = [];
     const add = (x, z, s, pine) => trees.push({ x, z, s, pine, phase: R() * 6.28, off: (R() - 0.5) * 18, type: Math.floor(R() * 4) });
     // the treeline across the road, as it always was: three staggered rows
@@ -61,8 +61,8 @@ window.VaultTrees = (() => {
     // and now the rest of the world, seen from the roof: a treeline round the edge, groves, the odd tree on its own
     const clear = (x, z) => {
       for (const [a, b, c, d] of avoid) if (x > a - 4 && x < b + 4 && z > c - 4 && z < d + 4) return false;   // the building
-      if (z > -14.8 && z < -8.8) return false;                          // the road (cars come and go along it, well past the lot)
-      if (z > -14.8 && z < 1 && x > -32 && x < 36) return false;        // the lot and the walk
+      if (z > road[0] - 1 && z < road[1]) return false;                // the road (cars come and go along it, well past the lot)
+      if (z > road[0] - 1 && z < 1 && x > lot[0] && x < lot[1]) return false;   // the lot and the walk
       if (x > 12 && x < 24 && z > -2 && z < 16) return false;           // next door
       return !trees.some(t => Math.abs(t.x - x) < 1.3 && Math.abs(t.z - z) < 1.3);
     };
@@ -159,10 +159,10 @@ window.VaultTrees = (() => {
     for (let i = 0; i < NG; i++) {
       const r = R(); let x, z;
       if (r < 0.6 && rounds.length) { const t = rounds[Math.floor(R() * rounds.length)], a = R() * 6.28, d = Math.sqrt(R()) * 2.6 * t.s; x = t.x + Math.cos(a) * d + 0.6; z = t.z + Math.sin(a) * d; }
-      else if (r < 0.75) { x = -27 + R() * 57; z = -9.68 + R() * 0.15; }            // against the lot side of the curb
+      else if (r < 0.75) { x = lot[0] + 8 + R() * (lot[1] - lot[0] - 13); z = lot[2] + 0.12 + R() * 0.15; }   // against the lot side of the curb
       else if (r < 0.9) { x = (R() < 0.5 ? -7.6 + R() * 5.6 : 2 + R() * 8.8); z = -0.06 - R() * R() * 0.5; }   // up along the storefront
-      else { x = -27 + R() * 57; z = -9.6 + R() * 9; }                              // loose on the lot and the walk
-      litter.setMatrixAt(i, m4.compose(p.set(x, 0.004 + R() * 0.004, z), q.setFromEuler(e.set((R() - 0.5) * 0.3, R() * 6.28, (R() - 0.5) * 0.3)), sc.set(0.7 + R() * 0.6, 1, 0.7 + R() * 0.6)));
+      else { x = lot[0] + 8 + R() * (lot[1] - lot[0] - 13); z = lot[2] + 0.2 + R() * (-1.8 - lot[2]); }   // loose on the lot and the walk
+      litter.setMatrixAt(i, m4.compose(p.set(x, (z < -1.8 && z > lot[2] ? lotY : 0) + 0.004 + R() * 0.004, z), q.setFromEuler(e.set((R() - 0.5) * 0.3, R() * 6.28, (R() - 0.5) * 0.3)), sc.set(0.7 + R() * 0.6, 1, 0.7 + R() * 0.6)));
       litter.setColorAt(i, c.copy(lcols[Math.floor(R() * lcols.length)]).multiplyScalar(0.8 + R() * 0.3));
     }
     litter.count = 0;
