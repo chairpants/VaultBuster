@@ -228,9 +228,9 @@ console.log("\ncustomer mode");
 await freshStore("customer");
 check("out on the lot in your own clothes, a full crew, the doors locked till 10", await ev(() =>
   __t.CUSTOMER && __t.player.z < 0 && __t.staff.length >= 3 && __t.blocked(0.9, -0.3) && __t.staff.every(e => e.sched.every(m => m)) && __t.KEYED.every(k => k.door())));
-check("open at 10: in through the right-hand door, not through the glass or round the side", await ev(() => {
-  __t.shift.h = 10.01; __t.setFrontLock(false);
-  return !__t.blocked(0.9, -0.3) && !__t.blocked(0.9, 0.2) && __t.blocked(-3, 0) && __t.blocked(-9, 1) && __t.blocked(0, -11); }));
+check("open at 10: in through the right-hand door, not through the glass or a wall; round the sides and across the road", await ev(() => {
+  __t.shift.h = 10.01; __t.setFrontLock(false); Object.assign(__t.player, { x: 3, z: -3 });
+  return !__t.blocked(0.9, -0.3) && !__t.blocked(0.9, 0.2) && __t.blocked(-3, 0) && __t.blocked(-6, 5) && !__t.blocked(-9.5, 5) && !__t.blocked(0, -16); }));
 check("pay at the register: wallet down, the tape's yours (desensitized), the store's up", await ev(() => {
   Object.assign(__t.player, { x: 0.9, z: 6 }); const t = __t.catalog.find(t => !t.offShelf && t.pos && !t.libLocked); __t.pickup(t); __t.invSync();
   const e = __t.staff[0], w = __t.cm.wallet, b = __t.posTerm.budget(); __t.cmPay(e);
@@ -247,6 +247,7 @@ const trailOf = () => ev(() => [__t.cm.seed, __t.COMBOS.locker.code, __t.COMBOS.
 check("...the key survives the reload, and so does this save's trail (codes and hiding spots)", await ev(() => __t.CUSTOMER && __t.inv().some(e => e.ref.id === "breakKey") && __t.cm.found.has(__t.cmTrail.keyAt)));
 const trail = await trailOf(); await page.waitForTimeout(2500); await page.reload({ timeout: 300000 }); await ready(); await page.click("#mmFiles .acts .go"); await page.waitForTimeout(1000);
 check("...(the same trail after another reload)", JSON.stringify(trail) === JSON.stringify(await trailOf()));
+await ev(() => { __t.shift.h = 13; for (let i = 0; i < 30; i++) __t.empTick(0.1); });   // (after a reload nobody's in yet: midday, and the crew on the clock come in)
 check("the trail: half the locker code in a note, the rest on Ray's time card -> his badge -> his PIN, behind the counter -> logged in -> NO SALE: the janitor's key -> the printout -> the hatch", await ev(() => {
   __t.cmSearch(__t.PICKUPS.find(p => p.id === __t.cmTrail.noteAt)); __t.cmSearch(__t.PICKUPS.find(p => p.id === "timecard"));
   const L = __t.COMBOS.locker.code, halves = __t.ITEMS.comboNote.note.includes(`${L[0]} - ${L[1]} - ?`) && document.getElementById("toast").innerText.endsWith(L[2]);
