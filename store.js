@@ -34,6 +34,23 @@ const breakFx = { clock: null, punch: null, clock12: null, coffee: null, coffeeL
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
 const CLOSET = { x1: 12.6, doorW: 0.8 };
 const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 46.6, 0, -1], [7.5, 33.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal
+// the lot out front, front to back (z): the walk, the drive (a lane each way: right-hand, so east is the near lane),
+// the stall row, the curb, a strip of grass, then the road (its two lanes). Two driveways cut through, one at each end
+const LOT_Y_ = -0.12, LOT = { y: LOT_Y_, lane: { 1: -3.3, "-1": -6.3 }, stalls: -7.8, curb: -12.3, roadNear: -13.8, roadFar: -20.4, road: { 1: -15.45, "-1": -18.75 }, gates: [-22.54, 26.86], gateW: 4.4,   // (the stall lines and the lot's ends go by these)
+  noPark: [0, 1, 2, 19, 20, 21] };
+LOT.drives = LOT.gates.map((g, i) => i === 0 ? [g - LOT.gateW / 2, g + LOT.gateW / 2 + 0.6] : [g - LOT.gateW / 2 - 0.6, g + LOT.gateW / 2]);   // the driveways' paving: 60 cm wider on the inside (toward the stalls)   // stalls nobody parks in: past the driveways (grass), the driveways, and the cut-short ones beside them (in the way of cars turning in). The driveways: stalls 1 and 20's spots
+LOT.lampX = [4, 9, 14, 19].map(k => {             // the lot's street lights, along the grass strip by every fifth stall (never in a driveway or its flares: beside it)
+  const R = LOT.curb - LOT.roadNear, x = WALL_L - 20 + 2.6 * (k + 1), [a, b] = LOT.drives.find(([a, b]) => x > a - R - 0.6 && x < b + R + 0.6) || [];
+  return a == null ? x : Math.abs(x - (a - R - 0.6)) < Math.abs(x - (b + R + 0.6)) ? a - R - 0.6 : b + R + 0.6;
+});
+const CURB_H = -LOT_Y_ + 0.008, CURB_Y = (LOT_Y_ + 0.008) / 2;   // a curb: from the paving up to 8 mm proud of the walk and grass (flush, its top fought theirs)
+// where it's paved for driving (the lot, the driveways, the road): 12 cm down, a curb's height under the walk and the grass
+function pavedAt(x, z) {
+  const hw = LOT.gateW / 2;
+  if (z < LOT.roadNear && z > LOT.roadFar) return true;
+  if (z < -1.8 && z > LOT.curb) return x > LOT.gates[0] - hw && x < LOT.gates[1] + hw;
+  return z <= LOT.curb && z >= LOT.roadNear && LOT.drives.some(([a, b]) => x > a - 0.3 && x < b + 0.3);
+}
 const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 33.1], [11.1, 12.7, 27.9, 29.9], [-7.07, 1.33, 33.1, 46.6]] };   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
 // the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
 // (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
@@ -184,7 +201,7 @@ const ROOM_FRAG = `
     float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);
     rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
-  } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
+  } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05 && (P.z < uBohBox.z || P.x < uFloorBox.y)) {   // (past the side wall only the closet's row: the building's outside skin round there isn't indoors)
     bool closet = P.x > uFloorBox.y && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
     float lvl = closet ? 0.8 * uBoh.w : P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
     rl = (0.03 + 0.97 * lvl) * fl * (closet ? vec3(1.12, 0.95, 0.74) : vec3(1.0));
@@ -822,7 +839,7 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const segs = Math.max(1, Math.round(w / 2.6));                          // mullions every ~2.6m
     for (let i = 1; i < segs; i++) box(0.06, HEAD - KICK, 0.08, mat.mullion, x0 + i * (w / segs), (KICK + HEAD) / 2, z);
   };
-  storefront(XL - 1, -1.8, 0);                                              // front-left (overlaps 1m past XL, hidden)
+  storefront(XL - T / 2, -1.8, 0);                                          // front-left: out to the wall's outer face (the side's skin covers the corner from there)
   storefront(1.8, XR, 0);                                                   // front-right
   box(3.6, H - 2.6, T, mat.wall, 0, 2.6 + (H - 2.6) / 2, 0);                 // above doors
   wall(XL - T / 2, XR + T / 2, Z, true, H, mat.wall, [{ c: BOH_DOORS.store, w: BOH_OPENING_W }]);   // back, with the open way through to the back hall
@@ -2040,8 +2057,8 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   };
   const x0 = WALL_L - 20, x1 = STORE.x + 20, w = x1 - x0, cx = (x0 + x1) / 2;   // well past the building on both sides
   const SIDEWALK = 1.8;                                  // right outside the doors, before the lot starts
-  const driveTo = -SIDEWALK - 3.5, lotFar = -SIDEWALK - 8, roadFar = -SIDEWALK - 12,
-    grassFar = -SIDEWALK - 22, treesNear = -SIDEWALK - 15.5, treesFar = -SIDEWALK - 23.5;
+  const driveTo = LOT.stalls, lotFar = LOT.curb, roadFar = LOT.roadFar,   // the drive two lanes wide (one each way), then the stalls, the curb, the road
+    grassFar = -SIDEWALK - 28.6, treesNear = -SIDEWALK - 22.1, treesFar = -SIDEWALK - 30.1;   // (the road's lanes 3.3 m: the far side of it, out past them)
   const ground = (zNear, zFar, m) => {
     const g = new THREE.Mesh(new THREE.PlaneGeometry(w, zNear - zFar), m);
     g.rotation.x = -Math.PI / 2; g.position.set(cx, 0, (zNear + zFar) / 2); ea(g);
@@ -2051,10 +2068,21 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     const joint = new THREE.Mesh(new THREE.PlaneGeometry(0.03, SIDEWALK), mat.sidewalkJoint);
     joint.rotation.x = -Math.PI / 2; joint.position.set(x, 0.002, -SIDEWALK / 2); ea(joint);
   }
-  ground(-SIDEWALK, lotFar, mat.pavement);              // small parking lot: drive aisle first, stalls at the back
-  for (let x = x0 + 1.3; x < x1; x += 2.6) {              // painted stall lines, the full width of the lot
+  const lx0 = LOT.gates[0] - LOT.gateW / 2, lx1 = LOT.gates[1] + LOT.gateW / 2;   // the lot ends at each driveway's far edge (grass past it)
+  { const pv = new THREE.Mesh(new THREE.PlaneGeometry(lx1 - lx0, -SIDEWALK - lotFar), mat.pavement); pv.rotation.x = -Math.PI / 2; pv.position.set((lx0 + lx1) / 2, LOT.y, (lotFar - SIDEWALK) / 2); ea(pv);   // small parking lot: the drive first (a lane each way), stalls at the back
+    for (const [a, b] of [[x0, lx0], [lx1, x1]]) { const gr = new THREE.Mesh(new THREE.PlaneGeometry(b - a, -SIDEWALK - lotFar), mat.grass); gr.rotation.x = -Math.PI / 2; gr.position.set((a + b) / 2, 0, (lotFar - SIDEWALK) / 2); ea(gr); } }
+  { const R = lotFar - LOT.roadNear, hw = LOT.gateW / 2, zc = (lotFar + LOT.roadNear) / 2;   // a strip of grass between the lot and the road (up at the walk's height), round the driveways
+    const cuts = [x0, ...LOT.drives.flatMap(([a, b]) => [a - R, b + R]), x1];
+    for (let i = 0; i < cuts.length; i += 2) { const gr = new THREE.Mesh(new THREE.PlaneGeometry(cuts[i + 1] - cuts[i], R), mat.grass); gr.rotation.x = -Math.PI / 2; gr.position.set((cuts[i] + cuts[i + 1]) / 2, 0, zc); ea(gr); }
+    for (const [da, db] of LOT.drives) {              // the driveway, paved down at the lot's level; either side of its flares, a quarter of grass
+      const d = new THREE.Mesh(new THREE.PlaneGeometry(db - da, R), mat.pavement); d.rotation.x = -Math.PI / 2; d.position.set((da + db) / 2, LOT.y + 0.003, zc); ea(d);
+      for (const sd of [-1, 1]) { const cx2 = (sd < 0 ? da : db) + sd * R, sh = new THREE.Shape(); sh.moveTo(cx2, -lotFar); sh.absarc(cx2, -lotFar, R, Math.PI / 2, sd > 0 ? Math.PI : 0, sd < 0); sh.lineTo(cx2, -lotFar);
+        const q = new THREE.Mesh(new THREE.ShapeGeometry(sh, 12), mat.grass); q.rotation.x = -Math.PI / 2; ea(q); }
+    } }
+  for (let x = x0 + 1.3; x < x1; x += 2.6) {              // painted stall lines, the full width of the lot (but not across the two driveways)
+    if (LOT.gates.some(gx => Math.abs(x - gx) < LOT.gateW / 2) || x < lx0 || x > lx1) continue;
     const line = new THREE.Mesh(new THREE.PlaneGeometry(0.12, driveTo - lotFar - 0.4), mat.lineWhite);
-    line.rotation.x = -Math.PI / 2; line.position.set(x, 0.002, (driveTo + lotFar) / 2); ea(line);
+    line.rotation.x = -Math.PI / 2; line.position.set(x, LOT.y + 0.002, (driveTo + lotFar) / 2); ea(line);
   }
 
   // the parked cars (see parkLot, below): mostly nosed in toward the road, so
@@ -2122,7 +2150,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const BEV = 0.04, BEVT = 0.06, YB = 0.25, ARCH = 0.5, TIRE = 0.33;
   const car = (x, z, yaw, s) => {
     const { L, W, color, noseY, hoodY, cowlX, wsTopX, roofY, rTopX, rBotX, rBotY, rearY, wheels } = s;
-    const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g); g.userData.car = s;   // (its shape: the golf ball hits it)
+    const g = new THREE.Group(); g.position.set(x, LOT.y, z); g.rotation.y = Math.PI / 2 + yaw; scene.add(g); g.userData.car = s;   // (its shape: the golf ball hits it)
     const part = (geo, m, px, py, pz) => {
       const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
     };
@@ -2251,7 +2279,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   parkLot = (day, busy) => {
     for (const g of parked) g.removeFromParent(); parked = [];
     let seed = 7919 * day + 13; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k)), pick = a => a[Math.floor(rnd() * a.length)];
+    const free = [...Array(22).keys()].filter(k => !LOT.noPark.includes(k)), pick = a => a[Math.floor(rnd() * a.length)];   // (1, 20: the driveways; 0, 21: past them, grass now)
     for (let n = 2 + Math.floor(rnd() * 4) + (busy ? 2 : 0); n > 0 && free.length; n--) {
       const k = free.splice(Math.floor(rnd() * free.length), 1)[0], backIn = rnd() < 0.25;
       parked.push(car(stallX(k) + (rnd() - 0.5) * 0.3, stallZ + 0.15 + (rnd() - 0.5) * 0.4, (backIn ? Math.PI : 0) + (rnd() - 0.5) * 0.12, { ...pick(STYLES), color: pick(PAINT) }));
@@ -2260,42 +2288,68 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   };
   // and one driving by on the road: the ambience's passing-car sound calls this, so you see what you hear.
   // Right-hand traffic: eastbound in the lane nearer the store
-  const movers = [], ROAD_END = 35, laneZ = dir => dir > 0 ? -10.8 : -12.8;
+  const movers = [], ROAD_END = 35, laneZ = dir => LOT.road[dir];
+  let carIds = 0, traffic = [];                       // (traffic: this frame's moving cars, for keeping them out of each other: see carAhead)
   const roadPass = (look, dir, v, then) => {
-    const g = car(-dir * ROAD_END, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c }); lampSet(g, running());
-    movers.push({ g, vx: dir * v, v0: dir * v, z0: laneZ(dir), end: dir * ROAD_END, then });
+    let x0 = -dir * ROAD_END; while ([...movers.map(m => m.g), ...lotCars.map(c => c.g)].some(o => o && Math.abs(o.position.z - laneZ(dir)) < 1.5 && Math.abs(o.position.x - x0) < 8)) x0 -= dir * 8;   // (not on top of one already there)
+    const g = car(x0, laneZ(dir), dir > 0 ? -Math.PI / 2 : Math.PI / 2, { ...STYLES[look.s], color: look.c }); lampSet(g, running());
+    movers.push({ g, id: ++carIds, vx: dir * v, v0: dir * v, z0: laneZ(dir), end: dir * ROAD_END, then });
   };
   const alarms = new Set();
   carsOut = {                                        // for the golf ball: every car out there, what it's doing, and the scares it can get
     all: () => [...parked.map(g => ({ g })), ...lotCars.filter(c => c.g).map(c => ({ g: c.g, lot: c })), ...movers.map(m => ({ g: m.g, m }))],
     alarm: g => { g.userData.alarm = { t: 0 }; alarms.add(g); },
     swerve: (m, away) => { if (!m.sw && !m.crash) m.sw = { t: 0, T: 1.3, A: away * 1.1 }; },   // away: +1 toward the store, -1 away from it
-    crash: m => { m.sw = null; m.crash = { st: "off", t: 0, z1: m.v0 > 0 ? -9.45 : -14.6 }; },   // to its right: the lot's curb, or the grass over the road
+    crash: m => { m.sw = null; m.crash = { st: "off", t: 0, z1: m.v0 > 0 ? LOT.roadNear + 0.6 : LOT.roadFar - 0.8 }; },   // to its right: the lot's curb, or the grass over the road
   };
   carNew = () => ({ s: Math.floor(Math.random() * STYLES.length), c: PAINT[Math.floor(Math.random() * PAINT.length)] });
   passCar = ({ dir, v }) => roadPass(carNew(), dir, v);
-  // a customer's own car: past on the road (you hear it go by), then back along the lot's drive aisle the other
-  // way and nosed into a free stall; they get out. Leaving, it backs out, heads off down the aisle, and goes
-  // by on the road the other way. The turns follow a curve, the car pointing along it (backwards, backing out)
-  const AISLE_Z = -3.6, PARK_Z = stallZ + 0.15, lotCars = [];
+  // a customer's own car: along the road, slowing, and in at the driveway on its side of the lot (east-bound at the west
+  // end, west-bound at the east), round into its lane of the drive, up to the stall and nosed in. Leaving, it backs
+  // out into the lane for the way it's going, drives to the driveway ahead and out onto the road. The curves are
+  // splines the car's driven along at a speed (its nose along the curve, its tail along it backing out)
+  const PARK_Z = stallZ + 0.15, lotCars = [];
   const bez = (a, b, c, t) => [(1 - t) ** 2 * a[0] + 2 * t * (1 - t) * b[0] + t * t * c[0], (1 - t) ** 2 * a[1] + 2 * t * (1 - t) * b[1] + t * t * c[1]];
+  const spline = pts => new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), false, "centripetal");
+  const gateFor = d => { const [a, b] = LOT.drives[d > 0 ? 0 : 1]; return (a + b) / 2; };   // in: the near end for the way you're coming; out: the far end for the way you're going
+  const inPath = (d, E, back = 0) => { const L = LOT.road[d], A = LOT.lane[d];   // from the road, through the driveway, into its lane (back: start that much further off)
+    return spline([[E - d * (34 + back), L], [E - d * 7, L], [E - d * 1.6, L + 0.7], [E, LOT.roadNear], [E, lotFar], [E + d * 0.8, (lotFar + A) / 2], [E + d * 3.2, A - 0.2 * Math.sign(A + 4.8)], [E + d * 7, A]]); };
+  const outPath = (e, X, x0) => { const L = LOT.road[e], A = LOT.lane[e];   // from its lane, out the driveway, onto the road and away
+    return spline([[x0, A], [X - e * 3.5, A], [X - e * 0.8, (lotFar + A) / 2], [X, lotFar], [X, LOT.roadNear], [X + e * 1.6, L + 0.7], [X + e * 7, L], [X + e * 36, L]]); };
   driveIn = (look, onParked, near) => {            // -> the car (where to get out: car.door), or null: no free stall. near: an x to park close to (next door's customers)
     const taken = new Set([...parked.map(g => g.userData.stall), ...lotCars.map(c => c.stall)]);
-    let free = [...Array(22).keys()].filter(k => ![4, 9, 14, 19].includes(k) && !taken.has(k)); if (!free.length) return null;
+    let free = [...Array(22).keys()].filter(k => !LOT.noPark.includes(k) && !taken.has(k)); if (!free.length) return null;
     if (near != null) { free.sort((a, b) => Math.abs(stallX(a) - near) - Math.abs(stallX(b) - near)); free = free.slice(0, 3); }
-    const k = free[Math.floor(Math.random() * free.length)], sx = stallX(k), dir = Math.random() < 0.5 ? 1 : -1;   // dir: which way it comes by on the road (then back the other way down the aisle)
-    const c = { look, stall: k, sx, dir, phase: "road", t: 0, g: null, onParked, door: { x: sx - 1.2, z: PARK_Z } };   // the driver's side: west, nosed in toward the road
+    const k = free[Math.floor(Math.random() * free.length)], sx = stallX(k), ways = [1, -1].filter(d => (sx - gateFor(d)) * d >= 10);   // (a stall right by a driveway: from the other end)
+    const dir = ways[Math.floor(Math.random() * ways.length)];   // which way it's coming along the road (and up the drive)
+    const c = { id: ++carIds, look, stall: k, sx, dir, phase: "approach", t: 0, u: 0, g: null, onParked, door: { x: sx - 1.2, z: PARK_Z } };   // the driver's side: west, nosed in toward the road
+    let back = 0; const sx0 = gateFor(dir) - dir * 34;   // (somebody already starting out there: further back)
+    while ([...movers.map(m => m.g), ...lotCars.map(o => o.g)].some(o => o && Math.abs(o.position.z - LOT.road[dir]) < 1.5 && Math.abs(o.position.x - (sx0 - dir * back)) < 9)) back += 9;
+    c.path = inPath(dir, gateFor(dir), back); c.len = c.path.getLength();
+    const p0 = c.path.getPointAt(0); c.g = car(p0.x, p0.z, 0, { ...STYLES[look.s], color: look.c });
     lotCars.push(c);
     window.VaultAmbience?.drive?.(dir, 13);
-    roadPass(look, dir, 13, () => {                 // off past the end of the road: now back up the aisle
-      if (c.phase === "gone") return;
-      c.g = car(dir * 32, AISLE_Z, 0, { ...STYLES[look.s], color: look.c }); c.phase = "aisle";
-    });
     return c;
   };
   driveOut = c => {                                 // in and gone (or never got parked: just gone)
     if (c.phase !== "parked") { c.g?.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone"; return; }
-    c.phase = "startUp"; c.t = 0; c.e = Math.sign(c.sx) || 1;   // started up, foot on the brake, into reverse; then out the nearer end of the lot
+    c.phase = "startUp"; c.t = 0; c.e = Math.random() < 0.5 ? 1 : -1;   // started up, foot on the brake, into reverse; then whichever way they're headed
+  };
+  // keeping out of each other: a moving car with another moving car just ahead of it (in its path, close for its speed)
+  // waits. Two that'd each wait on the other: the one that came first goes. Parked cars don't count (they stay put)
+  const LOT_MOVING = new Set(["approach", "aisle", "turnIn", "backOut", "shift", "leave"]);   // (shift: stopped in the lane after backing out, still in the way)
+  const fwdOf = (g, back) => { const ry = g.rotation.y, k = back ? -1 : 1; return [Math.cos(ry) * k, -Math.sin(ry) * k]; };
+  const sees = (a, b, reach) => { const [fx, fz] = fwdOf(a.g, a.back), dx = b.g.position.x - a.g.position.x, dz = b.g.position.z - a.g.position.z, al = dx * fx + dz * fz;
+    return al > 0.5 && al < reach && Math.abs(dx * fz - dz * fx) < 1.7; };
+  const carAhead = (g, speed) => {
+    const me = traffic.find(t => t.g === g); if (!me) return false;
+    const reach = Math.max(7.5, 4 + Math.abs(speed) * 0.85);
+    return traffic.some(o => o !== me && ((sees(me, o, reach) && !(sees(o, me, 12) && me.id < o.id))
+      || (me.id > o.id && Math.hypot(o.g.position.x - g.position.x, o.g.position.z - g.position.z) < 1.8)));   // (right on top of each other, as can happen starting out: the newer one waits)
+  };
+  const along = (c, v, dt, back) => {               // drive c along its path at v m/s -> true at the end
+    if (carAhead(c.g, v)) { lampSet(c.g, { head: night(), tail: 2 }); return false; }   // (waiting on the car ahead: on the brake)
+    c.u = Math.min(1, c.u + v * dt / c.len); const p = c.path.getPointAt(c.u); steer(c, p.x, p.z, back); return c.u >= 1;
   };
   const steer = (c, x, z, back) => {                // put it at x/z, pointing the way it's going (backwards: the other way)
     const p = c.g.position, dx = x - p.x, dz = z - p.z;
@@ -2313,12 +2367,19 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     }
     for (const c of lotCars) if (c.phase === "parked" && c.idling) lampSet(c.g, running());
     for (const c of [...lotCars]) {
-      if (c.phase === "aisle") {                     // up the aisle toward the stall, the turn in starts 3m short of it
-        const x = c.g.position.x - c.dir * 6 * dt, left = (x - (c.sx + c.dir * 3)) * c.dir;
+      const A = LOT.lane[c.dir];
+      if (c.phase === "approach") {                  // along the road and round in at the driveway: road speed, slowing for the turn
+        const v = c.u < 0.55 ? 11 : c.u < 0.75 ? 11 - (c.u - 0.55) / 0.2 * 6.5 : 4.5;
+        lampSet(c.g, { ...running(), tail: c.u > 0.5 && c.u < 0.78 ? 2 : running().tail });
+        if (along(c, v, dt)) c.phase = "aisle";
+      } else if (c.phase === "aisle") {               // up its lane toward the stall, the turn in starts 3 m short of it
+        if (carAhead(c.g, 5)) { lampSet(c.g, { head: night(), tail: 2 }); continue; }
+        const x = c.g.position.x + c.dir * 5 * dt, left = (c.sx - c.dir * 3 - x) * c.dir;
         lampSet(c.g, { ...running(), tail: left < 2.5 ? 2 : running().tail });   // slowing for it
-        if (left <= 0) { c.phase = "turnIn"; c.t = 0; } else steer(c, x, AISLE_Z);
+        if (left <= 0) { c.phase = "turnIn"; c.t = 0; } else steer(c, x, A);
       } else if (c.phase === "turnIn") {
-        c.t = Math.min(1, c.t + dt / 1.8); const [x, z] = bez([c.sx + c.dir * 3, AISLE_Z], [c.sx, AISLE_Z], [c.sx, PARK_Z], 1 - (1 - c.t) ** 2); steer(c, x, z);
+        if (carAhead(c.g, 3)) continue;
+        c.t = Math.min(1, c.t + dt / 2.0); const [x, z] = bez([c.sx - c.dir * 3, A], [c.sx, A], [c.sx, PARK_Z], 1 - (1 - c.t) ** 2); steer(c, x, z);
         lampSet(c.g, { head: night(), tail: 2 });
         if (c.t >= 1) { c.phase = "stopped"; c.t = 0; }
       } else if (c.phase === "stopped") {            // in the stall, foot still on the brake; then into park and off
@@ -2326,30 +2387,58 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
       } else if (c.phase === "startUp") {            // started, on the brake; into reverse
         c.t += dt; lampSet(c.g, { head: night(), tail: 2, rev: c.t > 0.6 });
         if (c.t >= 1.2) { c.phase = "backOut"; c.t = 0; }
-      } else if (c.phase === "backOut") {
-        c.t = Math.min(1, c.t + dt / 2.2); const [x, z] = bez([c.sx, PARK_Z], [c.sx, AISLE_Z], [c.sx - c.e * 2.5, AISLE_Z], c.t * c.t * (3 - 2 * c.t)); steer(c, x, z, true);
+      } else if (c.phase === "backOut") {            // back out into the lane for the way it's going, tail swinging away from it
+        if (carAhead(c.g, 3)) continue;
+        const E = LOT.lane[c.e];
+        c.t = Math.min(1, c.t + dt / 2.4); const [x, z] = bez([c.sx, PARK_Z], [c.sx, E], [c.sx - c.e * 2.8, E], c.t * c.t * (3 - 2 * c.t)); steer(c, x, z, true);
         lampSet(c.g, { head: night(), tail: c.t > 0.7 ? 2 : running().tail, rev: true });   // (easing to a stop at the end: on the brake)
         if (c.t >= 1) { c.phase = "shift"; c.t = 0; }
-      } else if (c.phase === "shift") {              // stopped in the aisle, on the brake, out of reverse and into drive
+      } else if (c.phase === "shift") {              // stopped in the lane, on the brake, out of reverse and into drive
         c.t += dt; lampSet(c.g, { head: night(), tail: 2, rev: c.t < 0.35 });
-        if (c.t >= 0.6) c.phase = "aisleOut";
-      } else if (c.phase === "aisleOut") {
-        lampSet(c.g, running());
-        steer(c, c.g.position.x + c.e * 6 * dt, AISLE_Z);
-        if (Math.abs(c.g.position.x) > 32) {          // off the end of the lot: by on the road, the other way
-          c.g.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone";
-          window.VaultAmbience?.drive?.(-c.e, 13); roadPass(c.look, -c.e, 13);
-        }
+        if (c.t >= 0.6) { c.phase = "leave"; c.path = outPath(c.e, gateFor(-c.e), c.g.position.x); c.len = c.path.getLength(); c.u = 0; }
+      } else if (c.phase === "leave") {               // down the lane, out the driveway and off along the road
+        const X = gateFor(-c.e), L = LOT.road[c.e];       // (at the curb: a gap in the traffic coming along its lane first)
+        if (c.u > 0.3 && c.u < 0.55 && movers.some(m => Math.abs(m.g.position.z - L) < 1.5 && (X - m.g.position.x) * c.e > -3 && (X - m.g.position.x) * c.e < 22)) { lampSet(c.g, { head: night(), tail: 2 }); continue; }
+        lampSet(c.g, { ...running(), tail: c.u > 0.15 && c.u < 0.3 ? 2 : running().tail });
+        if (along(c, c.u < 0.4 ? 5 : 11, dt)) { c.g.removeFromParent(); lotCars.splice(lotCars.indexOf(c), 1); c.phase = "gone"; }
       }
     }
   };
 
-  eb(w, 0.12, 0.15, mat.curb, cx, 0.06, lotFar);
+  eb(LOT.drives[1][0] - LOT.drives[0][1], CURB_H, 0.15, mat.curb, (LOT.drives[0][1] + LOT.drives[1][0]) / 2, CURB_Y, lotFar);   // the curb along the road side, between the driveways
+  // the lot's ends and its edge along the walk curbed too, its corners at the walk rounded off (grass in the corner, the curb round it)
+  { const Rs = 1.5, zw = -SIDEWALK;
+    for (const [ex, sd] of [[lx0, 1], [lx1, -1]]) {
+      eb(0.15, CURB_H, (zw - Rs) - lotFar, mat.curb, ex - sd * 0.075, CURB_Y, (lotFar + zw - Rs) / 2);       // down the end of the lot (just outside its edge, like the curves)
+      const cx2 = ex + sd * Rs, cy2 = -zw + Rs, sh = new THREE.Shape();                                  // (shape space: x, and -z)
+      sh.moveTo(ex, -zw); sh.lineTo(cx2, -zw); sh.absarc(cx2, cy2, Rs, -Math.PI / 2, sd > 0 ? -Math.PI : 0, sd > 0); sh.lineTo(ex, -zw);
+      const f = new THREE.Mesh(new THREE.ShapeGeometry(sh, 12), mat.grass); f.rotation.x = -Math.PI / 2; f.position.y = 0.006; ea(f);
+      for (let i = 0; i < 8; i++) {
+        const a0 = -Math.PI / 2 - sd * (i + 0.5) / 8 * Math.PI / 2, x = cx2 + Math.cos(a0) * (Rs + 0.075), z = -(cy2 + Math.sin(a0) * (Rs + 0.075));
+        const c = eb(Rs * Math.PI / 2 / 8 + 0.02, CURB_H, 0.15, mat.curb, x, CURB_Y, z); c.rotation.y = a0 + Math.PI / 2;
+      }
+    }
+    eb((lx1 - Rs) - (lx0 + Rs), CURB_H, 0.15, mat.curb, (lx0 + lx1) / 2, CURB_Y, zw + 0.075);                   // along the walk (on the walk's edge, meeting the corners' curves)
+  }
+  // where each driveway meets the road: a quarter-circle flare either side, the curb curving round it out to the road
+  { const R = lotFar - LOT.roadNear;
+    for (const [da, db] of LOT.drives) for (const sd of [-1, 1]) {
+      const ex = sd < 0 ? da : db, cx2 = ex + sd * R, sh = new THREE.Shape();   // (shape space: x, and -z)
+      sh.moveTo(ex, -LOT.roadNear); sh.lineTo(cx2, -LOT.roadNear); sh.absarc(cx2, -lotFar, R, Math.PI / 2, sd > 0 ? Math.PI : 0, sd < 0); sh.lineTo(ex, -LOT.roadNear);
+      const f = new THREE.Mesh(new THREE.ShapeGeometry(sh, 12), mat.pavement); f.rotation.x = -Math.PI / 2; f.position.y = LOT.y + 0.004; ea(f);
+      for (let i = 0; i < 8; i++) {                   // the curb along the curve, in short straight pieces
+        const a0 = Math.PI / 2 + sd * (i + 0.5) / 8 * Math.PI / 2, x = cx2 + Math.cos(a0) * (R - 0.075), z = lotFar - Math.sin(a0) * (R - 0.075);   // (on the grass side of the curve)
+        const c = eb(R * Math.PI / 2 / 8 + 0.02, CURB_H, 0.15, mat.curb, x, CURB_Y, z); c.rotation.y = a0 + Math.PI / 2;
+      }
+    } }
   const ROAD_X = 250;                                     // the road behind the lot, out both ways past where the eye (and the fog) gives out
-  { const r = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_X * 2, lotFar - roadFar), mat.road); r.rotation.x = -Math.PI / 2; r.position.set(0, 0, (lotFar + roadFar) / 2); ea(r); }
+  { const r = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_X * 2, LOT.roadNear - roadFar), mat.road); r.rotation.x = -Math.PI / 2; r.position.set(0, LOT.y, (LOT.roadNear + roadFar) / 2); ea(r);
+    const R = lotFar - LOT.roadNear, hw = LOT.gateW / 2, cuts = [-ROAD_X, ...LOT.drives.flatMap(([a, b]) => [a - R, b + R]), ROAD_X];   // curbs along both edges of the road (not across the driveways)
+    for (let i = 0; i < cuts.length; i += 2) eb(cuts[i + 1] - cuts[i], CURB_H, 0.15, mat.curb, (cuts[i] + cuts[i + 1]) / 2, CURB_Y, LOT.roadNear + 0.075);
+    eb(ROAD_X * 2, CURB_H, 0.15, mat.curb, 0, CURB_Y, roadFar - 0.075); }
   { const n = Math.floor(ROAD_X * 2 / 1.7), dg = new THREE.PlaneGeometry(0.9, 0.12); dg.rotateX(-Math.PI / 2);   // dashed centerline
     const dash = new THREE.InstancedMesh(dg, mat.lineYellow, n), m4 = new THREE.Matrix4();
-    for (let i = 0; i < n; i++) dash.setMatrixAt(i, m4.makeTranslation(-ROAD_X + 0.8 + i * 1.7, 0.002, (lotFar + roadFar) / 2));
+    for (let i = 0; i < n; i++) dash.setMatrixAt(i, m4.makeTranslation(-ROAD_X + 0.8 + i * 1.7, LOT.y + 0.002, (LOT.roadNear + roadFar) / 2));
     dash.frustumCulled = false; ea(dash); }
   ground(roadFar, grassFar, mat.grass);                  // a much deeper stretch of grass on the far side
   const benchZ = roadFar - 2.2;                          // a bench facing back toward the store, just past the road
@@ -2380,7 +2469,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   const sodium = [];                     // { lens, spot, delay }
   const streetLamp = (x, z) => {
     const sodiumLens = new THREE.MeshLambertMaterial({ color: 0x3a2e1c, emissive: 0xffae4a, emissiveIntensity: 0 });   // its own, so each warms up on its own clock
-    const armLen = 1.6, hy = 6.0, hz = z + armLen + 0.25;
+    const armLen = 2.2, hy = 6.0, hz = z + armLen + 0.25;
     ecyl(0.26, 0.3, 0.5, mat.sidewalk, x, 0.25, z, 14);                     // concrete footing
     ecyl(0.06, 0.08, 5.6, poleMat, x, 0.5 + 2.8, z, 10);                    // pole
     eb(0.08, 0.08, armLen, poleMat, x, hy, z + armLen / 2);                 // arm out over the stalls
@@ -2392,7 +2481,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     spot.target.position.set(x, 0, hz); scene.add(spot.target);
     sodium.push({ lens: sodiumLens, spot, delay: 0 });
   };
-  for (const k of [4, 9, 14, 19]) streetLamp(stallX(k), lotFar + 0.35);
+  for (const x of LOT.lampX) streetLamp(x, (lotFar + LOT.roadNear) / 2);   // out on the grass strip (see LOT.lampX)
 
   // ornamental park lamp beside the bench: black wrought iron, stepped
   // octagonal base, slim shaft with a collar, flared lantern with a pyramid
@@ -2417,7 +2506,8 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
 
   // the trees: a layered pine (stacked tapering cones) and a round broadleaf (lumpy icosahedra), the treeline
   // across the road and now groves and a treeline all round, swaying, and the broadleaf ones through the seasons (trees.js)
-  VaultTrees.build({ scene, layer: EXTERIOR_LAYER, rows: [treesNear, (treesNear + treesFar) / 2, treesFar], x0, x1, avoid: ROOF.rects });
+  VaultTrees.build({ scene, layer: EXTERIOR_LAYER, rows: [treesNear, (treesNear + treesFar) / 2, treesFar], x0, x1, avoid: ROOF.rects,
+    road: [LOT.roadFar, LOT.curb], lotY: LOT.y, lot: [LOT.gates[0] - LOT.gateW / 2 - 6, LOT.gates[1] + LOT.gateW / 2 + 6, LOT.curb] });
 
   // fills any gaps above/between the trees. Unlit and exempt from fog: the
   // scene background itself is never fogged, so a fogged plane read as a
@@ -2448,9 +2538,12 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   let sodiumT = null;                          // seconds since night fell while the lot lights warm up; null = settled
   const SODIUM_WARM = 5, cold = new THREE.Color(0xff4d1a), warm = new THREE.Color(0xffae4a);
   exteriorTick = dt => {
+    traffic = [...movers.filter(m => m.crash?.st !== "sat").map(m => ({ g: m.g, id: m.id, back: false })),
+      ...lotCars.filter(c => c.g && LOT_MOVING.has(c.phase)).map(c => ({ g: c.g, id: c.id, back: c.phase === "backOut" }))];
     for (let i = movers.length - 1; i >= 0; i--) {   // the cars going by
       const m = movers[i], p = m.g.position, dir = Math.sign(m.v0);
       let vz = 0;
+      if (!m.crash && !m.sw) m.vx = carAhead(m.g, m.vx) ? dir * Math.max(0, Math.abs(m.vx) - 12 * dt) : dir * Math.min(Math.abs(m.v0), Math.abs(m.vx) + 5 * dt);   // (slowing behind somebody, back up to speed after)
       if (m.crash) {                                 // off the road: braking hard onto the shoulder, sat there on its hazards, then away again
         const c = m.crash; c.t += dt;
         if (c.st === "off") {
@@ -5316,12 +5409,13 @@ const wxGlass = (() => {                          // rain on the outside of the 
 const wxDrifts = (() => {
   const spots = [], rnd = Math.random, add = (x, z, rx, rz, h, y = -0.01, ry = 0) => spots.push({ x, y, z, rx, rz, h, at: rnd() * 0.55, ry: ry + (rnd() - 0.5) * 0.3 });
   const run = (xa, xb, z, side, rz, h) => { for (let x = xa; x < xb; x += 0.35 + rnd() * 0.5) add(x, z + side * rz * 0.5 * rnd(), 0.35 + rnd() * 0.45, rz * (0.6 + rnd() * 0.6), h * (0.4 + rnd() * 0.6)); };
-  const X0 = WALL_L - 20, X1 = STORE.x + 20, CURB = -9.8, ROAD_FAR = -13.8;   // (as the lot's laid out: see the exterior)
+  const X0 = WALL_L - 20, X1 = STORE.x + 20, CURB = LOT.curb, ROAD_FAR = LOT.roadFar;   // (as the lot's laid out: see the exterior)
   run(X0, X1, CURB + 0.09, 1, 0.22, 0.1);          // the lot side of the curb
   run(X0, X1, CURB - 0.09, -1, 0.18, 0.07);        // the road side, in the gutter
   run(X0, X1, ROAD_FAR + 0.05, 1, 0.3, 0.06);      // the road's far edge, against the grass
   run(WALL_L, -2.1, -0.06, -1, 0.2, 0.09); run(2.1, STORE.x, -0.06, -1, 0.2, 0.09);   // the foot of the storefront, not across the doors
-  for (const k of [4, 9, 14, 19]) for (let a = 0; a < 7; a++) { const t = a / 7 * 6.28 + rnd() * 0.4; add(X0 + 2.6 * (k + 1) + Math.cos(t) * 0.36, CURB + 0.35 + Math.sin(t) * 0.36, 0.16 + rnd() * 0.08, 0.12, 0.08 + rnd() * 0.06); }   // round the lamp footings
+  for (const lx of LOT.lampX) for (let a = 0; a < 7; a++) { const t = a / 7 * 6.28 + rnd() * 0.4; add(lx + Math.cos(t) * 0.36, (CURB + LOT.roadNear) / 2 + Math.sin(t) * 0.36, 0.16 + rnd() * 0.08, 0.12, 0.08 + rnd() * 0.06); }   // round the lamp footings
+  for (const sp of spots) if (pavedAt(sp.x, sp.z)) sp.y += LOT.y;   // (in the gutter and against the lot side of the curb: down on the paving)
   const inFoot = (x, z) => ROOF.rects.some(([a, b, c, d]) => x > a && x < b && z > c && z < d);
   for (const [a, b, c, d] of ROOF.rects)          // up on the roof, against the inside of the parapet (not where one part of the roof runs on into the next)
     for (const [xa, za, xb, zb, nx, nz] of [[a, c, b, c, 0, 1], [a, d, b, d, 0, -1], [a, c, a, d, 1, 0], [b, c, b, d, -1, 0]]) {   // each side, (nx, nz) pointing in
@@ -5892,6 +5986,7 @@ addEventListener("keydown", e => {
     if (e.code === "KeyF") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
     return;
   }
+  if (siKey(e)) return;                          // at the Space Invaders machine: its controls
   if (CUSTOMER && cm.term && cmTermKey(e)) return;   // logged into the register (customer mode): its keys, not yours
   if (e.code === "Escape") { if (!escClose()) document.exitPointerLock(); return; }   // (only reaches us in fullscreen, with the keyboard lock)
   if (drunk.out) return;                     // out cold
@@ -5962,7 +6057,7 @@ canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoo
 });
 let lastActive = 0;                          // last mouse-look or key — the crosshair hides after a few still seconds
 addEventListener("mousemove", e => {
-  if (document.pointerLockElement !== canvas || golf.on) return;   // (golfing: the camera's the swing's)
+  if (document.pointerLockElement !== canvas || golf.on || arcade.on) return;   // (golfing: the camera's the swing's; at the arcade machine, its screen)
   lastActive = performance.now();
   const k = 0.0022 * SETTINGS.sens / 100;   // (SETTINGS: sensitivity, invert)
   player.yaw -= e.movementX * k;
@@ -5980,11 +6075,17 @@ function blocked(x, z) {
 }
 // out front, as a customer: the sidewalk and the lot, not the road beyond or round the sides of the building; and the parked cars
 const carQ = new THREE.Vector3();
+const inBuilding = (x, z, pad = 0) => ROOF.rects.some(([x0, x1, z0, z1]) => x > x0 - pad && x < x1 + pad && z > z0 - pad && z < z1 + pad);   // (the video store's footprint)
+const inTonys = (x, z, pad = 0) => x > TONY.x0 - pad && x < TONY.x1 + pad && z > TONY.z0 - pad && z < TONY.z1 + pad;
 function outBlocked(x, z) {
-  if (z > 2) return false;
-  if ((x < WALL_L - 0.1 || x > STORE.x + 0.1) && z > -0.3) return true;
-  if (z > 0) return false;
-  if (z < -9.4 || x < WALL_L - 8 || x > STORE.x + 8) return true;
+  const r = player.r;
+  if (tonyIn(player.x, player.z) || tonyDoorway(player.x, player.z)) return !(tonyIn(x, z) || tonyDoorway(x, z) || z < -0.3);   // in Tony's: its walls
+  if (inBuilding(player.x, player.z)) return false;  // in the video store: its own walls do it
+  // outside: anywhere (the walk, the lot, the road, round both buildings, out into the grass), just not off the world
+  if (z < -120 || z > 150 || x < -120 || x > 120) return true;
+  if (tonyDoorway(x, z)) return false;
+  if (inTonys(x, z, r)) return true;
+  if (inBuilding(x, z, r)) return !(CUSTOMER && z < 0.5 && x > 0.05 + r && x < 1.75 - r);   // (the front doors: see blocked)
   for (const { g } of carsOut?.all() || []) {
     if (Math.abs(g.position.x - x) > 3.5 || Math.abs(g.position.z - z) > 3.5) continue;
     const s = g.userData.car, q = g.worldToLocal(carQ.set(x, 0.5, z));
@@ -5996,7 +6097,7 @@ function move(dt) {
   const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const rt = new THREE.Vector3(-f.z, 0, f.x);
   let ix = 0, iz = 0;
-  if (document.pointerLockElement !== canvas || roof.climb || cm.term) return;
+  if (document.pointerLockElement !== canvas || roof.climb || cm.term || cm.sleeping || arcade.on) return;
   if (onStool) {                            // E spins you; a move key gets you up
     if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].some(k => keys.has(k))) stoolStand();
     return;
@@ -6037,7 +6138,7 @@ const highlight = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: YELLOW }));
 highlight.visible = false;                 // turned per tape to match its shelf (tape.ry)
 scene.add(highlight);
-let aimStool = false, aimPickup = null;          // aimPickup: something to find (customer mode: see PICKUPS)
+let aimStool = false, aimPickup = null, aimTony = null, aimBed = false;          // aimPickup: something to find (customer mode: see PICKUPS)
 let aimPostit = null, aimNotepad = false;          // a post-it by the phone / the pad by the register
 let hovered = null, held = null, heldSnack = null, aimTV = false, aimLamp = null, aimCouch = false, aimReturns = false, aimSnack = null, aimFlap = null, aimCooler = false, aimPop = null, aimTrash = false, aimDoor = null, aimPOS = false, aimSlot = false, aimRewinder = null, aimBell = false, aimDesens = false, aimCutout = false, aimCustomer = false, aimLock = false, aimEmp = false, aimSwitch = null, aimDrawer = false, aimSeatObj = null, aimExit = false, aimPrinter = false, aimStockSlot = null, aimCupboard = null, aimBox = null, aimMess = null, aimStray = null, aimPhone = false, aimHolds = false, aimBoard = false, aimMove = null, aimToilet = false, aimSink = false, aimTowels = false, aimBin = null, aimBag = null, aimChute = false, aimTool = null, aimDead = null, aimLadder = false, aimLadderHome = false;   // aimSeatObj: the theater seat aimed at (null = a couch cushion)
 let returnBin = [];                          // tapes dropped in the returns slot — carry-only, never auto-reshelved
@@ -6569,6 +6670,12 @@ function custChatTick(dt) {
 // out with a pizza box and go home; busy at lunch and dinner. After dark its storefront lights the walk and the lot
 // in front of it. None of them are our customers: they're not in custs, just people on a path
 const PIZZA_DOOR = [15.6, -0.75], SIDEWALK_Z = -0.95;
+const TONY_IN = { x0: 13.15, x1: 20.85, z0: 0.15, z1: 13.85, counterZ: 7.3, wallZ: 9.6, gapX: 19.6, doorX: [19.9, 20.75], hole: [14.2, 18.2] };
+const tony = { clerk: null, scores: [0, 0] };
+const TONY_GAMES = [["SPACE INVADERS", "#39ff5a", "#121212"], ["ASTEROIDS", "#ffffff", "#15162a"]];   // [name, glow, cabinet]
+const tonyOpen = () => shift.h >= 11 && shift.h < 23;
+const tonyIn = (x, z) => x > TONY_IN.x0 + 0.3 && x < TONY_IN.x1 - 0.3 && z > TONY_IN.z0 + 0.3 && z < TONY_IN.z1 - 0.3;   // (inside Tony's: see tonyInside)
+const tonyDoorway = (x, z) => Math.abs(x - PIZZA_DOOR[0]) < 0.28 && z > -0.4 && z < 0.5;
 // The weather on anyone out there (customers in the lot, people going by): snow settles on their head and shoulders
 // (melting off once they're inside), the wind leans on them and they lean into it, a gust shoves them a step (or
 // turns an umbrella inside out), the cold and the wet hunch them up, and with no umbrella in the rain a hand goes up
@@ -6612,6 +6719,17 @@ function pizzaBox() {                            // a pizza box, carried flat
   const lbl = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.12), new THREE.MeshBasicMaterial({ color: 0xc8312a })); lbl.rotation.x = -Math.PI / 2; lbl.position.y = 0.026; g.add(box, lbl); return g;
 }
 function walkerBox(w, on) { w.c.holdItem(on ? pizzaBox() : null); w.c.setPose(on ? "hold" : "idle"); w.box = on; }
+// next door, now there's an inside to it: in through the door, up the aisle past the tables to a spot at the counter,
+// waiting there for the order (facing Tony), then back out the way they came with the box
+const TONY_SPOTS = [14.4, 15.3, 16.2, 17.1, 18.0], tonyTaken = new Set();
+function walkerInTonys(w, secs, out) {
+  const free = TONY_SPOTS.filter(x => !tonyTaken.has(x)); if (!free.length) return walkerInside(w, secs, out);   // (a crowd at the counter: they wait off out of sight)
+  const x = free[Math.floor(Math.random() * free.length)], a = PIZZA_DOOR[0], cz = TONY_IN.counterZ - 0.55; tonyTaken.add(x);
+  w.path = [[a, 0.6], [a, 6.0], [x, cz]];
+  w.then = w => { w.c.group.rotation.y = 0; w.wait = secs; w.after = () => {
+    tonyTaken.delete(x); walkerBox(w, true); tony.clerk?.setMood("happy");
+    w.path = [[a, 6.0], [a, 0.6], PIZZA_DOOR]; w.then = () => out(); }; };
+}
 function walkerInside(w, secs, out) { w.c.group.visible = false; w.inside = secs; w.out = () => { w.c.group.visible = true; walkerBox(w, true); out(); }; }   // in next door for a while (game time)
 function walkerGone(w) { w.c.group.removeFromParent(); w.c.dispose(); walkers.splice(walkers.indexOf(w), 1); }
 function pizzaRun() {                             // someone getting a pizza: by car (parked near it) or on foot
@@ -6619,14 +6737,14 @@ function pizzaRun() {                             // someone getting a pizza: by
   if (Math.random() < 0.6) {
     const look = carNew(), car = driveIn(look, car => {
       const d = car.door;
-      walkerMake([[d.x, d.z], [d.x, -3.2], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInside(w, wait, () => {   // in they go, and back out with it
+      walkerMake([[d.x, d.z], [d.x, -3.2], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInTonys(w, wait, () => {   // in they go, and back out with it
         w.path = [[PIZZA_DOOR[0], SIDEWALK_Z], [d.x, -3.2], [d.x, d.z]]; w.then = w => { walkerGone(w); driveOut(car); };
       }));
     }, PIZZA_DOOR[0]);
     if (car) { car.idling = Math.random() < 0.2; window.VaultAmbience?.drive?.(car.dir, 13); return; }
   }
   const from = (Math.random() < 0.5 ? -1 : 1) * 24;   // on foot, up the sidewalk
-  walkerMake([[from, SIDEWALK_Z - Math.random() * 0.3], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInside(w, wait, () => {
+  walkerMake([[from, SIDEWALK_Z - Math.random() * 0.3], [PIZZA_DOOR[0], SIDEWALK_Z], PIZZA_DOOR], w => walkerInTonys(w, wait, () => {
     w.path = [[PIZZA_DOOR[0], SIDEWALK_Z], [from > 0 ? -24 : 24, SIDEWALK_Z]]; w.then = walkerGone;
   }));
 }
@@ -6643,10 +6761,11 @@ function walkerTick(dt) {
     const c = w.c, p = c.group.position;
     if (!c.group.visible) { if (w.inside != null && (w.inside -= dt) <= 0) { w.inside = null; w.out(); } continue; }
     let speed = 0;
+    if (w.wait != null && (w.wait -= dt) <= 0) { w.wait = null; w.after(); }   // (waiting at Tony's counter for the order)
     if (w.path.length) {
       const [tx, tz] = w.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
       if (d < 0.05) w.path.shift();
-      else if (!c.busy) { speed = npcPace(w, c, w.speed * (night ? 1.12 : 1), dx / d, dz / d, dt); const st = Math.min(d, speed * dt); p.x += dx / d * st; p.z += dz / d * st; c.group.rotation.y = Math.atan2(dx, dz); }   // (a quicker step after dark)
+      else if (!c.busy) { speed = npcPace(w, c, w.speed * (night ? 1.12 : 1), dx / d, dz / d, dt); const st = Math.min(d, speed * dt); p.x += dx / d * st; p.z += dz / d * st; p.y = floorHeightAt(p.x, p.z); c.group.rotation.y = Math.atan2(dx, dz); }   // (a quicker step after dark)
     } else { const f = w.then; w.then = null; f?.(w); if (!walkers.includes(w) || !c.group.visible) continue; }
     const rain = WX.kind === "rain" && WX.k > 0.2 && c.outfit.umbOwn; if (rain !== !!w.umb && !w.box) { w.umb = rain; c.holdProp(rain ? "umbrella" : null); }
     npcEnv(w, c, true, dt);
@@ -8572,8 +8691,9 @@ window.VaultAim = {
   center() { aimNDC.x = aimNDC.y = 0; pickHover(); },
 };
 function pickHover() {
+  if (arcade.on) { $("hoverTip").style.display = "none"; highlight.visible = false; return; }   // (playing Space Invaders: nothing else to aim at)
   aimPostit = null; aimNotepad = false;
-  hovered = null; aimStool = false; aimPickup = null; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
+  hovered = null; aimStool = false; aimPickup = null; aimTony = null; aimBed = false; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
@@ -8694,6 +8814,8 @@ function pickHover() {
     cmRent.aim = !!aim?.object.userData.cmRentDrop && aim.distance < 2;
     if (aim?.object.userData.pickup && aim.distance < 2) aimPickup = aim.object.userData.pickup;
     else if (aim?.object.userData.combo && aim.distance < 1.6) cm.comboOf = aim.object.userData.combo;
+    else if (aim?.object.userData.tony && aim.distance < 2.4) aimTony = aim.object.userData.tony;
+    else if (aim?.object.userData.bed && aim.distance < 2.4 && CUSTOMER) aimBed = true;
     else if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
@@ -9743,8 +9865,9 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     wall(0.02, 0.4, Y + PH, Y + PH + 0.05, coping, 0.32);                    // coping over wall and skin
     for (let s = 3.05; s < len - 0.3; s += 3.05) joints.push([ax + dx * s + nx * 0.02, az + dz * s + nz * 0.02, ry]);
     const front = Math.abs(az + 0.1) < 0.01 && Math.abs(bz + 0.1) < 0.01;  // the storefront: above the glass only, a blue fascia with a yellow stripe
-    wall(-0.075, 0.15, front ? 2.75 : 0, Y + PH, front ? fasciaBlue : stucco, 0.3, skin);
-    if (front) wall(-0.08, 0.16, 3.45, 3.6, fasciaY, 0.32, skin); else wall(-0.08, 0.16, 0, 0.5, base, 0.32, skin);   // a darker band at the foot
+    if (front) {                                   // (2 cm thicker and longer than the sides' skin: it laps over their ends at the corners, no faces in the same plane)
+      wall(-0.085, 0.17, 2.75, Y + PH, fasciaBlue, 0.34, skin); wall(-0.1, 0.2, 3.45, 3.6, fasciaY, 0.4, skin);
+    } else { wall(-0.075, 0.15, 0, Y + PH, stucco, 0.3, skin); wall(-0.1, 0.16, 0, 0.5, base, 0.36, skin); }   // a darker band at the foot: 3 cm proud of the stucco at its face and ends, its back 2 cm inside it (flush, its back fought the stucco's in the return beside the storefront glass)
     if (along) col(Math.min(ax, bx_), Math.max(ax, bx_), Math.min(az, az + nz * T), Math.max(az, az + nz * T));
     else col(Math.min(ax, ax + nx * T), Math.max(ax, ax + nx * T), Math.min(az, bz), Math.max(az, bz));
   }
@@ -9902,7 +10025,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
 
   // ---- around the building: grass all round, a paved apron at its sides and back with the dumpster, the pizza place next door ----
   const ground = (x0, x1, z0, z1, m, y = 0) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), m); g.rotation.x = -Math.PI / 2; g.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); scene.add(g); ext(g); };
-  for (const [x0, x1, z0, z1] of [[-250, -27.74, -9.8, 0], [31, 250, -9.8, 0], [-250, -27.74, -250, -13.8], [31, 250, -250, -13.8], [-27.74, 31, -250, -23.8],   // (out front: round the road, which runs on out of sight)
+  for (const [x0, x1, z0, z1] of [[-250, -27.74, LOT.roadNear, 0], [31, 250, LOT.roadNear, 0], [-250, -27.74, -250, LOT.roadFar], [31, 250, -250, LOT.roadFar], [-27.74, 31, -250, -30.4],   // (out front: round the road, which runs on out of sight)
     [-250, -7.84, 0, 250], [11.1, 250, 0, 27.9], [12.7, 250, 27.9, 29.9], [11.1, 250, 29.9, 250],
     [-7.84, -7.07, 33.1, 46.6], [1.33, 11.1, 33.1, 46.6], [-7.84, 11.1, 46.6, 250]]) ground(x0, x1, z0, z1, mat.grass);
   for (const [x0, x1, z0, z1] of [[-11.84, -7.84, 0, 50.6], [-7.84, -7.07, 33.1, 46.6], [11.1, 13, 0, 14], [11.1, 16.7, 14, 27.9], [12.7, 16.7, 27.9, 29.9], [11.1, 16.7, 29.9, 37.1],
@@ -9916,17 +10039,58 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     bx(1.95, 0.05, 0.06, lam(0x6a3a22), 0, 0.95, 0.58, d);
     ext(d); colliders.push({ x0: 13.8, x1: 15, z0: 30.6, z1: 32.6, y1: 1.3 });
   }
-  {                                                // Tony's, next door: brick, a red awning band, warm windows (lit at night: see roofTick), its own little AC unit
+  {                                                // round the back, against the theater's east wall: somebody's cardboard bed (a place to lie low and pass the day)
+    const b = new THREE.Group(); b.position.set(1.95, 0, 43.6); scene.add(b);
+    const card = makeTexture((ctx, w2, h2) => { ctx.fillStyle = "#b08a5a"; ctx.fillRect(0, 0, w2, h2); ctx.strokeStyle = "#8a6a42"; ctx.lineWidth = 3; ctx.strokeRect(6, 6, w2 - 12, h2 - 12);
+      ctx.beginPath(); ctx.moveTo(w2 / 2, 0); ctx.lineTo(w2 / 2, h2); ctx.stroke(); ctx.fillStyle = "#3a2a1a"; ctx.font = "bold 22px Arial"; ctx.fillText("THIS SIDE UP", 30, h2 * 0.3); ctx.fillText("↑ ↑", 60, h2 * 0.6);
+      for (let i = 0; i < 40; i++) { ctx.fillStyle = `rgba(60,40,20,${Math.random() * 0.15})`; ctx.fillRect(Math.random() * w2, Math.random() * h2, 6 + Math.random() * 20, 3 + Math.random() * 10); } }, 256, 128);
+    const cm2 = lam(0xb08a5a); cm2.map = card;
+    for (const [w2, d2, x, z, ry] of [[0.95, 2.0, 0, 0, 0.02], [0.8, 1.1, 0.12, 0.55, -0.08]]) { const o = bx(w2, 0.02, d2, cm2, x, 0.012 + (x ? 0.02 : 0), z, b); o.rotation.y = ry; }
+    const blanket = bx(0.85, 0.12, 1.2, lam(0x5a6b3a), 0.05, 0.09, -0.15, b); blanket.rotation.set(0.04, 0.1, 0.03);
+    const pillow = bx(0.5, 0.14, 0.32, lam(0x2c2f45), 0, 0.1, 0.78, b); pillow.rotation.y = 0.2;           // a rolled-up jacket for a pillow
+    bx(0.4, 0.3, 0.32, lam(0x1f6fb5), -0.55, 0.15, 0.9, b);                                                      // a milk crate
+    for (const [cx2, cz2] of [[0.6, -0.8], [0.68, -0.62]]) { const can = cy(0.033, 0.033, 0.12, lam(0xc8282f), cx2, 0.06, cz2, 10, b); can.rotation.z = cx2 > 0.65 ? Math.PI / 2 : 0; }
+    ext(b);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, 2.3), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(1.95, 0.25, 43.6); hit.userData.bed = true;
+    scene.add(hit); aimables.push(hit);           // (what you aim at: the bed itself is on the exterior layer, which the aiming ray doesn't see)
+  }
+  {                                                // Tony's, next door: brick, a striped awning, a glass front you can see in through, its own little AC unit
     const px0 = 13, px1 = 21, pz1 = 14, ph = 4.3, brick = lam(0x9a4a3a), p = new THREE.Group(); scene.add(p);
-    put(new THREE.BoxGeometry(px1 - px0, ph, pz1), brick, (px0 + px1) / 2, ph / 2, pz1 / 2, p);
+    roof.pizzaWin = new THREE.MeshBasicMaterial({ color: 0x2a2f36 });   // (roofTick still sets it: nothing wears it now the windows are glass)
+    const W = 0.15, dl = PIZZA_DOOR[0] - 0.6, dr = PIZZA_DOOR[0] + 0.6, DH = 2.3, WY = [0.5, 2.4], WIN = [[13.4, 15.0], [16.3, 20.6]];
+    // hollow (see tonyInside): the walls' inside faces are painted (cream over a red wainscot), so nothing's laid over them to flicker
+    const inner = tonyWallMats(ph), face = (m, i) => { const ms = Array(6).fill(brick); ms[i] = m; return ms; };
+    const wallBox = (x0, x1, y0, y1, z0, z1, mats) => put(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mats, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, p);
+    const fIn = (y0, y1) => y1 - y0 > 2 ? inner.wains : y1 <= 1 ? inner.red : inner.cream;
+    for (const [x0, x1, y0, y1] of [[px0, WIN[0][0], 0, ph], [WIN[0][0], WIN[0][1], 0, WY[0]], [WIN[0][0], WIN[0][1], WY[1], ph], [dl, dr, DH, ph],
+      [dr, WIN[1][0], 0, ph], [WIN[1][0], WIN[1][1], 0, WY[0]], [WIN[1][0], WIN[1][1], WY[1], ph], [WIN[1][1], px1, 0, ph]]) wallBox(x0, x1, y0, y1, 0, W, face(fIn(y0, y1), 4));
+    wallBox(px0, px0 + W, 0, ph, W, pz1 - W, face(inner.wains, 0)); wallBox(px1 - W, px1, 0, ph, W, pz1 - W, face(inner.wains, 1));   // (the sides stop short of the front and back: no doubled faces at the corners)
+    wallBox(px0, px1, 0, ph, pz1 - W, pz1, face(inner.wains, 5));
+    put(new THREE.BoxGeometry(px1 - px0 - 2 * W, 0.05, pz1 - 2 * W), brick, (px0 + px1) / 2, ph - 0.025, pz1 / 2, p);
     put(new THREE.BoxGeometry(px1 - px0 + 0.1, 0.08, pz1 + 0.1), coping, (px0 + px1) / 2, ph + 0.04, pz1 / 2, p);
-    const win = roof.pizzaWin = new THREE.MeshBasicMaterial({ color: 0x2a2f36 });
-    for (const [x0, x1] of [[13.4, 15.0], [16.3, 20.6]]) put(new THREE.PlaneGeometry(x1 - x0, 1.9), win, (x0 + x1) / 2, 1.45, -0.006, p).rotation.y = Math.PI;
-    put(new THREE.PlaneGeometry(0.95, 2.2), lam(0x3a2418), PIZZA_DOOR[0], 1.1, -0.006, p).rotation.y = Math.PI;
-    put(new THREE.BoxGeometry(px1 - px0, 0.5, 0.6), lam(0xb3202a), (px0 + px1) / 2, 2.85, -0.3, p);   // the awning band
-    const sign = textPlane("TONY'S PIZZA", 4.2, 0.7, "#ffffff", "#b3202a", "Arial Black", 90); sign.position.set((px0 + px1) / 2, 3.55, -0.01); sign.rotation.y = Math.PI; p.add(sign);
+    // the glass, in aluminum frames (a mullion or two), and a sill outside
+    const glass = new THREE.MeshBasicMaterial({ color: 0xbcd6e6, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }), alu = lam(0xb8bdc2);
+    for (const [x0, x1] of WIN) {
+      const gl = put(new THREE.PlaneGeometry(x1 - x0, WY[1] - WY[0]), glass, (x0 + x1) / 2, (WY[0] + WY[1]) / 2, 0.075, p); gl.renderOrder = 2;
+      const n = Math.round((x1 - x0) / 1.4);
+      for (let k = 0; k <= n; k++) put(new THREE.BoxGeometry(0.05, WY[1] - WY[0], 0.07), alu, x0 + 0.025 + (x1 - x0 - 0.05) * k / n, (WY[0] + WY[1]) / 2, 0.075, p);
+      for (const y of WY) put(new THREE.BoxGeometry(x1 - x0, 0.05, 0.07), alu, (x0 + x1) / 2, y + (y === WY[0] ? 0.025 : -0.025), 0.075, p);
+      put(new THREE.BoxGeometry(x1 - x0 + 0.1, 0.05, 0.12), cement, (x0 + x1) / 2, WY[0] - 0.025, -0.06, p);
+    }
+    { const hinge = new THREE.Group(); hinge.position.set(dl, 0, 0.17); hinge.rotation.y = -1.35; p.add(hinge);   // the door: glass in an aluminum frame, propped open
+      for (const [w2, h2, x, y] of [[0.07, 2.25, 0.035, 1.125], [0.07, 2.25, 1.115, 1.125], [1.15, 0.07, 0.575, 2.215], [1.15, 0.22, 0.575, 0.11], [1.0, 0.04, 0.575, 1.05]]) put(new THREE.BoxGeometry(w2, h2, 0.04), alu, x, y, 0, hinge);
+      const dg = put(new THREE.PlaneGeometry(1.01, 1.93), glass, 0.575, 1.185, 0, hinge); dg.renderOrder = 2; }
+    // the awning: red and white stripes, sloping out over the walk, a scalloped edge hanging off the front
+    const stripes = makeTexture((ctx, w2, h2) => { for (let i = 0; i < 16; i++) { ctx.fillStyle = i % 2 ? "#f4f1e6" : "#b3202a"; ctx.fillRect(i * w2 / 16, 0, w2 / 16, h2); } }, 256, 32);
+    const awnM = new THREE.MeshLambertMaterial({ map: stripes, side: THREE.DoubleSide });
+    const awn = put(new THREE.PlaneGeometry(px1 - px0 + 0.2, 1.19), awnM, (px0 + px1) / 2, 2.825, -0.55, p); awn.rotation.x = 1.18;
+    const val = makeTexture((ctx, w2, h2) => { for (let i = 0; i < 16; i++) { ctx.fillStyle = i % 2 ? "#f4f1e6" : "#b3202a"; ctx.beginPath(); ctx.moveTo(i * w2 / 16, 0); ctx.lineTo((i + 1) * w2 / 16, 0); ctx.lineTo((i + 1) * w2 / 16, h2 * 0.6); ctx.arc((i + 0.5) * w2 / 16, h2 * 0.6, w2 / 32, 0, Math.PI); ctx.fill(); } }, 256, 32);
+    const vm = new THREE.MeshLambertMaterial({ map: val, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
+    put(new THREE.PlaneGeometry(px1 - px0 + 0.2, 0.28), vm, (px0 + px1) / 2, 2.46, -1.1, p);
+    const sign = textPlane("TONY'S PIZZA", 4.2, 0.7, "#ffffff", "#b3202a", "Arial Black", 90); sign.position.set((px0 + px1) / 2, 3.6, -0.012); sign.rotation.y = Math.PI; p.add(sign);
     put(new THREE.BoxGeometry(1.6, 0.9, 1.1), beige, 18, ph + 0.45, 8, p);
     ext(p);
+    tonyInside(px0 + W, px1 - W, W, pz1 - W);
   }
 
   // ---- the sign over the storefront: an internally lit cabinet on the fascia, standing up past the coping. From the lot
@@ -10434,7 +10598,7 @@ function golfFly(dt) {
       v.y *= 0.7; continue;
     }
     if (Math.hypot(nx - golfTee.x, nz - golfTee.z) > GOLF.MAX) { v.x *= -0.15; v.z *= -0.15; continue; }   // into the trees: it drops out of them (ponytail: a ring round the tee, not the real treeline)
-    const fl = (onDeck(nx, nz) ? ROOF.y : onTony(nx, nz) ? TONY.y : 0) + GOLF.R;
+    const fl = (onDeck(nx, nz) ? ROOF.y : onTony(nx, nz) ? TONY.y : pavedAt(nx, nz) ? LOT.y : 0) + GOLF.R;
     b.set(nx, ny, nz);
     if (golf.rolled || b.y < fl) {
       b.y = fl;
@@ -10461,6 +10625,359 @@ function golfFly(dt) {
 // ---- what the ball can get into out there: the cars in the lot and going by on the road, people on the walk, the
 // scuppers (down the downspout and out the foot), Tony's roof next door (and that's the end of that ball) ----
 const TONY = { x0: 13, x1: 21, z0: 0, z1: 14, y: 4.385, wall: 4.65 };   // next door: its walls' footprint, its roof's gravel, the top of its coping
+// ---- inside Tony's (customer mode: in through its door): a black-and-white checkered floor, a few little tables, two
+// arcade cabinets in the corner by the door, the counter across the room with the register and a pie under the heat
+// lamp, and behind it a wall with a doorway and a wide hole through to the kitchen (the oven, the prep table), a menu
+// board over the hole. Lit by itself (flat, unlit materials: no new lights in the scene). E at the counter for a slice,
+// E at a cabinet for a game ----
+function tonyWallMats(ph) {                       // the inside faces of Tony's walls: cream over a red wainscot (1 m), a white rail between
+  const t = makeTexture((ctx, w, h) => { const k = h / ph; ctx.fillStyle = "#eadfc4"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#9e1b22"; ctx.fillRect(0, h - k, w, k); ctx.fillStyle = "#f2f0ea"; ctx.fillRect(0, h - k - 6, w, 8); }, 16, 430);
+  return { wains: new THREE.MeshBasicMaterial({ map: t }), cream: new THREE.MeshBasicMaterial({ color: 0xeadfc4 }), red: new THREE.MeshBasicMaterial({ color: 0x9e1b22 }) };
+}
+function tonyInside(x0, x1, z0, z1) {
+  const g = new THREE.Group(); scene.add(g);
+  const M = c => new THREE.MeshBasicMaterial({ color: c });
+  const B = (w, h, d, m, x, y, z, ry = 0, par = g) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), typeof m === "number" ? M(m) : m); o.position.set(x, y, z); o.rotation.y = ry; par.add(o); return o; };
+  const P = (w, h, m, x, y, z, ry = 0, par = g) => { const o = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); o.position.set(x, y, z); o.rotation.y = ry; par.add(o); return o; };
+  const solidAt = (bx0, bx1, bz0, bz1, y1) => colliders.push({ x0: bx0, x1: bx1, z0: bz0, z1: bz1, y1 });
+  const H = 3.0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, I = TONY_IN;
+  // the floor, checkered (30 cm squares), and the ceiling with its fluorescent panels
+  const chk = makeTexture((ctx, W2) => { const q = W2 / 2; ctx.fillStyle = "#f2f0ea"; ctx.fillRect(0, 0, W2, W2); ctx.fillStyle = "#151515"; ctx.fillRect(0, 0, q, q); ctx.fillRect(q, q, q, q); }, 64, 64);
+  chk.wrapS = chk.wrapT = THREE.RepeatWrapping; chk.magFilter = THREE.NearestFilter; chk.repeat.set((x1 - x0) / 0.6, (z1 - z0) / 0.6);
+  const fl = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshBasicMaterial({ map: chk })); fl.rotation.x = -Math.PI / 2; fl.position.set(cx, 0.02, cz); g.add(fl);   // (2 cm up: the grass runs on under the building)
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), M(0xd9d4c6)); ceil.rotation.x = Math.PI / 2; ceil.position.set(cx, H, cz); g.add(ceil);
+  for (const [lx, lz] of [[15, 6], [18.8, 6], [15.2, 11.5], [18.6, 11.5]]) B(1.2, 0.04, 0.3, 0xfffbe8, lx, H - 0.025, lz);
+  // two ceiling fans over the tables (they turn: see tonyTick)
+  tony.fans = [[16.9, 2.9], [19.1, 2.9]].map(([fx, fz]) => { const f = new THREE.Group(); f.position.set(fx, H - 0.38, fz); g.add(f);
+    B(0.03, 0.3, 0.03, 0x6b4a2a, fx, H - 0.17, fz); B(0.16, 0.1, 0.16, 0x6b4a2a, 0, 0, 0, 0, f);
+    for (let k = 0; k < 4; k++) { const bl = B(0.62, 0.012, 0.13, 0x8a5a32, Math.cos(k * Math.PI / 2) * 0.36, -0.02, Math.sin(k * Math.PI / 2) * 0.36, -k * Math.PI / 2, f); bl.rotation.x = 0.08; }
+    return f; });
+  // neon in the windows, facing the walk (lit while they're open: see tonyTick)
+  const neon = (draw, w, h, x, y) => { const t = makeTexture(draw, 256, Math.round(256 * h / w)); const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+    const o = P(w, h, m, x, y, z0 + 0.12, Math.PI); o.renderOrder = 3; return m; };
+  tony.neon = [
+    neon((ctx, w, h) => { ctx.clearRect(0, 0, w, h); ctx.lineWidth = 6; ctx.strokeStyle = "#ff3b5c"; ctx.shadowColor = "#ff3b5c"; ctx.shadowBlur = 16; ctx.strokeRect(8, 8, w - 16, h - 16);
+      ctx.font = "bold 70px Arial Rounded MT Bold, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#6fd3ff"; ctx.shadowColor = "#6fd3ff"; ctx.fillText("OPEN", w / 2, h / 2 + 4); }, 0.9, 0.42, 17.1, 1.8),
+    neon((ctx, w, h) => { ctx.clearRect(0, 0, w, h); ctx.lineWidth = 7; ctx.lineJoin = "round"; ctx.shadowBlur = 18;
+      ctx.strokeStyle = "#ffb02e"; ctx.shadowColor = "#ffb02e"; ctx.beginPath(); ctx.moveTo(w * 0.2, h * 0.2); ctx.lineTo(w * 0.8, h * 0.2); ctx.lineTo(w * 0.5, h * 0.88); ctx.closePath(); ctx.stroke();
+      ctx.strokeStyle = "#ff3b30"; ctx.shadowColor = "#ff3b30"; for (const [px, py] of [[0.4, 0.35], [0.58, 0.38], [0.5, 0.58]]) { ctx.beginPath(); ctx.arc(w * px, h * py, w * 0.05, 0, 7); ctx.stroke(); } }, 0.6, 0.6, 14.2, 1.75),
+  ];
+  // the tables by the windows: red-and-white checked cloths, chrome posts, two chairs each
+  const cloth = makeTexture((ctx, W2) => { const q = W2 / 8; for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) { ctx.fillStyle = (i + j) % 2 ? "#f4f1e6" : "#c8282f"; ctx.fillRect(i * q, j * q, q, q); } }, 64, 64);
+  const clothM = [M(0xc8282f), M(0xc8282f), new THREE.MeshBasicMaterial({ map: cloth }), M(0xc8282f), M(0xc8282f), M(0xc8282f)];
+  for (const [tx, tz] of [[16.9, 1.6], [19.1, 1.6], [16.9, 4.2], [19.1, 4.2]]) {
+    B(0.84, 0.05, 0.84, clothM, tx, 0.75, tz); B(0.06, 0.72, 0.06, 0xb8bcc0, tx, 0.38, tz); B(0.5, 0.03, 0.5, 0x2a2a2a, tx, 0.035, tz);
+    B(0.05, 0.12, 0.05, 0xd8d0b8, tx + 0.18, 0.84, tz - 0.12); B(0.05, 0.12, 0.05, 0xc8282f, tx + 0.26, 0.84, tz - 0.12);   // shakers: cheese, pepper flakes
+    for (const s2 of [-1, 1]) { B(0.42, 0.05, 0.42, 0x1d1d1d, tx + s2 * 0.62, 0.45, tz); B(0.05, 0.45, 0.42, 0x1d1d1d, tx + s2 * 0.83, 0.7, tz); }
+    solidAt(tx - 0.42, tx + 0.42, tz - 0.42, tz + 0.42, 0.78);
+  }
+  // photos on the east wall: the opening, the flag, the plaque
+  const frame = (draw, w, h, z) => { const t = makeTexture(draw, 128, Math.round(128 * h / w)); B(0.03, h + 0.06, w + 0.06, 0x2b1d12, x1 - 0.03, 1.85, z); P(w, h, new THREE.MeshBasicMaterial({ map: t }), x1 - 0.05, 1.85, z, -Math.PI / 2); };
+  frame((ctx, w, h) => { ctx.fillStyle = "#c9b48a"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#5a4630"; ctx.fillRect(10, 10, w - 20, h * 0.62); ctx.fillStyle = "#3a2a1a"; ctx.font = "bold 13px Georgia"; ctx.textAlign = "center"; ctx.fillText("GRAND OPENING", w / 2, h * 0.8); ctx.fillText("1979", w / 2, h * 0.93); }, 0.45, 0.55, 3.0);
+  frame((ctx, w, h) => { for (const [i, c] of ["#1f8a3a", "#f4f1e6", "#c8282f"].entries()) { ctx.fillStyle = c; ctx.fillRect(i * w / 3, 0, w / 3 + 1, h); } }, 0.6, 0.4, 3.8);
+  frame((ctx, w, h) => { ctx.fillStyle = "#6b4a2a"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#d9b44a"; ctx.fillRect(8, 8, w - 16, h - 16); ctx.fillStyle = "#3a2a1a"; ctx.textAlign = "center"; ctx.font = "bold 14px Georgia"; ctx.fillText("BEST SLICE", w / 2, h * 0.42); ctx.fillText("IN TOWN", w / 2, h * 0.6); ctx.font = "12px Georgia"; ctx.fillText("1994", w / 2, h * 0.8); }, 0.42, 0.5, 4.6);
+  // the game corner: two arcade cabinets against the west wall, facing into the room (their screens play: see tonyTick), a gumball machine
+  const GAMES = TONY_GAMES;
+  tony.screens = GAMES.map(([name, glow, body], i) => {
+    const z = 3.2 + i * 0.95, cab = new THREE.Group(); cab.position.set(x0 + 0.4, 0, z); cab.rotation.y = Math.PI / 2; g.add(cab);
+    const part = (w, h, d, c, x, y, zz, rx = 0) => { const o = B(w, h, d, c, x, y, zz, 0, cab); o.rotation.x = rx; return o; };
+    part(0.72, 1.8, 0.7, new THREE.Color(body).getHex(), 0, 0.9, 0); part(0.74, 0.9, 0.04, 0x111111, 0, 0.45, 0.37);
+    for (const sx of [-1, 1]) part(0.02, 1.82, 0.72, 0x111111, sx * 0.37, 0.91, 0);              // the side art's black edge
+    part(0.7, 0.12, 0.3, 0x222222, 0, 1.0, 0.45, 0.25);                                              // the control panel
+    for (const [bxx, c] of [[-0.15, 0xdddddd], [0.04, 0xffd400], [0.14, 0xff3b30]]) { const b = part(0.05, 0.03, 0.05, c, bxx, 1.09, 0.47); if (bxx < 0) b.scale.y = 3; }
+    part(0.12, 0.08, 0.02, 0xffd400, 0, 0.62, 0.395);                                                // the coin door's light
+    const cv = document.createElement("canvas"); cv.width = 256; cv.height = 192; const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.magFilter = THREE.NearestFilter;
+    const screen = P(0.56, 0.42, new THREE.MeshBasicMaterial({ map: tex }), 0, 1.42, 0.4, 0, cab); screen.rotation.x = -0.18;   // (4 cm out: tipped back, its top edge sank into the cabinet)
+    const mq = makeTexture((ctx, W2, H2) => { ctx.fillStyle = body; ctx.fillRect(0, 0, W2, H2); ctx.fillStyle = glow; ctx.textAlign = "center"; ctx.textBaseline = "middle"; let fs = 30; ctx.font = `italic 900 ${fs}px Arial Black, Arial`; while (ctx.measureText(name).width > W2 - 16) ctx.font = `italic 900 ${fs -= 2}px Arial Black, Arial`; ctx.fillText(name, W2 / 2, H2 / 2); }, 256, 64);
+    const marquee = P(0.7, 0.18, new THREE.MeshBasicMaterial({ map: mq }), 0, 1.72, 0.36, 0, cab);
+    screen.userData.tony = `game${i}`; aimables.push(screen); marquee.userData.tony = `game${i}`; aimables.push(marquee);
+    solidAt(x0, x0 + 0.8, z - 0.38, z + 0.38);
+    return { cv, tex, name, glow, stars: Array.from({ length: 40 }, () => [Math.random() * 256, Math.random() * 192, 0.5 + Math.random() * 2]), t: 0 };
+  });
+  { const gx = x0 + 0.3, gz = 5.3; B(0.3, 0.7, 0.3, 0xb3202a, gx, 0.35, gz); B(0.22, 0.14, 0.22, 0x9a9ea2, gx, 0.77, gz);
+    const glob = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), new THREE.MeshBasicMaterial({ color: 0xdfeff7, transparent: true, opacity: 0.35, depthWrite: false })); glob.position.set(gx, 1.0, gz); g.add(glob);
+    for (let k = 0; k < 28; k++) { const v = new THREE.Vector3().randomDirection().multiplyScalar(Math.random() * 0.13); if (v.y > 0.05) v.y *= 0.3;
+      const gb = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 4), M([0xff3b30, 0xffd400, 0x2ee6ff, 0x4cd964, 0xffffff][k % 5])); gb.position.set(gx + v.x, 0.95 + v.y, gz + v.z); g.add(gb); }
+    solidAt(gx - 0.18, gx + 0.18, gz - 0.18, gz + 0.18); }
+  // the counter: red front, white top; the register, the soda fountain, a pie under glass; a gap at the end to get behind it
+  B(I.gapX - x0, 1.0, 0.6, 0xb3202a, (x0 + I.gapX) / 2, 0.5, I.counterZ + 0.3);
+  B(I.gapX - x0, 0.06, 0.012, 0xf4f1e6, (x0 + I.gapX) / 2, 0.1, I.counterZ - 0.006);              // a white kick stripe along the bottom
+  const top = B(I.gapX - x0 + 0.04, 0.05, 0.68, 0xf4f1e6, (x0 + I.gapX) / 2, 1.025, I.counterZ + 0.3); top.userData.tony = "order"; aimables.push(top);
+  B(0.36, 0.22, 0.3, 0x2b2b2b, 15.2, 1.16, I.counterZ + 0.4); B(0.28, 0.1, 0.01, 0x5cff7a, 15.2, 1.22, I.counterZ + 0.245);   // the register, its readout
+  B(0.5, 0.55, 0.35, 0xc9cdd2, 18.7, 1.33, I.counterZ + 0.4); for (const [k, c] of [0xc8282f, 0x2b5bd6, 0x4cd964].entries()) B(0.08, 0.06, 0.03, c, 18.55 + k * 0.15, 1.45, I.counterZ + 0.215);   // the soda fountain
+  const warm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.34, 0.55), new THREE.MeshBasicMaterial({ color: 0xcfe8f0, transparent: true, opacity: 0.25, depthWrite: false })); warm.position.set(17.4, 1.23, I.counterZ + 0.34); g.add(warm);
+  B(0.9, 0.02, 0.55, 0x9a9ea2, 17.4, 1.065, I.counterZ + 0.34);                                                                // its steel floor
+  const pie = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 20), M(0xd98a2b)); pie.position.set(17.4, 1.09, I.counterZ + 0.34); g.add(pie);
+  for (let k = 0; k < 7; k++) { const pep = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.006, 8), M(0x9e1b22)); const a = k * 0.9; pep.position.set(17.4 + Math.cos(a) * 0.11, 1.111, I.counterZ + 0.34 + Math.sin(a) * 0.11); g.add(pep); }
+  pie.userData.tony = "order"; aimables.push(pie);
+  solidAt(x0, I.gapX, I.counterZ, I.counterZ + 0.64, 1.05);
+  // the kitchen wall: a doorway at the east end, and a wide hole through to the kitchen with a steel shelf and a red valance
+  const WZ = I.wallZ, [h0, h1] = I.hole, [d0, d1] = I.doorX;
+  for (const [a, b, y0, y1, c] of [[x0, h0, 0, H, 0xeadfc4], [h1, d0, 0, H, 0xeadfc4], [d1, x1, 0, H, 0xeadfc4], [h0, h1, 0, 1.1, 0x9e1b22], [h0, h1, 2.15, H, 0xeadfc4], [d0, d1, 2.2, H, 0xeadfc4]])
+    B(b - a, y1 - y0, 0.12, c, (a + b) / 2, (y0 + y1) / 2, WZ);
+  B(h1 - h0 + 0.1, 0.04, 0.42, 0xc9cdd2, (h0 + h1) / 2, 1.12, WZ);                       // the pass-through shelf
+  B(h1 - h0 + 0.1, 0.18, 0.03, 0xb3202a, (h0 + h1) / 2, 2.06, WZ - 0.09);                // the valance
+  for (let k = 0; k < 3; k++) B(0.14, 0.06, 0.14, 0xffb02e, h0 + 0.8 + k * 1.2, 2.11, WZ + 0.12);   // heat lamps, over the shelf on the kitchen side
+  for (const [a, b] of [[x0, h0], [h1, d0], [d1, x1]]) solidAt(a, b, WZ - 0.06, WZ + 0.06);
+  solidAt(h0, h1, WZ - 0.06, WZ + 0.06, 1.1);
+  const menu = makeTexture((ctx, W2, H2) => { ctx.fillStyle = "#151515"; ctx.fillRect(0, 0, W2, H2); ctx.fillStyle = "#ffd400"; ctx.textAlign = "center"; ctx.font = "italic 900 34px Arial Black, Arial"; ctx.fillText("TONY'S", W2 / 2, 38);
+    ctx.textAlign = "left"; ctx.fillStyle = "#ffffff"; ctx.font = "bold 22px Arial";
+    [["CHEESE SLICE", "1.25"], ["PEPPERONI SLICE", "1.50"], ["WHOLE PIE", "8.00"], ["GARLIC KNOTS", "2.00"], ["FOUNTAIN SODA", ".75"]].forEach(([n, pr], k) => { ctx.fillText(n, 24, 76 + k * 26); ctx.textAlign = "right"; ctx.fillText(pr, W2 - 24, 76 + k * 26); ctx.textAlign = "left"; }); }, 512, 216);
+  P(2.4, 0.78, new THREE.MeshBasicMaterial({ map: menu }), (h0 + h1) / 2, 2.58, WZ - 0.075, Math.PI);
+  // the kitchen: the oven against the back wall (its mouth glowing: see tonyTick), a steel prep table, the walk-in's door
+  B(2.6, 1.6, 1.4, 0x7a3a28, 16.4, 0.8, z1 - 0.72); tony.mouth = B(2.0, 0.4, 0.04, 0xff8a2a, 16.4, 0.95, z1 - 1.44); B(2.7, 0.08, 1.5, 0x5a5a5a, 16.4, 1.64, z1 - 0.75);
+  B(0.3, H - 1.68, 0.3, 0x8a8f94, 16.4, 1.68 + (H - 1.68) / 2, z1 - 0.75);                      // the flue up through the roof
+  solidAt(15.1, 17.7, z1 - 1.45, z1);
+  B(2.0, 0.05, 0.8, 0xc9cdd2, 15.0, 0.9, 11.2); for (const [lx, lz] of [[14.1, 10.9], [15.9, 10.9], [14.1, 11.5], [15.9, 11.5]]) B(0.05, 0.875, 0.05, 0xa9aeb3, lx, 0.4375, lz);
+  for (let k = 0; k < 3; k++) B(0.6, 0.08, 0.4, 0xf2e6c8, 14.6 + k * 0.5, 0.97 + k * 0.09, 11.2);   // dough trays
+  solidAt(14.0, 16.0, 10.8, 11.6);
+  B(1.0, 2.1, 0.06, 0xb8bcc0, 19.9, 1.05, z1 - 0.04);                                           // the walk-in's door
+  // Tony himself, behind the counter
+  const c = tony.clerk = VaultCustomers.build({ ...VaultCustomers.randomOutfit(seeded(4417), false), hat: null });
+  c.group.position.set(16.2, 0, I.counterZ + 1.0); c.group.rotation.y = Math.PI; c.setMood("neutral"); scene.add(c.group);
+  c.parts.forEach(m => { m.userData.tony = "order"; aimables.push(m); });
+}
+// Space Invaders' attract mode on the cabinet: five rows of them (squid, crab, octopus), stepping across a pixel at a
+// time with their legs flipping, down a row at each edge, over four green bunkers and the cannon; the score along the top
+const INVADER = {
+  squid: [["00011000", "00111100", "01111110", "11011011", "11111111", "00100100", "01011010", "10100101"], ["00011000", "00111100", "01111110", "11011011", "11111111", "01011010", "10000001", "01000010"]],
+  crab: [["00100000100", "00010001000", "00111111100", "01101110110", "11111111111", "10111111101", "10100000101", "00011011000"], ["00100000100", "10010001001", "10111111101", "11101110111", "11111111111", "01111111110", "00100000100", "01000000010"]],
+  octo: [["000011110000", "011111111110", "111111111111", "111001100111", "111111111111", "000110011000", "001101101100", "110000000011"], ["000011110000", "011111111110", "111111111111", "111001100111", "111111111111", "001110011100", "011001100110", "001100001100"]],
+};
+// ---- and it plays: E (a quarter) steps you up to the machine, the view on its screen. A/D or the arrows move the
+// cannon, Space fires (one shot on screen at a time), E or Esc walks away. Five rows of eleven march across and down,
+// faster the fewer there are; they drop bombs; the bunkers crumble; the saucer crosses now and then. Three lives;
+// a cleared wave brings the next one in lower; it's over when they get you or reach the bottom ----
+const arcade = { on: false, g: null, from: null };
+const SI = { W: 256, H: 192, top: 30, bunkerY: 148, playerY: 176, ground: 186 };
+const siPts = { squid: 30, crab: 20, octo: 10 };
+function siBeep(f, d = 0.06, type = "square", vol = 0.05, slide = 0) {
+  try { const ac = VaultAudio.ctx(), o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime; o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.linearRampToValueAtTime(f + slide, t + d);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d); o.connect(g).connect(sfxOut()); o.start(t); o.stop(t + d + 0.02); } catch {}
+}
+function siWave(g) {                              // a fresh formation (each wave starts a step lower, up to a point)
+  g.inv = []; const kinds = ["squid", "crab", "crab", "octo", "octo"], y0 = SI.top + 8 + Math.min(4, g.wave) * 6;
+  kinds.forEach((kind, r) => { for (let c = 0; c < 11; c++) g.inv.push({ kind, x: 24 + c * 16 + (kind === "squid" ? 2 : kind === "crab" ? 0.5 : 0), y: y0 + r * 14, w: kind === "squid" ? 8 * 1 : kind === "crab" ? 11 : 12, alive: true }); });
+  g.dx = 2; g.stepT = 0; g.frame = 0; g.note = 0; g.bombs = []; g.shot = null; g.bombT = 1;
+}
+function siBunkers(g) {                           // four bunkers, each a grid of cells that bullets chip away
+  g.bunk = [0, 1, 2, 3].map(i => { const x = 32 + i * 56, cells = new Uint8Array(22 * 16);
+    for (let y = 0; y < 16; y++) for (let x2 = 0; x2 < 22; x2++) cells[y * 22 + x2] = (y < 3 && (x2 < 3 - y || x2 > 18 + y)) || (y > 10 && x2 > 6 && x2 < 15 && y > 10 + Math.min(x2 - 6, 15 - x2) * 0) ? 0 : 1;
+    return { x, y: SI.bunkerY, cells }; });
+}
+function arcadeStart(i) {                        // a quarter in, and you're at the machine: its screen in front of you
+  if (CUSTOMER) { if (cm.wallet < 0.25) return toast("It takes a quarter. You don't have one"); cm.wallet -= 0.25; cm.day.spent += 0.25; }
+  const name = TONY_GAMES[i][0];
+  arcade.i = i; arcade.g = name === "ASTEROIDS" ? asNew() : siNew();
+  arcade.on = true; arcade.from = { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch };
+  const z = 3.2 + i * 0.95; Object.assign(player, { x: TONY_IN.x0 + 1.4, z, yaw: Math.PI / 2, pitch: Math.atan2(1.42 - 1.65, 0.64) - 0.02 }); keys.clear();
+  siBeep(880, 0.15, "square", 0.04, 440);
+  toast(name === "ASTEROIDS" ? "A / D turn · W thrust · SPACE fire · E to walk away" : "A / D or ← → move · SPACE fire · E to walk away", true);
+}
+function arcadeStop() {
+  if (!arcade.on) return;
+  const g = arcade.g, i = arcade.i, name = TONY_GAMES[i][0]; arcade.on = false; Object.assign(player, arcade.from); keys.clear();
+  if (g.score > (tony.scores[i] || 0)) { tony.scores[i] = g.score; toast(`${name}: ${g.score.toLocaleString()}. A new high score!`, true); }
+  else toast(`${name}: ${g.score.toLocaleString()}. Game over, man`, true);
+  if (CUSTOMER && g.score) cmLog(`Played ${name[0] + name.slice(1).toLowerCase()} at Tony's: ${g.score.toLocaleString()}`);
+}
+function siNew() {
+  const g = { score: 0, lives: 3, wave: 0, px: SI.W / 2, dead: 0, over: 0, ufo: null, ufoT: 18 + Math.random() * 10, boom: [] };
+  siWave(g); siBunkers(g); return g;
+}
+function siKey(e) {                               // -> true if the machine took the key
+  if (!arcade.on) return false;
+  if (["KeyE", "Escape", "KeyQ"].includes(e.code)) { if (!e.repeat) arcadeStop(); return true; }
+  const g = arcade.g, as = TONY_GAMES[arcade.i][0] === "ASTEROIDS";
+  if (e.code === "Space") { e.preventDefault(); if (!e.repeat) as ? asFire(g) : (!g.shot && !g.dead && !g.over && (g.shot = { x: g.px, y: SI.playerY - 4 }, siBeep(1200, 0.08, "square", 0.03, -800))); return true; }
+  if (["KeyA", "KeyD", "KeyW", "ArrowLeft", "ArrowRight", "ArrowUp"].includes(e.code)) { keys.add(e.code); return true; }
+  return true;                                    // (everything else waits while you play)
+}
+function siTick(dt) {
+  const g = arcade.g, alive = g.inv.filter(v => v.alive);
+  if (g.over) { if ((g.over -= dt) <= 0) arcadeStop(); return; }
+  if (g.dead) { g.dead -= dt; if (g.dead <= 0) { g.dead = 0; if (g.lives <= 0) { g.over = 3; siBeep(220, 0.8, "sawtooth", 0.05, -150); } } }
+  else {                                          // the cannon
+    const mv = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
+    g.px = Math.max(10, Math.min(SI.W - 10, g.px + mv * 70 * dt));
+  }
+  // the march: a step at a time, quicker as they thin out, the four-note bass with it
+  g.stepT -= dt;
+  if (g.stepT <= 0 && alive.length) {
+    g.stepT = Math.max(0.03, 0.55 * alive.length / 55); g.frame ^= 1;
+    const minX = Math.min(...alive.map(v => v.x)), maxX = Math.max(...alive.map(v => v.x + v.w));
+    if ((g.dx > 0 && maxX + g.dx > SI.W - 6) || (g.dx < 0 && minX + g.dx < 6)) { g.dx = -g.dx; for (const v of alive) v.y += 6; } else for (const v of alive) v.x += g.dx;
+    siBeep([98, 87, 78, 73][g.note++ % 4], 0.09, "square", 0.06);
+    if (Math.max(...alive.map(v => v.y + 8)) >= SI.playerY - 4 && !g.over) { g.lives = 0; g.dead = 1.2; g.boom.push({ x: g.px, y: SI.playerY, t: 1.2, big: true }); siBeep(140, 0.6, "sawtooth", 0.06, -100); }
+    for (const v of alive) for (const b of g.bunk) if (v.y + 8 > b.y) for (let y = 0; y < 16; y++) for (let x = 0; x < 22; x++) { const cx = b.x + x, cy = b.y + y; if (cx >= v.x && cx < v.x + v.w && cy >= v.y && cy < v.y + 8) b.cells[y * 22 + x] = 0; }
+  }
+  if (!alive.length && !g.dead) { g.wave++; siWave(g); siBunkers(g); siBeep(660, 0.3, "triangle", 0.05, 330); }
+  // their bombs: from the bottom one in a random column (toward the cannon, more often than not)
+  if ((g.bombT -= dt) <= 0 && alive.length && !g.dead && g.bombs.length < 3) {
+    g.bombT = 0.5 + Math.random() * 0.9;
+    const cols = {}; for (const v of alive) { const k = Math.round(v.x / 16); if (!cols[k] || v.y > cols[k].y) cols[k] = v; }
+    const shooters = Object.values(cols), near = shooters.filter(v => Math.abs(v.x + v.w / 2 - g.px) < 30);
+    const v = (near.length && Math.random() < 0.5 ? near : shooters)[Math.floor(Math.random() * (near.length && Math.random() < 0.5 ? near.length : shooters.length))] || shooters[0];
+    g.bombs.push({ x: v.x + v.w / 2, y: v.y + 8, t: 0 });
+  }
+  const chip = (x, y, r) => { for (const b of g.bunk) { if (x < b.x - 2 || x > b.x + 24 || y < b.y - 2 || y > b.y + 18) continue; const lx = Math.floor(x - b.x), ly = Math.floor(y - b.y);
+    if (lx >= 0 && lx < 22 && ly >= 0 && ly < 16 && b.cells[ly * 22 + lx]) { for (let yy = -r; yy <= r; yy++) for (let xx = -r; xx <= r; xx++) { const X = lx + xx, Y = ly + yy; if (X >= 0 && X < 22 && Y >= 0 && Y < 16 && Math.random() < 0.8) b.cells[Y * 22 + X] = 0; } return true; } } return false; };
+  for (const bm of [...g.bombs]) {
+    bm.y += 70 * dt; bm.t += dt;
+    if (chip(bm.x, bm.y + 3, 2) || bm.y > SI.ground) { g.bombs.splice(g.bombs.indexOf(bm), 1); continue; }
+    if (!g.dead && Math.abs(bm.x - g.px) < 8 && bm.y + 3 > SI.playerY - 4 && bm.y < SI.playerY + 4) {   // hit: the cannon blows up
+      g.bombs.splice(g.bombs.indexOf(bm), 1); g.lives--; g.dead = 1.4; g.bombs = []; g.boom.push({ x: g.px, y: SI.playerY, t: 1.4, big: true }); siBeep(160, 0.7, "sawtooth", 0.07, -120);
+    }
+  }
+  if (g.shot) {                                   // your shot: into an invader, the saucer, a bunker, a bomb, or off the top
+    const sh = g.shot; sh.y -= 230 * dt;
+    const v = alive.find(v => sh.x >= v.x - 1 && sh.x <= v.x + v.w + 1 && sh.y <= v.y + 8 && sh.y + 4 >= v.y);
+    const bomb = g.bombs.find(b => Math.abs(b.x - sh.x) < 3 && Math.abs(b.y - sh.y) < 5);
+    if (v) { v.alive = false; g.score += siPts[v.kind]; g.boom.push({ x: v.x + v.w / 2, y: v.y + 4, t: 0.25 }); g.shot = null; siBeep(400, 0.12, "sawtooth", 0.05, -300); }
+    else if (g.ufo && Math.abs(sh.x - g.ufo.x) < 9 && sh.y < 30) { const pts = [50, 100, 150, 300][Math.floor(Math.random() * 4)]; g.score += pts; g.boom.push({ x: g.ufo.x, y: 24, t: 1, pts }); g.ufo = null; g.shot = null; siBeep(900, 0.4, "square", 0.05, -700); }
+    else if (bomb) { g.bombs.splice(g.bombs.indexOf(bomb), 1); g.shot = null; }
+    else if (chip(sh.x, sh.y, 1) || sh.y < SI.top - 8) g.shot = null;
+  }
+  if (!g.ufo && (g.ufoT -= dt) <= 0) { const d = Math.random() < 0.5 ? 1 : -1; g.ufo = { x: d > 0 ? -12 : SI.W + 12, d }; g.ufoT = 20 + Math.random() * 15; }
+  if (g.ufo) { g.ufo.x += g.ufo.d * 40 * dt; if (Math.floor(tony.t * 10) % 2) siBeep(600 + 200 * Math.sin(tony.t * 20), 0.05, "sine", 0.015); if (g.ufo.x < -16 || g.ufo.x > SI.W + 16) g.ufo = null; }
+  for (const b of [...g.boom]) if ((b.t -= dt) <= 0) g.boom.splice(g.boom.indexOf(b), 1);
+  siDraw(g);
+}
+function siDraw(g) {
+  const s = tony.screens?.[0]; if (!s) return;
+  const ctx = s.cv.getContext("2d"), W = SI.W, H = SI.H;
+  ctx.fillStyle = "#05050c"; ctx.fillRect(0, 0, W, H);
+  const px = (rows, x, y, k, c) => { ctx.fillStyle = c; rows.forEach((r, j) => { for (let i = 0; i < r.length; i++) if (r[i] === "1") ctx.fillRect(Math.round(x + i * k), Math.round(y + j * k), k, k); }); };
+  ctx.font = "bold 10px Courier New"; ctx.fillStyle = "#ffffff"; ctx.textAlign = "left"; ctx.fillText(`SCORE<1> ${String(g.score).padStart(4, "0")}`, 6, 11);
+  ctx.textAlign = "right"; ctx.fillText(`HI-SCORE ${String(Math.max(tony.scores[0] || 0, g.score)).padStart(4, "0")}`, W - 6, 11);
+  for (const v of g.inv) if (v.alive) px(INVADER[v.kind][g.frame], v.x, v.y, 1, "#ffffff");
+  if (g.ufo) { ctx.fillStyle = "#ff3b30"; ctx.fillRect(g.ufo.x - 8, 22, 16, 4); ctx.fillRect(g.ufo.x - 5, 19, 10, 3); ctx.fillRect(g.ufo.x - 2, 17, 4, 2); }
+  ctx.fillStyle = "#39ff5a"; for (const b of g.bunk) for (let y = 0; y < 16; y++) for (let x = 0; x < 22; x++) if (b.cells[y * 22 + x]) ctx.fillRect(b.x + x, b.y + y, 1, 1);
+  if (!g.dead || Math.floor(g.dead * 10) % 2) { ctx.fillStyle = "#39ff5a"; ctx.fillRect(Math.round(g.px) - 7, SI.playerY - 1, 14, 5); ctx.fillRect(Math.round(g.px) - 1, SI.playerY - 4, 2, 3); }
+  ctx.fillStyle = "#ffffff"; if (g.shot) ctx.fillRect(Math.round(g.shot.x), Math.round(g.shot.y), 1, 4);
+  for (const bm of g.bombs) for (let k = 0; k < 4; k++) ctx.fillRect(Math.round(bm.x) + ((Math.floor(bm.t * 12) + k) % 2 ? 1 : -1), Math.round(bm.y) + k * 2, 1, 2);
+  for (const b of g.boom) { ctx.fillStyle = b.big ? "#39ff5a" : "#ffffff"; if (b.pts) { ctx.fillStyle = "#ff3b30"; ctx.textAlign = "center"; ctx.fillText(String(b.pts), b.x, 26); continue; }
+    for (let k = 0; k < (b.big ? 14 : 8); k++) { const a = k / (b.big ? 14 : 8) * 6.28; ctx.fillRect(Math.round(b.x + Math.cos(a) * (b.big ? 7 : 4)), Math.round(b.y + Math.sin(a) * (b.big ? 4 : 3)), 1, 1); } }
+  ctx.fillStyle = "#39ff5a"; ctx.fillRect(0, SI.ground, W, 1);
+  ctx.fillStyle = "#ffffff"; ctx.textAlign = "left"; ctx.fillText(String(Math.max(0, g.lives)), 6, H - 1);
+  for (let i = 0; i < g.lives - 1; i++) { ctx.fillStyle = "#39ff5a"; ctx.fillRect(18 + i * 18, H - 5, 12, 4); ctx.fillRect(23 + i * 18, H - 7, 2, 2); }
+  if (g.over) { ctx.fillStyle = "#ff3b30"; ctx.textAlign = "center"; ctx.font = "bold 16px Courier New"; ctx.fillText("GAME OVER", W / 2, H / 2); }
+  s.tex.needsUpdate = true;
+}
+// ---- Asteroids: the ship in the middle, rocks drifting in from the edges, everything wrapping round the screen. Turn,
+// thrust (it drifts: there's no brake), fire (four shots at once, at most). A big rock splits in two mediums, a medium
+// in two smalls; 20 / 50 / 100. Three ships; after one's lost the next waits for a clear middle. The beat quickens
+// as the screen clears; a cleared screen brings in one more rock than the last ----
+const AS = { W: 256, H: 192, R: [0, 4, 8, 15] };
+const asRock = (x, y, size) => { const n = 10, verts = Array.from({ length: n }, (_, k) => { const a = k / n * 6.28, r = AS.R[size] * (0.75 + Math.random() * 0.4); return [Math.cos(a) * r, Math.sin(a) * r]; });
+  const sp = (0.3 + Math.random() * 0.5) * (4 - size) * 9, a = Math.random() * 6.28; return { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, size, verts, rot: (Math.random() - 0.5) * 2, a: 0 }; };
+function asWave(g) {
+  g.rocks = []; for (let k = 0; k < 4 + g.wave; k++) { const e = Math.random() < 0.5; g.rocks.push(asRock(e ? Math.random() * AS.W : (Math.random() < 0.5 ? 0 : AS.W), e ? (Math.random() < 0.5 ? 0 : AS.H) : Math.random() * AS.H, 3)); }
+}
+function asNew() {
+  const g = { score: 0, lives: 3, wave: 0, ship: { x: AS.W / 2, y: AS.H / 2, a: -Math.PI / 2, vx: 0, vy: 0 }, shots: [], dead: 0, safe: 2, over: 0, beatT: 0, beat: 0, debris: [] };
+  asWave(g); return g;
+}
+function asFire(g) {
+  if (g.dead || g.over || g.shots.length >= 4) return;
+  const s = g.ship; g.shots.push({ x: s.x + Math.cos(s.a) * 6, y: s.y + Math.sin(s.a) * 6, vx: s.vx + Math.cos(s.a) * 150, vy: s.vy + Math.sin(s.a) * 150, t: 0.9 });
+  siBeep(1500, 0.06, "square", 0.025, -900);
+}
+const asWrap = o => { o.x = (o.x + AS.W) % AS.W; o.y = (o.y + AS.H) % AS.H; };
+const asD2 = (a, b) => { let dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y); dx = Math.min(dx, AS.W - dx); dy = Math.min(dy, AS.H - dy); return dx * dx + dy * dy; };
+function asTick(dt) {
+  const g = arcade.g, s = g.ship;
+  if (g.over) { if ((g.over -= dt) <= 0) arcadeStop(); asDraw(g); return; }
+  if (g.dead) {                                   // waiting for the next ship: till its time's up and the middle's clear
+    g.dead -= dt;
+    if (g.dead <= 0) { if (g.lives <= 0) { g.over = 3; siBeep(200, 0.8, "sawtooth", 0.05, -120); }
+      else if (g.rocks.every(r => asD2(r, { x: AS.W / 2, y: AS.H / 2 }) > 40 * 40)) { g.dead = 0; g.safe = 2; Object.assign(s, { x: AS.W / 2, y: AS.H / 2, a: -Math.PI / 2, vx: 0, vy: 0 }); } else g.dead = 0.1; }
+  } else {
+    const turn = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0), thrust = keys.has("KeyW") || keys.has("ArrowUp");
+    s.a += turn * 4.2 * dt; s.thrust = thrust;
+    if (thrust) { s.vx += Math.cos(s.a) * 120 * dt; s.vy += Math.sin(s.a) * 120 * dt; if (Math.random() < dt * 20) siBeep(60 + Math.random() * 30, 0.05, "sawtooth", 0.02); }
+    const sp = Math.hypot(s.vx, s.vy), max = 140; if (sp > max) { s.vx *= max / sp; s.vy *= max / sp; }
+    s.vx *= 1 - 0.35 * dt; s.vy *= 1 - 0.35 * dt; s.x += s.vx * dt; s.y += s.vy * dt; asWrap(s); g.safe = Math.max(0, g.safe - dt);
+  }
+  for (const r of g.rocks) { r.x += r.vx * dt; r.y += r.vy * dt; r.a += r.rot * dt; asWrap(r); }
+  for (const sh of [...g.shots]) { sh.x += sh.vx * dt; sh.y += sh.vy * dt; asWrap(sh); if ((sh.t -= dt) <= 0) { g.shots.splice(g.shots.indexOf(sh), 1); continue; }
+    const r = g.rocks.find(r => asD2(r, sh) < AS.R[r.size] ** 2);
+    if (r) { g.shots.splice(g.shots.indexOf(sh), 1); g.rocks.splice(g.rocks.indexOf(r), 1); g.score += [0, 100, 50, 20][r.size];
+      if (r.size > 1) for (let k = 0; k < 2; k++) g.rocks.push(asRock(r.x, r.y, r.size - 1));
+      for (let k = 0; k < 8; k++) { const a = Math.random() * 6.28, v = 20 + Math.random() * 40; g.debris.push({ x: r.x, y: r.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0.5 }); }
+      siBeep([0, 900, 400, 160][r.size], 0.18, "sawtooth", 0.05, -80); } }
+  if (!g.dead && !g.safe && !g.over) { const r = g.rocks.find(r => asD2(r, s) < (AS.R[r.size] + 4) ** 2);
+    if (r) { g.lives--; g.dead = 1.8; for (let k = 0; k < 14; k++) { const a = Math.random() * 6.28, v = 10 + Math.random() * 50; g.debris.push({ x: s.x, y: s.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 1.2 }); } siBeep(120, 0.7, "sawtooth", 0.07, -80); } }
+  for (const d of [...g.debris]) { d.x += d.vx * dt; d.y += d.vy * dt; if ((d.t -= dt) <= 0) g.debris.splice(g.debris.indexOf(d), 1); }
+  if (!g.rocks.length) { g.wave++; asWave(g); }
+  if ((g.beatT -= dt) <= 0) { g.beatT = Math.max(0.25, 0.9 * Math.min(1, g.rocks.length / 10)); siBeep(g.beat++ % 2 ? 55 : 62, 0.1, "square", 0.06); }   // thump... thump (quicker as it clears)
+  asDraw(g);
+}
+function asDraw(g, attract) {
+  const sc = tony.screens?.[1]; if (!sc) return;
+  const ctx = sc.cv.getContext("2d"), W = AS.W, H = AS.H;
+  ctx.fillStyle = "#03030a"; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#e8f0ff"; ctx.fillStyle = "#e8f0ff"; ctx.lineWidth = 1;
+  for (const r of g.rocks) { ctx.beginPath(); r.verts.forEach(([vx, vy], k) => { const c = Math.cos(r.a), sn = Math.sin(r.a), x = r.x + vx * c - vy * sn, y = r.y + vx * sn + vy * c; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.stroke(); }
+  for (const sh of g.shots || []) ctx.fillRect(Math.round(sh.x), Math.round(sh.y), 1.5, 1.5);
+  for (const d of g.debris || []) ctx.fillRect(Math.round(d.x), Math.round(d.y), 1, 1);
+  const s = g.ship;
+  if (s && !g.dead && !g.over && (!g.safe || Math.floor(g.safe * 8) % 2)) {
+    const pt = (r, a) => [s.x + Math.cos(s.a + a) * r, s.y + Math.sin(s.a + a) * r];
+    ctx.beginPath(); ctx.moveTo(...pt(7, 0)); ctx.lineTo(...pt(6, 2.5)); ctx.lineTo(...pt(3, Math.PI)); ctx.lineTo(...pt(6, -2.5)); ctx.closePath(); ctx.stroke();
+    if (s.thrust && Math.random() < 0.7) { ctx.beginPath(); ctx.moveTo(...pt(3.5, 2.6)); ctx.lineTo(...pt(8, Math.PI)); ctx.lineTo(...pt(3.5, -2.6)); ctx.stroke(); }
+  }
+  ctx.font = "bold 12px Courier New"; ctx.textAlign = "left"; ctx.fillText(String(g.score || 0).padStart(5, " "), 6, 14);
+  ctx.textAlign = "center"; ctx.font = "bold 9px Courier New"; ctx.fillText(String(Math.max(tony.scores[1] || 0, g.score || 0, 10000)).padStart(5, "0"), W / 2, 12);
+  for (let k = 0; k < (g.lives ?? 0) - (g.dead || !s ? 0 : 1); k++) { const x = 10 + k * 9, y = 24; ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 3, y + 3); ctx.lineTo(x - 3, y + 3); ctx.closePath(); ctx.stroke(); }
+  if (g.over) { ctx.font = "bold 16px Courier New"; ctx.fillText("GAME OVER", W / 2, H / 2); }
+  if (attract) { ctx.font = "bold 20px Courier New"; ctx.fillText("ASTEROIDS", W / 2, H * 0.42); if (Math.floor(tony.t * 2) % 2) { ctx.font = "bold 12px Courier New"; ctx.fillText("INSERT COIN", W / 2, H * 0.62); } }
+  sc.tex.needsUpdate = true;
+}
+function invadersFrame(ctx, s, W, H) {
+  const px = (rows, x, y, k, c) => { ctx.fillStyle = c; rows.forEach((r, j) => { for (let i = 0; i < r.length; i++) if (r[i] === "1") ctx.fillRect(x + i * k, y + j * k, k, k); }); };
+  s.inv ||= { x: 20, y: 34, dx: 4, f: 0 };
+  const v = s.inv, cols = 8, gap = 22; v.f ^= 1; v.x += v.dx;
+  if (v.x < 6 || v.x + cols * gap > W - 6) { v.dx = -v.dx; v.x += v.dx; v.y += 6; if (v.y > 90) v.y = 34; }
+  ctx.fillStyle = "#ffffff"; ctx.font = "bold 11px Courier New"; ctx.textAlign = "left";
+  ctx.fillText(`SCORE<1>  ${String(tony.scores[0] || 0).padStart(4, "0")}`, 8, 14); ctx.textAlign = "right"; ctx.fillText(`HI-SCORE  ${String(Math.max(tony.scores[0] || 0, 20000)).padStart(5, "0")}`, W - 8, 14);
+  ["squid", "crab", "crab", "octo", "octo"].forEach((kind, r) => { for (let c = 0; c < cols; c++) px(INVADER[kind][v.f], v.x + c * gap + (kind === "squid" ? 2 : 0), v.y + r * 13, 1.4, "#ffffff"); });
+  for (let b = 0; b < 4; b++) { ctx.fillStyle = "#39ff5a"; const bx = 22 + b * 60; ctx.fillRect(bx, H - 46, 26, 12); ctx.fillRect(bx + 3, H - 49, 20, 3); ctx.fillStyle = "#05050c"; ctx.fillRect(bx + 8, H - 38, 10, 4); }
+  const cx = W / 2 + Math.sin(tony.t * 1.3) * 70; ctx.fillStyle = "#39ff5a"; ctx.fillRect(cx - 8, H - 22, 16, 5); ctx.fillRect(cx - 2, H - 26, 4, 4);
+  ctx.fillRect(0, H - 12, W, 1);
+  if (Math.floor(tony.t * 2) % 2) { ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.fillText("INSERT  COIN", W / 2, H - 2); }
+}
+function tonyTick(dt) {
+  if (arcade.on) (TONY_GAMES[arcade.i][0] === "ASTEROIDS" ? asTick : siTick)(Math.min(dt, 0.05));                           // Tony, the fans, the neon, the oven's glow, and (anyone near) the games' attract screens
+  tony.clerk?.tick(dt, 0);
+  const near = Math.hypot(player.x - 17, player.z - 4) < 16; if (!near) return;
+  tony.t = (tony.t || 0) + dt;
+  for (const f of tony.fans || []) f.rotation.y += dt * 4;
+  const open = tonyOpen(); for (const m of tony.neon || []) m.opacity = open ? 0.9 + 0.1 * Math.sin(tony.t * 31) * (Math.random() < 0.02 ? 4 : 0.2) : 0.12;
+  tony.mouth?.material.color.setHSL(0.07, 1, open ? 0.5 + 0.06 * Math.sin(tony.t * 7) + 0.04 * Math.sin(tony.t * 17) : 0.25);
+  for (const s of tony.screens || []) {
+    if ((s.t -= dt) > 0) continue; s.t = 0.1;
+    if (arcade.on && tony.screens.indexOf(s) === arcade.i) continue;   // (being played: the game draws it)
+    if (s.name === "ASTEROIDS") { s.att ||= { rocks: [3, 3, 2, 2, 1, 1].map(z => asRock(Math.random() * AS.W, Math.random() * AS.H, z)), score: 0 }; for (const r of s.att.rocks) { r.x += r.vx * 0.1; r.y += r.vy * 0.1; r.a += r.rot * 0.1; asWrap(r); } asDraw(s.att, true); continue; }
+    const ctx = s.cv.getContext("2d"), W2 = 256, H2 = 192; ctx.fillStyle = "#05050c"; ctx.fillRect(0, 0, W2, H2);
+    if (s.name === "SPACE INVADERS") { invadersFrame(ctx, s, W2, H2); s.tex.needsUpdate = true; continue; }
+    ctx.fillStyle = "#ffffff"; for (const st of s.stars) { st[1] = (st[1] + st[2] * 3) % H2; ctx.fillRect(st[0], st[1], st[2], st[2]); }
+    ctx.textAlign = "center"; ctx.fillStyle = s.glow; ctx.font = "bold 22px Courier New"; ctx.fillText(s.name, W2 / 2, H2 * 0.42);
+    ctx.fillStyle = "#ffffff"; ctx.font = "bold 16px Courier New"; if (Math.floor(tony.t * 2) % 2) ctx.fillText("INSERT COIN", W2 / 2, H2 * 0.72);
+    ctx.fillText(`HI ${String(Math.max(tony.scores[tony.screens.indexOf(s)], 20000 + tony.screens.indexOf(s) * 7350)).padStart(6, "0")}`, W2 / 2, H2 * 0.14);
+    s.tex.needsUpdate = true;
+  }
+}
+function tonyE(what) {                            // E at Tony's: a slice at the counter, a game at a cabinet
+  if (what === "order") {
+    if (!tonyOpen()) return toast("Tony's is closed. 11 to 11, says the door");
+    if (cm.wallet < 1.5) return toast(`A slice is $1.50. You've got ${cmMoney(cm.wallet)}`);
+    cm.wallet -= 1.5; cm.day.spent += 1.5; tony.clerk?.setMood("happy");
+    toast("Tony: \"Pepperoni, comin' up.\" Hot, greasy, perfect. You eat it standing at the counter", true); cmLog("A slice at Tony's", "", -1.5); return;
+  }
+  const i = +what.slice(4);
+  return arcadeStart(i);                          // (both machines play: see arcadeStart)
+}
 const onTony = (x, z) => x > TONY.x0 && x < TONY.x1 && z > TONY.z0 && z < TONY.z1;
 const golfLost = [];
 function golfSpout(sc) {                          // into a scupper: gone, a rattle down the pipe, then out the bottom (see golfTick)
@@ -10595,6 +11112,7 @@ function roofClimb(dir) {                          // up (1) or down (-1) the cl
   roof.climb = { dir, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
   player.yaw = 0;                                   // facing the rungs (south), up or down
 }
+{ const under = floorHeightAt; floorHeightAt = (x, z) => pavedAt(x, z) ? LOT.y : under(x, z); }   // (the lot and the road sit a curb lower than the walk)
 const PUDDLE_DARK = new THREE.Color(0x24282e), PUDDLE_GREY = new THREE.Color(0xb4b8bc);   // (a puddle: the sky, darkened by the water and what's under it)
 const cineAt = new THREE.Vector3();
 function cineTick(dt) {                           // the movie on the roof: the projector's picture on the sheet, washed out by daylight, and its beam after dark
@@ -12280,6 +12798,20 @@ function cmGotAway(unpaid) {                      // out the door with it and no
   cmLog(`Walked out without paying: ${unpaid.map(e => e.kind === "tape" ? e.ref.title : e.kind === "snack" ? e.ref.userData.snack.name : "popcorn").join(", ") || "what I'd eaten"}`, "bad");
 }
 
+// ---- the cardboard bed out back: lie down and let a few hours go by (the clock runs fast while you're out, so the
+// day still happens: see skipHour); after close, sleep through to the morning ----
+function cmSleep() {
+  if (afterClose()) { toast("You curl up on the cardboard. Morning comes soon enough", true); cmNextDay(); return; }
+  const to = Math.min(SHIFT.close, shift.h + 3);
+  cm.sleeping = true; shift.warp = to; keys.clear();
+  const f = $("fade"); f.style.opacity = 1; f.textContent = "Zzz…"; cmLog(`Lay down out back for a while (${fmtClock(shift.h)} to ${fmtClock(to)})`);
+}
+function cmSleepTick() {
+  if (!cm.sleeping || shift.warp > shift.h) return;
+  cm.sleeping = false; const f = $("fade"); f.style.opacity = 0; f.textContent = "";
+  toast(`You wake up stiff. ${fmtClock(shift.h)}`, true);
+}
+
 // ---- a drink, spilled on purpose: somebody on staff will come and mop it up (and they're not at the register) ----
 function cmSpill() {
   if (!heldSnack || !isDrink(heldSnack.userData.snack) || !snackLeft || !cm.inside || player.onRoof) return false;
@@ -12887,12 +13419,12 @@ function cmSlip() {                               // the end of your day, on the
 function cmDoorOpen(fromInside) { return fromInside || (!frontLock.locked && cm.banned !== shift.day); }   // (out's always fine: they let you out)
 
 function cmTick(dt) {
-  cmNoteTick(); cmShowTick(dt);
+  cmNoteTick(); cmSleepTick(); cmShowTick(dt);
   cmCustTick(dt);
   if (cm.comboOf !== cm.comboWas) { cm.typed = ""; cm.comboWas = cm.comboOf; }   // (looked away: start the combination over)
   if (heldSnack && !cm.spillHint && isDrink(heldSnack.userData.snack) && cm.inside) { cm.spillHint = true; toast("X — spill it on the floor (somebody'll come with a mop)", true); }
   if (!started || document.pointerLockElement !== canvas || shift.report) return;
-  const inside = player.onRoof || player.z > 0.05;
+  const inside = player.onRoof || (player.z > 0.05 && inBuilding(player.x, player.z));   // (in the video store: round the back, or Tony's next door, doesn't count)
   // out through the doors with something you haven't paid for
   if (cm.inside && !inside) {
     const unpaid = cmUnpaid();
@@ -12962,6 +13494,8 @@ function cmHud() {
       ...(cm.rec?.day === shift.day ? [`${cm.rec.done ? "✓" : "☐"} ${cm.rec.by}'s pick: ${cm.rec.title.title}`] : []), ...(cmShowToday() && !["done", "failed"].includes(show.status) ? [`${cm.ticket === shift.day ? "✓ Ticket" : "☐ Tonight"}: ${show.title.title}, 8 PM`] : [])]];
 }
 function cmE() {                                  // E, as a customer: what's different. -> true if handled
+  if (aimBed) { if (!cm.sleeping) cmSleep(); return true; }
+  if (aimTony) { tonyE(aimTony); return true; }
   if (cm.term) { cmTermClose(); return true; }
   if (aimPickup) { cmPickUp(aimPickup); return true; }
   if (cmRentAiming()) { cmRentDrop(); return true; }
@@ -12997,6 +13531,9 @@ function cmE() {                                  // E, as a customer: what's di
   return false;
 }
 function cmTip() {                                // the hover tip, as a customer -> html, or null for the usual
+  if (aimBed) return afterClose() ? "E — sleep it off till morning<div class=\"cat\">somebody's cardboard bed</div>" : "E — lie down a while (3 hours)<div class=\"cat\">somebody's cardboard bed</div>";
+  if (aimTony) return aimTony === "order" ? (tonyOpen() ? "E — a pepperoni slice ($1.50)<div class=\"cat\">Tony's</div>" : "Tony's counter<div class=\"cat\">closed · open 11 AM to 11 PM</div>")
+    : `E — play ${TONY_GAMES[+aimTony.slice(4)][0]}<div class="cat">a quarter a game</div>`;
   if (aimPickup) return aimPickup.search ? `E — search ${aimPickup.search}` : aimPickup.mesh === "bill" ? "E — pick it up<div class=\"cat\">money on the floor</div>" : `E — take it<div class="cat">${ITEMS[aimPickup.gives.item].about}</div>`;
   if (cm.comboOf) return comboTip(cm.comboOf);
   if (cmRentAiming()) return cmRentTip();
@@ -13209,7 +13746,7 @@ const clock = new THREE.Clock();
 const ROOMS = ["out", "store", "boh", "lobby", "theater"];
 const roomGroups = Object.fromEntries(ROOMS.map(r => { const g = new THREE.Group(); scene.add(g); return [r, g]; }));
 function roomAt(x, z) {
-  if (z < 0 || x < WALL_L || x > STORE.x) return "out";
+  if (z < 0 || x < WALL_L || x > STORE.x || !inBuilding(x, z)) return "out";   // (round the back too)
   if (z < STORE.z) return "store";
   if (z < BOH.z1) return x >= BOH.x0 ? "boh" : "lobby";
   return "theater";
@@ -13431,7 +13968,7 @@ renderer.setAnimationLoop(() => {
     camera.position.set(player.x, eyeY + playerFloor(), player.z);
   }
   if (!seated) seatFov = 70;                     // walking resets the couch zoom
-  const fovTarget = seated ? seatFov : 70;
+  const fovTarget = arcade.on ? 50 : seated ? seatFov : 70;   // (at the arcade machine: in close on its screen)
   if (Math.abs(camera.fov - fovTarget) > 0.01) { // eased so it feels like leaning in/out
     camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 10);
     camera.updateProjectionMatrix();
@@ -13442,7 +13979,7 @@ renderer.setAnimationLoop(() => {
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
-  custTick(dt); frontDoorTick(dt); if (CUSTOMER) cmTick(dt);
+  custTick(dt); frontDoorTick(dt); tonyTick(dt); if (CUSTOMER) cmTick(dt);
   empTick(dt);
   trashTick(dt);
   deadLightTick(dt);
@@ -13475,7 +14012,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
-window.__t = { cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { arcade, arcadeStart, arcadeStop, siKey, siTick, asTick, LOT, cmSleep, roomAt, lotCars: () => carsOut?.all(), tony, tonyE, TONY_IN, cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
