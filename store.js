@@ -12576,7 +12576,7 @@ const comboTip = c => comboLeft(c) ? `E — take ${ITEMS[c.gives].name}<div clas
 // them turn up nothing (or a little change). Which ones hold the break room key, Ray's note and his PIN, and the
 // codes themselves, come from the save's seed. Searched is searched for good (bins: for the day, except what's in one)
 const SEARCHES = {
-  cushions: { area: "public", search: "between the couch cushions", at: () => [SEATS[2].x, 0.5, SEATS[2].z - 0.05], r: 0.2 },
+  cushions: { area: "public", search: "between the couch cushions", at: () => [SEATS[1].x, 0.5, SEATS[1].z - 0.2], box: [1.9, 0.14, 0.16] },   // (the crease along the back, the whole couch: the seats in front of it are still for sitting)
   coffee: { area: "public", search: "under the coffee table", at: () => [TV.x, 0.22, TV.z - 1.8], r: 0.28 },
   tank: { area: "public", search: "under the toilet tank lid", at: () => [10.25, 0.82, 32.79], r: 0.2 },
   "bin:restroom": { area: "public", bin: "restroom" },
@@ -12630,7 +12630,7 @@ function pickupMesh(p) {
     const m = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
     for (const s of [-1, 1]) { const h = new THREE.Mesh(new THREE.PlaneGeometry(0.078, 0.066), m); h.position.set(s * 0.037, 0.006, 0); h.rotation.set(-Math.PI / 2, s * 0.25, 0); g.add(h); }
   }
-  const hit = new THREE.Mesh(new THREE.SphereGeometry(p.r || (p.mesh === "bill" ? 0.14 : 0.09), 8, 6), new THREE.MeshBasicMaterial()); hit.visible = false; hit.userData.pickup = p; g.add(hit);   // (a bigger target than the thing itself)
+  const hit = new THREE.Mesh(p.box ? new THREE.BoxGeometry(...p.box) : new THREE.SphereGeometry(p.r || (p.mesh === "bill" ? 0.14 : 0.09), 8, 6), new THREE.MeshBasicMaterial()); hit.visible = false; hit.userData.pickup = p; g.add(hit);   // (a bigger target than the thing itself)
   const [x, y, z] = p.at(); g.position.set(x, y, z); if (p.ry) g.rotation.y = p.ry;
   scene.add(g); aimables.push(hit); pickupMeshes.push({ p, g, hit });
 }
