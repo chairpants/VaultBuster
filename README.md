@@ -125,6 +125,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `store/lobby.js` | Lobby and back-wall dressing, the entry lane and gates, the snack center |
 | `store/shelves.js` | Posters, the cover atlases, the shelves, the store layout |
 | `store/lounge.js` | The TV lounge, picture settings, the screensaver, the light switches |
+| `store/clock.js` | The clock: the shift's hours going by, the HUD's top line, the light switches' rockers |
 | `store/shift.js` | The shift, the log, day goals, reputation, upgrades, tonight's feature |
 | `exterior/sky.js` | Weather and the sky |
 | `exterior/trees.js` | The trees outside, swaying, through the seasons |
