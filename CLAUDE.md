@@ -25,7 +25,7 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Employee counter, returns, back cabinet, entry lane and gates, trash receptacle, snack center (cooler, popcorn machine, snack rack) | `store/lobby.js` |
 | Posters, cover atlases, shelves and the store layout (walls, kids, center, Staff Picks, MonsterVision, standee, candy aisle) | `store/shelves.js` |
 | TV lounge (couch, TV, lamps), the light switches | `store/lounge.js` |
-| The roof and everything on it (AC units, dish, sign, lawn chairs, projector), golf | `store/roof.js` |
+| The roof and everything on it (AC units, dish, sign, lawn chairs, projector), golf, and at the end of the file how it all works (`roofClimb`, `roofTick`, `cineTick`) | `store/roof.js` |
 | Tony's building from outside (brick, awning, glass front), Tony's roof | `tonys/outside.js` |
 | Inside Tony's: dining room, counter, kitchen | `tonys/inside.js` |
 | Tony's arcade cabinets (Space Invaders, Asteroids) | `tonys/arcade.js` |
