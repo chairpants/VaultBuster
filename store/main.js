@@ -407,7 +407,7 @@ renderer.setAnimationLoop(() => {
     : tvMenu
     ? "Click to choose · wheel adjusts a slider · right-click closes"
     : seated
-    ? (seatAt?.toilet ? "Press E to stand up (and pull your pants up)" : "Press E to stand up · right-click the screen for picture settings")
+    ? (seatAt?.toilet ? "Press E to stand up (and pull your pants up)" : seatAt?.roof ? "Press E to stand up" : "Press E to stand up · right-click the screen for picture settings")
     : aimCouch
       ? (aimSeatObj?.toilet ? "Press E to sit on the toilet" : aimSeatObj ? "Press E to take a seat" : "Press E to sit on the couch")
       : held
