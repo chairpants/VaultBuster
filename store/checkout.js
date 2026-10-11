@@ -350,11 +350,12 @@ function pickHover() {
   aimGolf = false; aimCine = null;
   if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down), the golf mat and the movie setup are all there is
     highlight.visible = false; const tip = $("hoverTip");
-    if (golf.on) { tip.style.display = "none"; return; }
-    const C = roof.cine, a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts, C.vcr, C.proj), false)[0], near = !!a && a.distance < 2.4;
+    if (golf.on || seated) { tip.style.display = "none"; return; }   // (sat in a lawn chair: E stands you up, nothing else)
+    const C = roof.cine, a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts, C.vcr, C.proj, roof.seats), false)[0], near = !!a && a.distance < 2.4;
     aimGolf = near && golf.parts.includes(a.object);
     aimCine = near && C.vcr.includes(a.object) ? "vcr" : near && C.proj.includes(a.object) ? "proj" : null;
-    aimRoofLadder = near && !aimGolf && !aimCine;
+    aimCouch = near && !!a.object.userData.sit; if (aimCouch) aimSeatObj = a.object.userData.seatPos;   // a lawn chair (its hint is the couch's: see tvHint)
+    aimRoofLadder = near && !aimGolf && !aimCine && !aimCouch;
     tip.innerHTML = aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off")
       : aimCine === "proj" ? `E — turn the projector ${C.on ? "off" : "on"}`
       : aimCine === "vcr" ? (held ? `E — put ${held.title} in` : playing ? `E — eject${C.on ? "" : "<div class=\"cat\">the projector's off</div>"}` : "The VCR<div class=\"cat\">bring a tape up</div>") : "";

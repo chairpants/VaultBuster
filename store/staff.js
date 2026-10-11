@@ -488,9 +488,9 @@ function tvLevel() {                              // RMS of the TV's audio right
   let sum = 0; for (const v of tvAudio.buf) sum += v * v;
   return Math.sqrt(sum / tvAudio.buf.length);
 }
-const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated && !seatAt?.toilet;   // what brings her over (the couch, not the restroom)
+const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated && !seatAt?.toilet && !seatAt?.roof;   // what brings her over (the couch, not the restroom)
 const inLounge = () => Math.hypot(player.x - TV.x, player.z - (TV.z - 2.5)) < 5.5;
-const empKeepWatching = () => frontLock.locked && !custs.length && emp.task === "register" && ((seated && !seatAt?.toilet) || inLounge()) && !gateAlarm.on;   // what keeps her there (the alarm gets her up)
+const empKeepWatching = () => frontLock.locked && !custs.length && emp.task === "register" && ((seated && !seatAt?.toilet && !seatAt?.roof) || inLounge()) && !gateAlarm.on;   // what keeps her there (the alarm gets her up)
 function empWatch(dt) {                           // on the couch: pick a face from the sound
   const c = emp.c, w = emp.watch, lvl = tvLevel();
   w.cool -= dt;
