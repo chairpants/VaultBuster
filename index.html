@@ -375,16 +375,16 @@
 <script src="monstervision.js"></script>  <!-- window.VAULT_MV: splits the MonsterVision tape into a tape per film -->
 <script src="mv-covers.js"></script>    <!-- built by fetch-mv-covers.mjs: those films' TMDB posters -->
 <script src="cutout.js"></script>       <!-- cutout.png, embedded: the Dracula standee -->    <!-- built by fetch-covers.mjs: [year, TMDB votes] per title -->
-<script src="customers.js"></script>  <!-- window.VaultCustomers: TV-head customers, built from store.js -->
-<script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store.js -->
-<script src="pos.js"></script>     <!-- window.createPOS(); the register's terminal, created from store.js -->
-<script src="trees.js"></script>     <!-- window.VaultTrees: the trees outside (instanced), swaying, through the seasons; built from store.js -->
+<script src="customers.js"></script>  <!-- window.VaultCustomers: TV-head customers, built from store/ -->
+<script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store/ -->
+<script src="pos.js"></script>     <!-- window.createPOS(); the register's terminal, created from store/ -->
+<script src="exterior/trees.js"></script>     <!-- window.VaultTrees: the trees outside (instanced), swaying, through the seasons; built from store/ -->
 <script src="ambience.js"></script>  <!-- window.VaultAmbience: the store's sound (hum, room tone, traffic, chime, footsteps), modelled not recorded -->
 <script src="touch.js"></script>     <!-- touchscreen controls on phones / tablets (?touch=1 to force) -->
 <script type="module">
   // file:// can't load local files as ES modules, so: import three from the CDN
-  // here (https CORS is fine), expose the globals, then load store.js as a
-  // classic script — which file:// happily allows.
+  // here (https CORS is fine), expose the globals, then load the game (store/, tonys/, exterior/:
+  // one shared scope, in this order) as classic scripts — which file:// happily allows.
   import * as THREE from "three";
   import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
   import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
@@ -393,8 +393,16 @@
   window.THREE = THREE; window.mergeGeometries = mergeGeometries;
   window.UnrealBloomPass = UnrealBloomPass; window.ShaderPass = ShaderPass;
   window.OutputPass = OutputPass;
-  const s = document.createElement("script"); s.src = "store.js";
-  document.body.appendChild(s);
+  // Keys and the mouse wait for the last file: a handler from one file can't run before the files after it are in.
+  const INPUT = ["keydown", "keyup", "mousemove", "mousedown", "mouseup", "click", "wheel", "contextmenu"], hold = e => e.stopImmediatePropagation();
+  for (const t of INPUT) addEventListener(t, hold, true);
+  for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/lot", "exterior/grounds", "store/lobby", "store/shelves", "store/lounge",
+    "store/shift", "exterior/sky", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/inside", "tonys/arcade",
+    "tonys/outside", "store/roof", "store/chores", "store/tv", "store/title", "store/customer-mode", "store/main"]) {
+    const s = document.createElement("script"); s.src = `${f}.js`; s.async = false;   // async off: run in order, not as they arrive
+    if (f === "store/main") s.onload = s.onerror = () => { for (const t of INPUT) removeEventListener(t, hold, true); };
+    document.body.appendChild(s);
+  }
 </script>
 </body>
 </html>
