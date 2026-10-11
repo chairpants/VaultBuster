@@ -303,7 +303,7 @@ function cmFade(then) {                          // a blink to black while you'r
   const f = $("fade"); f.style.opacity = 1;
   setTimeout(() => { then(); gateLastZ = player.z; cm.inside = player.z > 0.05; setTimeout(() => { f.style.opacity = 0; }, 250); }, 450);
 }
-function cmPutAt(p) { if (seated) seated = false; Object.assign(player, { x: p.x, z: p.z, yaw: p.yaw, pitch: 0 }); keys.clear(); }
+function cmPutAt(p) { if (seated) seated = false; Object.assign(player, { x: p.x, z: p.z, yaw: p.yaw, pitch: 0, onRoof: false }); keys.clear(); }   // (down on the ground, wherever you were)
 function cmCaught(why, by) {                     // why: "staff" (somewhere you shouldn't be) | "theft"
   const name = by?.first || "The clerk", taken = cmUnpaid();
   cmTermClose();
@@ -1011,6 +1011,7 @@ function cmTick(dt) {
   // the end of the night: they want you out; once you're out (or they've walked you out), home
   if (afterClose()) {
     if (!inside) cmNextDay();
+    else if (player.onRoof) {}                    // up top nobody knows you're there, so nobody comes for you: the night's yours till you climb down
     else if ((cm.closeT += dt) > 25) { toast("They walk you to the door. Good night!", true); cmFade(() => cmPutAt(CM_LOT)); cm.closeT = -99; }
     else if (cm.closeT > 0 && cm.closeT - dt <= 0) toast(`${staff.find(e => e.c)?.first || "The clerk"}: "We're closed! Time to head out."`);
   }
