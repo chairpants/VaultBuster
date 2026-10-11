@@ -135,7 +135,7 @@ function onE() {
   if (aimGolf) { golfStart(); return; }
   if (aimCine === "proj") { roof.cine.on = !roof.cine.on; return; }
   if (aimCine === "vcr") { vcrUse(); if (playing) roof.cine.on = true; return; }   // (a tape in: the projector comes on with it)
-  if (player.onRoof) return;
+  if (player.onRoof && !seated && !aimCouch) return;   // (up there, past this: only the lawn chairs)
   if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
   if (aimStool && !stool.by) { stoolSit(); return; }

@@ -6,7 +6,7 @@
 // level: its own colliders (the parapets and the kit), the inside of the store isn't drawn, the camera's on the deck.
 // And now that you can see it from up there, the world around the building: the stucco outside of its walls, a
 // paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
-const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null };
+const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [] };
 scene.add(roof.g); roof.g.visible = false;
 const ROOF_LADDER = { x: 12.2, z: 28.28 };                 // the rungs' line: against the closet's south wall, beside the chute
 const ROOF_HATCH = { x0: 11.88, x1: 12.48, z0: 28.12, z1: 28.87 };
@@ -391,6 +391,9 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     for (let k = 0; k < 6; k++) bx(0.075, 0.004, 0.44, web[k % 2], -0.22 + k * 0.088, 0.37, 0, c);   // seat webbing, front to back, sagging a bit
     for (let k = 0; k < 6; k++) { const b = bx(0.54, 0.004, 0.07, web[(k + 1) % 2], 0, 0.36, -0.17 + k * 0.07, c); }
     for (let k = 0; k < 6; k++) { const t = (k + 0.5) / 6, b = bx(0.54, 0.07, 0.004, web[k % 2], 0, 0.42 + t * 0.5, 0.235 + t * 0.14, c); b.rotation.x = -0.29; }
+    // to sit in: E on it (see onE). The sitter faces the way the chair does (-z, its back to +z), hips down in the sag of the webbing
+    const hit = bx(0.58, 0.62, 0.56, new THREE.MeshBasicMaterial({ visible: false }), 0, 0.5, 0.06, c);
+    hit.userData.sit = true; hit.userData.seatPos = { x, y: Y, z, ry: ry + Math.PI, hipY: 0.43, roof: true }; roof.seats.push(hit);
     };
     lawnChair(9.9, 26.4, 0.55, [lam(0x2f8a58), lam(0xe8e4d4)]);
     // the can, by the right arm: an old coffee can, lid long gone, half full of sand gone grey with ash, the butts
