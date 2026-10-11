@@ -111,12 +111,37 @@ Three save files, like an old cartridge: pick one to **play**, **copy** or **del
 To run it locally, open `index.html` in a browser. It works straight from `file://` with no server; you just need an internet connection, because three.js loads from a CDN.
 
 
-Everything runs as plain `<script>` files loaded in order. There are no ES modules, so the page works from `file://`. The one exception is a small inline module in `index.html` that imports three.js and its post-processing add-ons from the CDN, puts them on `window`, and then loads `store.js`.
+Everything runs as plain `<script>` files loaded in order. There are no ES modules, so the page works from `file://`. The one exception is a small inline module in `index.html` that imports three.js and its post-processing add-ons from the CDN, puts them on `window`, and then loads the game itself, the files in `store/` (VaultBuster itself, and the game's rules), `tonys/` (the pizza place next door) and `exterior/` (the lot, the grounds, the sky), in order. They are one program cut into sections, not modules: they share one scope, and the order (the list in `index.html`) matters, because each file runs as it loads and can only use what earlier files have already made.
 
 | File | What it is |
 |---|---|
 | `index.html` | The page, the HUD, and the three.js bootstrap |
-| `store.js` | The whole game: the building, shelving and packing, the lounge, lighting, the exterior, and the TVs |
+| `store/core.js` | Constants and the palette, the renderer, the TV-light shader, bloom, rewinding, canvas-texture helpers |
+| `store/shell.js` | The building: `box` / `solid` / `wall`, doors, the outer walls, the back hall |
+| `store/backrooms.js` | Janitor's closet, break room, restroom |
+| `store/theater.js` | The theater lobby and the theater |
+| `exterior/lot.js` | The lot, the road, the street outside |
+| `exterior/grounds.js` | Around the building: the grass, the paved apron, the dumpster, the cardboard bed out back |
+| `store/lobby.js` | Lobby and back-wall dressing, the entry lane and gates, the snack center |
+| `store/shelves.js` | Posters, the cover atlases, the shelves, the store layout |
+| `store/lounge.js` | The TV lounge, picture settings, the screensaver, the light switches |
+| `store/shift.js` | The shift, the log, day goals, reputation, upgrades, tonight's feature |
+| `exterior/sky.js` | Weather and the sky |
+| `exterior/trees.js` | The trees outside, swaying, through the seasons |
+| `store/player.js` | The player, the stool, picking things up, the standee |
+| `store/shoppers.js` | Customers: who they are, what they want, how they get around |
+| `store/staff.js` | Dana and the staff: skills, the job board, hiring, restocking |
+| `store/checkout.js` | Checkout and the receipt, eating and drinking, snack and drink stock |
+| `store/phone.js` | The phone, post-its, the calendar, the corkboard, holiday decorations |
+| `tonys/inside.js` | Inside Tony's: the dining room, the counter, the kitchen |
+| `tonys/arcade.js` | Its two arcade cabinets, Space Invaders and Asteroids |
+| `tonys/outside.js` | Tony's building from outside, and its roof |
+| `store/roof.js` | The roof and what's on it, golf |
+| `store/chores.js` | The restroom's working parts, counter gear, misshelved tapes, messes, the ladder, trash, popcorn, inventory |
+| `store/tv.js` | Holding a tape up, the store TV |
+| `store/title.js` | The title screen and pointer lock, the register hookup, the gate alarm, clocking out |
+| `store/customer-mode.js` | Customer mode |
+| `store/main.js` | Save and restore, the main loop, room culling, loading |
 | `couch.js` | The procedurally built parlor sofa |
 | `pos.js` | The register's DOS-style POS terminal |
 | `ambience.js` | The store's ambient sound, modelled from the physics of each source rather than recorded: ballast hum, room tone, Doppler-shifted traffic through the glass, the entry chime, footsteps, latches and hinges, swing doors, the cooler's door and compressor |
