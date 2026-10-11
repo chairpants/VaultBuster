@@ -6,11 +6,18 @@
 // level: its own colliders (the parapets and the kit), the inside of the store isn't drawn, the camera's on the deck.
 // And now that you can see it from up there, the world around the building: the stucco outside of its walls, a
 // paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
-const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [] };
+const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
 scene.add(roof.g); roof.g.visible = false;
 const ROOF_LADDER = { x: 12.2, z: 28.28 };                 // the rungs' line: against the closet's south wall, beside the chute
 const ROOF_HATCH = { x0: 11.88, x1: 12.48, z0: 28.12, z1: 28.87 };
 const ROOF_UP = { x: 11.4, z: 29.3 }, ROOF_DOWN = { x: 11.68, z: 28.8 };   // where you step off at the top / at the bottom
+// the ladder out back, on the theater's east wall by the cardboard bed. Its bottom half rides latched up out of reach of
+// the ground till somebody on the roof kicks it down (once: it stays down, and it's saved); then it's a way up from outside
+const BACK_LADDER = { x: 1.62, z: 41.3, mid: 2.3, raise: 2.0, up: { x: 0.55, z: 41.3 }, down: { x: 2.15, z: 41.3 } };   // x: the rungs' line, 14 cm off the wall's stucco (which is 15 cm outside the roof's edge); up / down: where you step off
+const CLIMBS = {                                // where the camera goes on each ladder: the rungs' line (stood off it), which way you face, where you step off
+  hatch: { x: ROOF_LADDER.x, z: ROOF_LADDER.z + 0.42, yaw: 0, up: ROOF_UP, down: ROOF_DOWN },
+  back: { x: BACK_LADDER.x + 0.42, z: BACK_LADDER.z, yaw: Math.PI / 2, up: BACK_LADDER.up, down: BACK_LADDER.down },
+};
 const onDeck = (x, z) => ROOF.rects.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
 const playerFloor = () => player.onRoof ? ROOF.y : floorHeightAt(player.x, player.z);
 const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === "carried" || boxCarry.length || bagCarry.length || toolHeld || cmove.item;
@@ -556,9 +563,31 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     const kick = put(new THREE.SphereGeometry(0.2, 16, 10), lam(0xa8302c), -5.4, Y + 0.06, 46.1); kick.scale.y = 0.32;
   }
 
+  // ---- the back ladder (see BACK_LADDER): galvanised like the hatch's, its rails carried up over the parapet. The top
+  // half's fixed to the wall; the bottom half slides in it, and sits pulled up till it's kicked loose ----
+  {
+    const { x: lx, z: lz, mid, raise } = BACK_LADDER, WX = 1.48, top = Y + PH + 1.0, OVER = 0.2, fixed = new THREE.Group(), slide = new THREE.Group();
+    scene.add(fixed, slide); slide.position.y = raise;
+    const rung = (y, len, par, x = lx) => { put(new THREE.CylinderGeometry(0.016, 0.016, len, 8), galv, x, y, lz, par).rotation.x = Math.PI / 2; };
+    for (const s of [-1, 1]) {
+      bx(0.016, top - mid, 0.05, galv, lx, (mid + top) / 2, lz + s * 0.22, fixed);
+      for (const y of [2.5, 3.7, Y + PH - 0.1]) bx(lx - WX, 0.03, 0.04, galv, (lx + WX) / 2, y, lz + s * 0.22, fixed);   // wall brackets
+      put(new THREE.TorusGeometry(OVER, 0.016, 6, 14, Math.PI), galv, lx - OVER, top, lz + s * 0.22, fixed);            // the rails curl over at the top...
+      bx(0.016, 0.95, 0.05, galv, lx - 2 * OVER, Y + PH + 0.525, lz + s * 0.22, fixed);                                         // ...and come down onto the parapet
+      bx(0.016, mid + 0.1, 0.05, galv, lx + 0.03, (mid + 0.1) / 2 + 0.05, lz + s * 0.26, slide);                         // the sliding half: a little wider, outside the fixed rails
+      bx(0.05, 0.06, 0.03, dark, lx + 0.015, mid + 0.02, lz + s * 0.24, slide);                                          // its guide shoes
+    }
+    for (let y = mid + 0.3; y < Y + PH; y += 0.3) rung(y, 0.44, fixed);
+    for (let y = 0.3; y < mid; y += 0.3) rung(y, 0.52, slide, lx + 0.03);
+    ext(fixed); ext(slide);
+    // what you aim at (the ladder itself is on the exterior layer, which the aiming ray doesn't see): the rails over the parapet from up top, the foot from the ground
+    const hit = (w, h, d, x, y) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ visible: false })); o.position.set(x, y, lz); scene.add(o); return o; };
+    roof.back = { down: false, v: 0, slide, top: hit(0.6, 1.2, 0.6, lx - OVER, Y + PH + 0.5), foot: hit(0.3, 2.7, 0.6, lx, 1.45),
+      col: { x0: WX, x1: lx + 0.06, z0: lz - 0.28, z1: lz + 0.28, y1: 3 }, at: new THREE.Vector3(lx, 1, lz) };   // col: in the way once it's down
+  }
   tonyRoof({ lam, phong, put, bx, cy, ext, V, alum, gravel, coping, shade });   // Tony's roof, seen from ours (tonys/outside.js)
 }
-let aimRoofLadder = false, aimGolf = false, aimCine = null;   // aimCine: "vcr" | "proj", the movie setup up top
+let aimRoofLadder = false, aimGolf = false, aimCine = null, aimBack = false;   // aimCine: "vcr" | "proj", the movie setup up top
 // ---------------- golf on the roof ----------------
 // A chipped square of fake turf out on the deck with a tee in it and a club lying beside it. E on either: golf. You're
 // at address (the camera behind the ball, looking down the line); A/D walk you round the ball to aim, W/S slide the club
@@ -876,10 +905,23 @@ function golfHud() {
   $("golfInfo").innerHTML = golf.st === "idle" ? `A / D — aim · W / S — strike: <b>${face}</b><br>Hold click — power · let go · click on the mark<br>E / right-click — done`
     : golf.st === "power" ? "Let go at the power you want" : golf.st === "back" ? "Click on the mark!" : "";
 }
-function roofClimb(dir) {                          // up (1) or down (-1) the closet ladder
+function roofClimb(dir, L = CLIMBS.hatch) {         // up (1) or down (-1) a ladder: the closet's, unless it's the one out back
   if (dir > 0 && roofHandsFull()) { toast("Hands full: you need them both for the ladder"); return; }
-  roof.climb = { dir, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
-  player.yaw = 0;                                   // facing the rungs (south), up or down
+  roof.climb = { dir, L, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
+  player.yaw = L.yaw;                               // facing the rungs, up or down
+}
+function backLadderDrop(quiet) {                   // kicked loose (quiet: already down, from a save)
+  const B = roof.back; if (B.down) return;
+  B.down = true; B.v = 0; colliders.push(B.col);
+  if (quiet) { B.slide.position.y = 0; return; }
+  golfSnd("clank", B.at, 2.5);
+  toast("You kick the latch loose. The ladder rattles down: a way back up from outside", true);
+  if (CUSTOMER) cmLog("Kicked the back ladder down off the roof. That's a way up from outside now", "good");
+}
+function backLadderE() {                           // E on it: from up top, kick it down, then climb down; from the ground, up (once it's down)
+  const B = roof.back;
+  if (player.onRoof) { if (B.down) roofClimb(-1, CLIMBS.back); else backLadderDrop(); }
+  else if (B.down && B.slide.position.y === 0) roofClimb(1, CLIMBS.back);
 }
 { const under = floorHeightAt; floorHeightAt = (x, z) => pavedAt(x, z) ? LOT.y : under(x, z); }   // (the lot and the road sit a curb lower than the walk)
 const PUDDLE_DARK = new THREE.Color(0x24282e), PUDDLE_GREY = new THREE.Color(0xb4b8bc);   // (a puddle: the sky, darkened by the water and what's under it)
@@ -937,21 +979,23 @@ function roofTick(dt) {
     const lv = tod.level; S.sm.uniforms.uCol.value.setRGB(0.18 + 0.62 * lv, 0.18 + 0.61 * lv, 0.19 + 0.6 * lv);
     S.sm.uniforms.uScale.value = renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
   }
+  { const B = R.back, s = B.slide.position;      // the back ladder coming down: it falls, and rings when it hits its stops
+    if (B.down && s.y > 0) { B.v += 14 * dt; s.y = Math.max(0, s.y - B.v * dt); if (!s.y) { golfSnd("clank", B.at, 3); golfSnd("thud", B.at, 1.5); } } }
   if (!R.climb) return;
   const c = R.climb, DUR = 3.4; c.t = Math.min(DUR, c.t + dt);
   const k = c.t / DUR, e = k * k * (3 - 2 * k), step = 0.04 * Math.sin(k * Math.PI * 12);   // a rung at a time
-  const lx = ROOF_LADDER.x, lz = ROOF_LADDER.z + 0.42, yLo = 1.65, yHi = ROOF.y + 1.65;
+  const { x: lx, z: lz, up, down } = c.L, yLo = 1.65, yHi = ROOF.y + 1.65;
   if (c.dir > 0) {                                   // walk the step to the foot, then up and out
     const a = Math.min(1, k * 5); R.cam.set(c.x0 + (lx - c.x0) * a, yLo + (yHi + 0.15 - yLo) * e + step, c.z0 + (lz - c.z0) * a);
-    if (k > 0.92) R.cam.lerp(new THREE.Vector3(ROOF_UP.x, yHi, ROOF_UP.z), (k - 0.92) / 0.08);
+    if (k > 0.92) R.cam.lerp(new THREE.Vector3(up.x, yHi, up.z), (k - 0.92) / 0.08);
   } else {
     const a = Math.min(1, k * 5); R.cam.set(c.x0 + (lx - c.x0) * a, yHi + 0.15 + (yLo - yHi - 0.15) * e + step, c.z0 + (lz - c.z0) * a);
-    if (k > 0.92) R.cam.lerp(new THREE.Vector3(ROOF_DOWN.x, yLo, ROOF_DOWN.z), (k - 0.92) / 0.08);
+    if (k > 0.92) R.cam.lerp(new THREE.Vector3(down.x, yLo, down.z), (k - 0.92) / 0.08);
   }
   if (c.t >= DUR) {
     R.climb = null; player.onRoof = c.dir > 0;
-    Object.assign(player, c.dir > 0 ? ROOF_UP : ROOF_DOWN);
-    if (player.onRoof) toast("On the roof · E at the hatch to climb back down", true);
+    Object.assign(player, c.dir > 0 ? up : down);
+    if (player.onRoof && c.L === CLIMBS.hatch) toast("On the roof · E at the hatch to climb back down", true);
   }
 }
 

@@ -35,6 +35,12 @@ check("settings save (sensitivity)", (await ev(() => JSON.parse(localStorage.get
 console.log("\nsandbox: the counter");
 await freshStore("sandbox");
 check("in the store, no errors", errors.length === 0, errors[0]);
+check("the back ladder: out of reach from the ground till it's kicked down from the roof, then a way up", await ev(() => {
+  const B = __t.roof.back, P = __t.player, was = { x: P.x, z: P.z };
+  P.onRoof = false; __t.backLadderE(); const no = !__t.roof.climb && !B.down;
+  P.onRoof = true; __t.backLadderE(); const down = B.down; P.onRoof = false;
+  B.slide.position.y = 0; __t.backLadderE(); const up = !!__t.roof.climb; __t.roof.climb = null; Object.assign(P, was);
+  return no && down && up; }));
 const co = await ev(async () => {
   __t.shift.h = 13; __t.setFrontLock(true); for (const e of __t.staff) e.state = "test"; for (const k of [...__t.custs]) __t.custGone(k);
   __t.custSpawn(); const k = __t.custs.at(-1), tape = __t.catalog.find(t => !t.offShelf && !t.lost && t.pos);

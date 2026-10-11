@@ -132,6 +132,7 @@ function onE() {
   if (CUSTOMER && !seated && !player.onRoof && cmE()) return;   // as a customer: the staff, the locked doors, the register (see cmE)
   if (golf.on) { if (golf.st === "idle") golfEnd(); return; }
   if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
+  if (aimBack) { backLadderE(); return; }           // the ladder out back: kicked down from the roof, then climbed either way
   if (aimGolf) { golfStart(); return; }
   if (aimCine === "proj") { roof.cine.on = !roof.cine.on; return; }
   if (aimCine === "vcr") { vcrUse(); if (playing) roof.cine.on = true; return; }   // (a tape in: the projector comes on with it)
