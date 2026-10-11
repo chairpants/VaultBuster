@@ -346,21 +346,31 @@ function pickHover() {
     return;
   }
   raycaster.setFromCamera(aimNDC, camera);
-  aimRoofLadder = false;
+  aimRoofLadder = false; aimBack = false;
   aimGolf = false; aimCine = null;
   if (roof.climb || player.onRoof) {          // on the closet ladder, or up top: the hatch (to go back down), the golf mat and the movie setup are all there is
     highlight.visible = false; const tip = $("hoverTip");
     if (golf.on || seated) { tip.style.display = "none"; return; }   // (sat in a lawn chair: E stands you up, nothing else)
-    const C = roof.cine, a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts, C.vcr, C.proj, roof.seats), false)[0], near = !!a && a.distance < 2.4;
+    const C = roof.cine, a = !roof.climb && raycaster.intersectObjects(roof.ladderParts.concat(roof.lid.children, golf.parts, C.vcr, C.proj, roof.seats, roof.back.top), false)[0], near = !!a && a.distance < 2.4;
     aimGolf = near && golf.parts.includes(a.object);
     aimCine = near && C.vcr.includes(a.object) ? "vcr" : near && C.proj.includes(a.object) ? "proj" : null;
     aimCouch = near && !!a.object.userData.sit; if (aimCouch) aimSeatObj = a.object.userData.seatPos;   // a lawn chair (its hint is the couch's: see tvHint)
-    aimRoofLadder = near && !aimGolf && !aimCine && !aimCouch;
-    tip.innerHTML = aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off")
+    aimBack = near && a.object === roof.back.top;
+    aimRoofLadder = near && !aimGolf && !aimCine && !aimCouch && !aimBack;
+    tip.innerHTML = aimBack ? (roof.back.down ? "E — climb down the back ladder" : "E — kick the ladder down<div class=\"cat\">it's latched up, out of reach from the ground</div>")
+      : aimRoofLadder ? "E — climb back down" : aimGolf ? (roofHandsFull() ? "The golf mat<div class=\"cat\">you'll need your hands free</div>" : "E — tee off")
       : aimCine === "proj" ? `E — turn the projector ${C.on ? "off" : "on"}`
       : aimCine === "vcr" ? (held ? `E — put ${held.title} in` : playing ? `E — eject${C.on ? "" : "<div class=\"cat\">the projector's off</div>"}` : "The VCR<div class=\"cat\">bring a tape up</div>") : "";
     tip.style.display = tip.innerHTML ? "block" : "none";
     return;
+  }
+  {                                          // the ladder out back, from the ground: up it, if somebody's kicked it down
+    const a = raycaster.intersectObject(roof.back.foot, false)[0], wall = a && raycaster.intersectObjects(aimBlockers, false)[0];
+    if (a && a.distance < 2.6 && !(wall && wall.distance < a.distance)) {
+      aimBack = true; highlight.visible = false;
+      const tip = $("hoverTip"); tip.innerHTML = !roof.back.down ? "A ladder to the roof<div class=\"cat\">pulled up, out of reach</div>" : roofHandsFull() ? "The back ladder<div class=\"cat\">you'll need both hands free</div>" : "E — climb up to the roof"; tip.style.display = "block";
+      return;
+    }
   }
   {                                          // the fixed ladder in the closet, up to the roof
     const a = raycaster.intersectObjects(roof.ladderParts, false)[0], wall = a && raycaster.intersectObjects(aimBlockers, false)[0];

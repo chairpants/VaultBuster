@@ -51,6 +51,7 @@ function saveState() {
     playing: playing && { key: copyKey(playing.tape), idx: playing.idx }, payLedger,
     cutout: { x: cutout.x, z: cutout.z, ry: cutout.ry },   // where it was last set down (one still in your arms goes back there)
     stool: { x: stool.x, z: stool.z },                      // likewise
+    backLadder: roof.back.down || undefined,       // kicked down off the roof: it stays down
     ladder: ladder.state === "placed" ? { x: ladder.x, z: ladder.z, ry: ladder.ry } : ladder.state === "carried" ? ladder.last : null,   // null: back in the closet
     wound: Object.fromEntries(catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => !isRewound(c)).map(c => [copyKey(c), c.tapePos])),
   };
@@ -69,6 +70,7 @@ function loadState(S) {
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
     if (S.cutout) { Object.assign(cutout, S.cutout); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box); cutout.g?.position.set(cutout.x, 0, cutout.z); cutout.g?.rotation.set(0, cutout.ry, 0); }
+    if (S.backLadder) backLadderDrop(true);
     if (S.ladder) { colliders.splice(colliders.indexOf(ladder.stowBox), 1); Object.assign(ladder, S.ladder, { state: "placed" }); colliders.push(ladderFit(ladder.x, ladder.z, ladder.ry, ladder.box)); ladderPose(); }
     if (S.stool) { Object.assign(stool, S.stool); stoolFit(stool.x, stool.z, stool.box); stool.g.position.set(stool.x, 0, stool.z); }
     payLedger.push(...(S.payLedger || []));
@@ -418,7 +420,7 @@ renderer.setAnimationLoop(() => {
   ambTick(dt);
   if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
-window.__t = { arcade, arcadeStart, arcadeStop, siKey, siTick, asTick, LOT, cmSleep, roomAt, lotCars: () => carsOut?.all(), tony, tonyE, TONY_IN, cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+window.__t = { arcade, arcadeStart, arcadeStop, siKey, siTick, asTick, LOT, cmSleep, roomAt, lotCars: () => carsOut?.all(), tony, tonyE, TONY_IN, cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, backLadderE, backLadderDrop, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
   catalog, pickup, onE, player,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
