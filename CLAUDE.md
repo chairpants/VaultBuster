@@ -43,6 +43,7 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Customers: who they are, what they want, how they walk; people and cars going by out front | `store/shoppers.js` |
 | Dana and the staff, skills, job board, hiring | `store/staff.js` |
 | The shift, log, day goals, reputation, upgrades | `store/shift.js` |
+| The clock ticking (`shiftTick`), skipping an hour, the HUD's top line, flipping light switches | `store/clock.js` |
 | Restroom fixtures working, moving counter gear, messes, the ladder, trash, popcorn, inventory | `store/chores.js` |
 | Title screen, pointer lock, gate alarm, clocking out | `store/title.js` |
 | Customer mode | `store/customer-mode.js` |

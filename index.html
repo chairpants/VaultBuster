@@ -397,7 +397,7 @@
   const INPUT = ["keydown", "keyup", "mousemove", "mousedown", "mouseup", "click", "wheel", "contextmenu"], hold = e => e.stopImmediatePropagation();
   for (const t of INPUT) addEventListener(t, hold, true);
   for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/lot", "exterior/grounds", "store/lobby", "store/shelves", "store/lounge",
-    "store/shift", "exterior/sky", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/inside", "tonys/arcade",
+    "store/shift", "exterior/sky", "store/clock", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/inside", "tonys/arcade",
     "tonys/outside", "store/roof", "store/chores", "store/tv", "store/title", "store/customer-mode", "store/main"]) {
     const s = document.createElement("script"); s.src = `${f}.js`; s.async = false;   // async off: run in order, not as they arrive
     if (f === "store/main") s.onload = s.onerror = () => { for (const t of INPUT) removeEventListener(t, hold, true); };
