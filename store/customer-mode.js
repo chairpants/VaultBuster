@@ -906,8 +906,9 @@ function cmCustTip(k) {                           // the hover tip on another cu
   return null;
 }
 
-// ---- the day: in off the lot just before ten; whoever opened unlocks at ten; at midnight they want you out,
-// and once you're out, the day's slip (what you spent, found, got away with) and home ----
+// ---- the day: in off the lot just before ten; whoever opened unlocks at ten; at midnight they want you out of the
+// store. The night's still yours out there (and up on the roof): the day ends when you sleep, on the cardboard bed
+// out back (see cmSleep), and then it's the day's slip (what you spent, found, got away with) and home ----
 function cmMorning() {
   shift.h = SHIFT.open - 0.25;
   cm.searched.clear();
@@ -915,7 +916,7 @@ function cmMorning() {
   if (cm.found.has("badge") && !cm.alertDone) { cm.alertDone = true; cm.alert = shift.day; cmLog("Overheard at the counter: Ray's badge went missing out of his locker. Everybody's keeping their eyes open today", "bad"); }
   if (cm.short && cm.short === shift.day - 1) { cm.alert = shift.day; cmLog("Overheard: the drawer came up twenty short last night. Everybody's watching the counter today", "bad"); }
   cm.wary.clear(); cm.nagged = 0; cm.pinTries = 0;
-  cm.today = 0; cm.heat = 0; cm.closeT = 0; cm.going = false; cm.day = cmDayStats(); cmTermClose();
+  cm.today = 0; cm.heat = 0; cm.closeT = 0; cm.nightHint = false; cm.going = false; cm.day = cmDayStats(); cmTermClose();
   for (const k of KEYED) { const d = k.door(); if (d?.open) toggleDoor(d); d && (d.byYou = false); }   // the back's locked up overnight
   cmPutAt(CM_LOT); gateLastZ = player.z; cm.inside = false;
   cmMoneyDrop(); cm.watchT = 0; cm.watched = false; cmFeature();
@@ -1008,9 +1009,9 @@ function cmTick(dt) {
   }
   // the roof: as far as it goes, for now
   if (player.onRoof && !cm.goal) { cm.goal = true; toast("You made it up on the roof. Nobody knows you're here", true); cmLog("Made it up on the roof", "good"); cm.day.items.push("THE ROOF"); }
-  // the end of the night: they want you out; once you're out (or they've walked you out), home
+  // the end of the night: they want you out of the store, and walk you out if you hang about. Out there it's still tonight till you sleep
   if (afterClose()) {
-    if (!inside) cmNextDay();
+    if (!inside) { cm.closeT = 0; if (!cm.nightHint) { cm.nightHint = true; toast("Closed for the night. The day's over when you sleep: there's a cardboard bed round the back", true); } }
     else if (player.onRoof) {}                    // up top nobody knows you're there, so nobody comes for you: the night's yours till you climb down
     else if ((cm.closeT += dt) > 25) { toast("They walk you to the door. Good night!", true); cmFade(() => cmPutAt(CM_LOT)); cm.closeT = -99; }
     else if (cm.closeT > 0 && cm.closeT - dt <= 0) toast(`${staff.find(e => e.c)?.first || "The clerk"}: "We're closed! Time to head out."`);
