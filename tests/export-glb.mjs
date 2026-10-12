@@ -125,6 +125,7 @@ if (dataOnly) {
           towels: tagged("towels").length ? { at: mid(tagged("towels")) } : null,
           sink: tagged("sink").length ? { at: mid(tagged("sink")), spout: bath.sinkAt.map(r) } : null,
           bed: { at: mid(tagged("bed")) },
+          rewinders: rewinders.filter(rw => rw.tapeMesh.parent?.visible !== false).map(rw => at(rw.tapeMesh)),   // the counter's rewinder(s): where the tape sits in each
           // Returns: the slot customers drop tapes into (from the lane), and the bin behind it you take them out of
           returns: { slot: at(returnSlotMesh), bin: mid(tagged("returns")) },
           // the counter's working parts: the register, the desensitizer pad, the receipt printer; where the clerk stands; what a tape rents for
