@@ -52,6 +52,15 @@ if (dataOnly) {
         switches: switchToggles.map(t => ({ zone: t.zone, p: t.mesh.getWorldPosition(new THREE.Vector3()).toArray().map(r) })),
         boxes: { floor: TVU.uFloorBox.value.toArray().map(r), boh: TVU.uBohBox.value.toArray().map(r), bohSplit: TVU.uBohSplit.value.toArray().map(r), lobby: TVU.uLobbyBox.value.toArray().map(r), theater: TVU.uThBox.value.toArray().map(r) },
         lamps: lamps.map(l => ({ p: l.getWorldPosition(new THREE.Vector3()).toArray().map(r), on: !!l.userData.on, color: l.color.getHex(), energy: LAMP_ON, range: l.distance })),
+        // the closet's bare bulb: its pull (what you aim at) and the glass (what lights up)
+        closet: (() => { const parts = aimables.filter(o => o.userData.lightZone === "closet" && o.isMesh), b = new THREE.Box3(); for (const o of parts) b.expandByObject(o);
+          const glass = parts.find(o => o.material === closetBulb.mat); return { at: b.getCenter(new THREE.Vector3()).toArray().map(r), bulb: glass ? glass.getWorldPosition(new THREE.Vector3()).toArray().map(r) : null }; })(),
+        // every light object in the scene (a few: the lobby's, the lot's and the street's lamps): on is its strength when it's lit
+        // (the lot's are dark by day, so now is 0), zone the switch it's on, if any
+        scene: (() => { const out = []; scene.traverse(o => { if (!o.isLight || o.isAmbientLight || o.isHemisphereLight || o.isDirectionalLight) return;
+          const p = o.getWorldPosition(new THREE.Vector3()), t = o.isSpotLight ? o.target.getWorldPosition(new THREE.Vector3()) : null;
+          out.push({ kind: o.isSpotLight ? "spot" : "point", p: p.toArray().map(r), to: t ? t.toArray().map(r) : null, color: o.color.getHex(), on: r(o.userData.on ?? o.intensity), now: r(o.intensity), zone: o.userData.zone || null, range: r(o.distance || 0), angle: o.isSpotLight ? r(o.angle) : null }); });
+          return out; })(),
       },
       // the loose and the small: where each is, and its numbers
       things: (() => {
@@ -66,6 +75,7 @@ if (dataOnly) {
           lock: { at: mid(tagged("frontLock")), turn: at(frontLock.turn), wall: box(frontWallBox) },
           flush: { at: mid(tagged("flush")), water: bath.water ? at(bath.water) : null, drop: 0.07 },
           towels: tagged("towels").length ? { at: mid(tagged("towels")) } : null,
+          sink: tagged("sink").length ? { at: mid(tagged("sink")), spout: bath.sinkAt.map(r) } : null,
           bed: { at: mid(tagged("bed")) },
           cine: { proj: mid(roof.cine.proj), vcr: mid(roof.cine.vcr),               // the movie on the roof: the projector, its VCR, the sheet (and the part of it the picture lands on)
             sheet: { p: at(sh), q: sh.getWorldQuaternion(new THREE.Quaternion()).toArray().map(r), w: r(sh.geometry.parameters.width), h: r(sh.geometry.parameters.height), img: [u.x, u.y, u.z, u.w].map(r) } },
