@@ -126,6 +126,8 @@ if (dataOnly) {
           sink: tagged("sink").length ? { at: mid(tagged("sink")), spout: bath.sinkAt.map(r) } : null,
           bed: { at: mid(tagged("bed")) },
           tools: Object.fromEntries(Object.entries(TOOLS).map(([id, t]) => [id, { label: t.label, home: at(t.home), size: ["width", "height", "depth"].map(k => t.home.geometry.parameters[k]) }])),   // the janitor's closet: where each tool lives (the box it's put back in)
+          ladder: (() => { const b = new THREE.Box3().setFromObject(ladder.g), c = b.getCenter(new THREE.Vector3()), z = b.getSize(new THREE.Vector3()); return { home: c.toArray().map(r), size: z.toArray().map(r) }; })(),   // the step ladder, folded against the closet wall
+          troffers: TROFFERS.map(t => [r(t.x), r(t.y), r(t.z)]),   // every ceiling light panel (a tile each: 1.8 x 0.9)
           bins: Object.values(trashBins).map(b => ({ id: b.id, name: b.name, cap: b.cap, x: b.x, z: b.z, rimY: b.rimY ?? 0.9, r: b.r ?? 0.25, towels: !!b.towels, stand: b.stand })),
           chute: { at: chute.at, stand: chute.stand },
           snacks: snackUnits().map(u => { const n = u.parent.getWorldDirection(new THREE.Vector3()); return { n: u.userData.snack.name, k: u.userData.snack.kind || "", at: at(u), f: [r(n.x), r(n.z)], lane: `${u.parent.uuid.slice(0, 8)}|${u.userData.snack.name}|${Math.round(u.position.x * 100)}`, lz: r(u.position.z), ly: r(u.position.y) }; }),   // every snack and drink on the racks: what it is (k: a drink's kind), where, which way its fixture faces, its lane (front and top are taken first)
