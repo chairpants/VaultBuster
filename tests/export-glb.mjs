@@ -7,11 +7,14 @@
 // every seat; the screens a tape plays on), for whatever's on the other end to work them the way the game does. And
 // beside it tapes.json: every copy on the shelves, where its slot is, and the episodes on it.
 //   node tests/export-glb.mjs --data ../VaultBusterGodot/data/interact.json
+// With --people first, a cast: two dozen customers as customers.js builds them (their jointed-blocks build, each joint
+// named, so whatever's on the other end can pose them), a sheet of each one's face in every mood, and who they are.
+//   node tests/export-glb.mjs --people ../VaultBusterGodot/people
 import { URL, launch } from "./browser.mjs";
 import { resolve } from "path";
 import { writeFileSync } from "fs";
 
-const dataOnly = process.argv[2] === "--data", out = resolve(process.argv[dataOnly ? 3 : 2] || (dataOnly ? "interact.json" : "vaultbuster.glb"));
+const dataOnly = process.argv[2] === "--data", people = process.argv[2] === "--people", out = resolve(process.argv[dataOnly || people ? 3 : 2] || (dataOnly ? "interact.json" : people ? "people" : "vaultbuster.glb"));
 const browser = await launch({ gpu: true });
 const page = await (await browser.newContext({ viewport: { width: 1000, height: 600 }, deviceScaleFactor: 1 })).newPage();
 const errors = []; page.on("pageerror", e => errors.push(String(e)));
@@ -22,6 +25,46 @@ await page.evaluate(() => { localStorage.clear(); localStorage.setItem("vaultbus
 await page.reload({ timeout: 300000 }); await ready();
 await page.click("#mmFiles .acts .go"); await page.waitForTimeout(4000);
 await page.evaluate(() => __t.stopSaving());
+
+if (people) {
+  const download = page.waitForEvent("download", { timeout: 600000 });
+  const cast = await page.evaluate(async () => {
+    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const MOODS = ["neutral", "browse", "happy", "love", "meh", "wait", "impatient", "angry", "alarm", "thanks", "shifty", "ask", "off", "on", "shock", "watch"];
+    const holder = new THREE.Scene(), who = [], random = Math.random;
+    for (let i = 0; i < 24; i++) {
+      const female = i % 2 === 1, o = { ...VaultCustomers.randomOutfit(seeded(1000 + i * 7), female), skinned: false };   // (skinned: false: the blocks, not the one stretched skin over them)
+      const c = VaultCustomers.build(o), R = c.rig, body = c.group.children[0];
+      const shown = new Set(c.parts.filter(p => p.visible)); c.holdTape(3); c.parts.filter(p => p.visible && !shown.has(p)).forEach((m, k) => m.name = `p${i}_tape${k}`);   // the tapes in their hand: there, to be hidden
+      const N = n => `p${i}_${n}`;   // (every name its own: an importer may not allow two nodes one name, even under different parents)
+      c.group.name = "p" + i; body.name = N("body"); R.upper.name = N("upper"); R.head.name = N("head"); R.neck.name = N("neck"); c.screen.name = N("screen");
+      R.upper.children.find(m => m.isMesh).name = N("torso");
+      R.legs.forEach((l, k) => { l.hip.name = N("hip" + k); l.knee.name = N("knee" + k); }); R.arms.forEach((a, k) => { a.sh.name = N("sh" + k); a.el.name = N("el" + k); a.hand.name = N("hand" + k); });
+      for (const m of c.group.children) if (m.isMesh && m.geometry.type === "PlaneGeometry") m.visible = false;   // the blob of shadow under them
+      // their face in every mood, off the little canvas it's drawn on (no blinks: they'd be caught mid-blink)
+      Math.random = () => 1;
+      const fc = c.screen.material.map.image, sheet = document.createElement("canvas"); sheet.width = fc.width * 4; sheet.height = fc.height * 4;
+      const g = sheet.getContext("2d");
+      c.tick(0.05, 0); c.tick(0.2, 0);
+      MOODS.forEach((m, k) => { c.setMood(m); for (let n = 0; n < 5; n++) c.tick(0.05, 0); g.drawImage(fc, (k % 4) * fc.width, Math.floor(k / 4) * fc.height); });
+      Math.random = random;
+      c.setMood("neutral"); c.tick(0.05, 0);
+      c.group.traverse(n => { n.userData = {}; });
+      holder.add(c.group);
+      who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, face: sheet.toDataURL("image/png") });
+    }
+    const glb = await new GLTFExporter().parseAsync(holder, { binary: true, onlyVisible: true });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "people.glb"; document.body.appendChild(a); a.click();
+    return { moods: MOODS, who, mb: +(glb.byteLength / 1048576).toFixed(1) };
+  });
+  const { mkdirSync } = await import("fs");
+  mkdirSync(out, { recursive: true });
+  await (await download).saveAs(resolve(out, "people.glb"));
+  cast.who.forEach((w, i) => { writeFileSync(resolve(out, `face_${i}.png`), Buffer.from(w.face.split(",")[1], "base64")); delete w.face; });
+  writeFileSync(resolve(out, "people.json"), JSON.stringify({ moods: cast.moods, who: cast.who }, null, 1));
+  console.log(out, { people: cast.who.length, mb: cast.mb });
+  await browser.close(); process.exit(0);
+}
 
 if (dataOnly) {
   const data = await page.evaluate(() => {
