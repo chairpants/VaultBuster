@@ -124,6 +124,10 @@ if (dataOnly) {
             sheet: { p: at(sh), q: sh.getWorldQuaternion(new THREE.Quaternion()).toArray().map(r), w: r(sh.geometry.parameters.width), h: r(sh.geometry.parameters.height), img: [u.x, u.y, u.z, u.w].map(r) } },
         };
       })(),
+      // where people can walk: the grid the customers' paths are found on (NAV), and every solid thing on the floor
+      // (not the doors they open on the way, nor what gets carried about, nor anyone standing there)
+      nav: (() => { const not = new Set([...doors.filter(d => !d.locked).flatMap(d => [d.shut, d.openBox]), stool.box, cutout.box, ...staff.map(e => e.box), ...custs.map(k => k.box)]);
+        return { ...NAV, door: CUST_DOOR, outside: OUTSIDE_IN, inside: INSIDE_DOOR, counter: CUST_COUNTER, colliders: colliders.filter(c => !not.has(c)).map(c => [r(c.x0), r(c.x1), r(c.z0), r(c.z1)]) }; })(),
       seats: [...SEATS.map(s => seat(s, "couch")), seat(bath.seat, "toilet"), ...theaterSeats.map(s => seat(s.seat || s, "theater")), ...roof.seats.map(h => seat(h.userData.seatPos, "roof"))],
     };
   });
