@@ -32,8 +32,8 @@ if (people) {
     const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
     const MOODS = ["neutral", "browse", "happy", "love", "meh", "wait", "impatient", "angry", "alarm", "thanks", "shifty", "ask", "off", "on", "shock", "watch"];
     const holder = new THREE.Scene(), who = [], random = Math.random;
-    for (let i = 0; i < 24; i++) {
-      const female = i % 2 === 1, o = { ...VaultCustomers.randomOutfit(seeded(1000 + i * 7), female), skinned: false };   // (skinned: false: the blocks, not the one stretched skin over them)
+    for (let i = 0; i < 25; i++) {                 // two dozen customers, and Dana (the last: in her uniform)
+      const dana = i === 24, female = dana || i % 2 === 1, o = { ...(dana ? DANA_APP.outfit : VaultCustomers.randomOutfit(seeded(1000 + i * 7), female)), skinned: false };   // (skinned: false: the blocks, not the one stretched skin over them)
       const c = VaultCustomers.build(o), R = c.rig, body = c.group.children[0];
       const shown = new Set(c.parts.filter(p => p.visible)); c.holdTape(3); c.parts.filter(p => p.visible && !shown.has(p)).forEach((m, k) => m.name = `p${i}_tape${k}`);   // the tapes in their hand: there, to be hidden
       const N = n => `p${i}_${n}`;   // (every name its own: an importer may not allow two nodes one name, even under different parents)
@@ -51,7 +51,7 @@ if (people) {
       c.setMood("neutral"); c.tick(0.05, 0);
       c.group.traverse(n => { n.userData = {}; });
       holder.add(c.group);
-      who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, face: sheet.toDataURL("image/png") });
+      who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, staff: dana ? DANA_APP.first : undefined, face: sheet.toDataURL("image/png") });
     }
     const glb = await new GLTFExporter().parseAsync(holder, { binary: true, onlyVisible: true });
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "people.glb"; document.body.appendChild(a); a.click();
@@ -120,6 +120,8 @@ if (dataOnly) {
           towels: tagged("towels").length ? { at: mid(tagged("towels")) } : null,
           sink: tagged("sink").length ? { at: mid(tagged("sink")), spout: bath.sinkAt.map(r) } : null,
           bed: { at: mid(tagged("bed")) },
+          // the counter's working parts: the register, the desensitizer pad, the receipt printer; where the clerk stands; what a tape rents for
+          register: { pos: mid(tagged("pos")), pad: mid(tagged("desens")), printer: mid(tagged("printer")), post: EMP_POST, rate: { new: 3.99, catalog: 1.99 } },
           cine: { proj: mid(roof.cine.proj), vcr: mid(roof.cine.vcr),               // the movie on the roof: the projector, its VCR, the sheet (and the part of it the picture lands on)
             sheet: { p: at(sh), q: sh.getWorldQuaternion(new THREE.Quaternion()).toArray().map(r), w: r(sh.geometry.parameters.width), h: r(sh.geometry.parameters.height), img: [u.x, u.y, u.z, u.w].map(r) } },
         };
