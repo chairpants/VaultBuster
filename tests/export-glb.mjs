@@ -41,6 +41,10 @@ if (people) {
       R.upper.children.find(m => m.isMesh).name = N("torso");
       R.legs.forEach((l, k) => { l.hip.name = N("hip" + k); l.knee.name = N("knee" + k); }); R.arms.forEach((a, k) => { a.sh.name = N("sh" + k); a.el.name = N("el" + k); a.hand.name = N("hand" + k); });
       for (const m of c.group.children) if (m.isMesh && m.geometry.type === "PlaneGeometry") m.visible = false;   // the blob of shadow under them
+      // what they hold out at the counter (and the umbrella): each there, named, to be hidden till it's wanted
+      const hidden = R.arms[0].el.children.filter(m => !m.visible), props = [];
+      for (const name of ["card", "cash", "receipt", "form", "umbrella"]) { c.holdProp(name); const m = hidden.find(h => h.visible); if (m) { m.name = N("prop_" + name); props.push(m); } }
+      c.holdProp(null);
       // their face in every mood, off the little canvas it's drawn on (no blinks: they'd be caught mid-blink)
       Math.random = () => 1;
       const fc = c.screen.material.map.image, sheet = document.createElement("canvas"); sheet.width = fc.width * 4; sheet.height = fc.height * 4;
@@ -49,6 +53,7 @@ if (people) {
       MOODS.forEach((m, k) => { c.setMood(m); for (let n = 0; n < 5; n++) c.tick(0.05, 0); g.drawImage(fc, (k % 4) * fc.width, Math.floor(k / 4) * fc.height); });
       Math.random = random;
       c.setMood("neutral"); c.tick(0.05, 0);
+      for (const m of props) m.visible = true;
       c.group.traverse(n => { n.userData = {}; });
       holder.add(c.group);
       who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, staff: dana ? DANA_APP.first : undefined, face: sheet.toDataURL("image/png") });
