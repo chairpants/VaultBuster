@@ -120,6 +120,8 @@ if (dataOnly) {
           towels: tagged("towels").length ? { at: mid(tagged("towels")) } : null,
           sink: tagged("sink").length ? { at: mid(tagged("sink")), spout: bath.sinkAt.map(r) } : null,
           bed: { at: mid(tagged("bed")) },
+          // Returns: the slot customers drop tapes into (from the lane), and the bin behind it you take them out of
+          returns: { slot: at(returnSlotMesh), bin: mid(tagged("returns")) },
           // the counter's working parts: the register, the desensitizer pad, the receipt printer; where the clerk stands; what a tape rents for
           register: { pos: mid(tagged("pos")), pad: mid(tagged("desens")), printer: mid(tagged("printer")), post: EMP_POST, rate: { new: 3.99, catalog: 1.99 } },
           cine: { proj: mid(roof.cine.proj), vcr: mid(roof.cine.vcr),               // the movie on the roof: the projector, its VCR, the sheet (and the part of it the picture lands on)
