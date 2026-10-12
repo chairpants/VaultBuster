@@ -34,6 +34,25 @@ if (dataOnly) {
         const p = m.getWorldPosition(new THREE.Vector3()), n = m.getWorldDirection(new THREE.Vector3());
         return { kind, x: r(p.x), y: r(p.y), z: r(p.z), ry: r(Math.atan2(n.x, n.z)), w: m.geometry.parameters.width, h: m.geometry.parameters.height, reach };
       }),
+      // every other screen a tape shows on (the monitors hung over the aisles): where it is, which way it faces, how big
+      minis: miniScreens.filter(m => m !== screenMesh && m !== theaterScreenMesh).map(m => {
+        const p = m.getWorldPosition(new THREE.Vector3()), q = m.getWorldQuaternion(new THREE.Quaternion()), s = m.getWorldScale(new THREE.Vector3());
+        return { p: [r(p.x), r(p.y), r(p.z)], q: [r(q.x), r(q.y), r(q.z), r(q.w)], w: r(m.geometry.parameters.width * s.x), h: r(m.geometry.parameters.height * s.y) };
+      }),
+      // the counter's pass-through: the leaf lifts (about z, at its pivot), the half gate under it swings in (about y)
+      flap: { pivot: flapPivot.position.toArray().map(r), gate: flapGate.position.toArray().map(r), openA: r(flapOpenA), gateA: r(Math.PI / 2), box: box(flapCollider) },
+      // the ladders: each one's rungs (x, z), and its climb (where the camera goes, which way you face, where you step off: CLIMBS)
+      ladders: { roofY: ROOF.y, dur: 3.4,
+        hatch: { x: ROOF_LADDER.x, z: ROOF_LADDER.z, climb: CLIMBS.hatch, lid: roof.lid.getWorldPosition(new THREE.Vector3()).toArray().map(r), lidA: 1.45 },
+        back: { x: BACK_LADDER.x, z: BACK_LADDER.z, mid: BACK_LADDER.mid, raise: BACK_LADDER.raise, climb: CLIMBS.back } },
+      // the lights: every switch (which zone, where its rocker is; plates: the zones that share a plate), the zones' rooms
+      // (the room shader's boxes: uFloorBox x0 x1 z1 ceiling, uBohBox x0 x1 hall|rooms z z1, uBohSplit breakroom|restroom x and ceiling, ...), the side lamps
+      lights: {
+        zones: Object.fromEntries(LIGHT_ZONES.map(z => [z, zoneOn[z]])), names: ZONE_NAMES, plates: switchPlate,
+        switches: switchToggles.map(t => ({ zone: t.zone, p: t.mesh.getWorldPosition(new THREE.Vector3()).toArray().map(r) })),
+        boxes: { floor: TVU.uFloorBox.value.toArray().map(r), boh: TVU.uBohBox.value.toArray().map(r), bohSplit: TVU.uBohSplit.value.toArray().map(r), lobby: TVU.uLobbyBox.value.toArray().map(r), theater: TVU.uThBox.value.toArray().map(r) },
+        lamps: lamps.map(l => ({ p: l.getWorldPosition(new THREE.Vector3()).toArray().map(r), on: !!l.userData.on, color: l.color.getHex(), energy: LAMP_ON, range: l.distance })),
+      },
       seats: [...SEATS.map(s => seat(s, "couch")), seat(bath.seat, "toilet"), ...theaterSeats.map(s => seat(s.seat || s, "theater")), ...roof.seats.map(h => seat(h.userData.seatPos, "roof"))],
     };
   });
