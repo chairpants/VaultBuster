@@ -128,6 +128,8 @@ if (dataOnly) {
           tools: Object.fromEntries(Object.entries(TOOLS).map(([id, t]) => [id, { label: t.label, home: at(t.home), size: ["width", "height", "depth"].map(k => t.home.geometry.parameters[k]) }])),   // the janitor's closet: where each tool lives (the box it's put back in)
           bins: Object.values(trashBins).map(b => ({ id: b.id, name: b.name, cap: b.cap, x: b.x, z: b.z, rimY: b.rimY ?? 0.9, r: b.r ?? 0.25, towels: !!b.towels, stand: b.stand })),
           chute: { at: chute.at, stand: chute.stand },
+          snacks: snackUnits().map(u => { const n = u.parent.getWorldDirection(new THREE.Vector3()); return { n: u.userData.snack.name, k: u.userData.snack.kind || "", at: at(u), f: [r(n.x), r(n.z)], lane: `${u.parent.uuid.slice(0, 8)}|${u.userData.snack.name}|${Math.round(u.position.x * 100)}`, lz: r(u.position.z), ly: r(u.position.y) }; }),   // every snack and drink on the racks: what it is (k: a drink's kind), where, which way its fixture faces, its lane (front and top are taken first)
+          cupboards: aimables.filter(m => m.userData.stock).map(m => ({ kind: m.userData.stock, at: at(m) })),   // the stock cupboards' doors, behind the counter
           phone: PHONE_AT.toArray(), holds: HOLDS_AT.toArray(),   // the desk phone and the holds tray, on the back cabinet
           rewinders: rewinders.filter(rw => rw.tapeMesh.parent?.visible !== false).map(rw => at(rw.tapeMesh)),   // the counter's rewinder(s): where the tape sits in each
           // Returns: the slot customers drop tapes into (from the lane), and the bin behind it you take them out of
