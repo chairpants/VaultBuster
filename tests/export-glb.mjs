@@ -57,6 +57,18 @@ const stats = await page.evaluate(async () => {
     const mat = im.instanceColor ? Object.assign(im.material.clone(), { vertexColors: true }) : im.material, m = new THREE.Mesh(mergeGeometries(gs), mat);
     m.name = im.name; m.position.copy(im.position); m.quaternion.copy(im.quaternion); m.scale.copy(im.scale); im.parent.add(m);
   }
+  // names to find things by: what shape it is and how big ("box 1.20 x 0.90 x 0.05"), a group by how many parts it has;
+  // and whatever sits across two rooms (walls, mostly) under one node of its own, not loose at the top
+  const box = new THREE.Box3(), size = new THREE.Vector3(), rooms = new Set([...Object.values(roomGroups), roof.g]), between = new THREE.Group();
+  between.name = "between_rooms"; scene.add(between);
+  for (const o of [...scene.children]) if (!rooms.has(o) && o !== between && o.visible && (o.isMesh || o.isGroup)) between.add(o);
+  scene.traverse(o => {
+    if (o.name || !o.visible) return;
+    if (o.isMesh) {
+      o.geometry.computeBoundingBox(); o.geometry.boundingBox.getSize(size).multiply(o.scale);
+      o.name = `${o.geometry.type.replace("Geometry", "").replace("Buffer", "mesh").toLowerCase() || "mesh"} ${[size.x, size.y, size.z].map(v => Math.abs(v).toFixed(2)).join(" x ")}`;
+    } else if (o.isGroup && o.children.length) o.name = `group of ${o.children.length}`;
+  });
   const glb = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: true, maxTextureSize: 2048 });
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "world.glb"; document.body.appendChild(a); a.click();
   return { ...n, tris: Math.round(n.tris), mb: +(glb.byteLength / 1048576).toFixed(1) };
