@@ -3,10 +3,14 @@
 // read it back. Left out: people, lights, the sky and weather (shaders), and the unseen boxes things are aimed at by.
 // Instanced things (the trees) go out as one ordinary mesh each: Godot doesn't read glTF's instancing extension.
 //   node tests/export-glb.mjs ../VaultBusterGodot/world/vaultbuster.glb
+// With --data first, no .glb: the things there are to use, as JSON (each door's hinge, swing and the floor it sweeps;
+// every seat), for whatever's on the other end to work them the way the game does.
+//   node tests/export-glb.mjs --data ../VaultBusterGodot/data/interact.json
 import { URL, launch } from "./browser.mjs";
 import { resolve } from "path";
+import { writeFileSync } from "fs";
 
-const out = resolve(process.argv[2] || "vaultbuster.glb");
+const dataOnly = process.argv[2] === "--data", out = resolve(process.argv[dataOnly ? 3 : 2] || (dataOnly ? "interact.json" : "vaultbuster.glb"));
 const browser = await launch({ gpu: true });
 const page = await (await browser.newContext({ viewport: { width: 1000, height: 600 }, deviceScaleFactor: 1 })).newPage();
 const errors = []; page.on("pageerror", e => errors.push(String(e)));
@@ -17,6 +21,21 @@ await page.evaluate(() => { localStorage.clear(); localStorage.setItem("vaultbus
 await page.reload({ timeout: 300000 }); await ready();
 await page.click("#mmFiles .acts .go"); await page.waitForTimeout(4000);
 await page.evaluate(() => __t.stopSaving());
+
+if (dataOnly) {
+  const data = await page.evaluate(() => {
+    const r = v => +v.toFixed(4), box = b => ({ x0: r(b.x0), x1: r(b.x1), z0: r(b.z0), z1: r(b.z1) });
+    const seat = (s, kind) => ({ kind, x: r(s.y != null ? s.x : Math.sign(s.x) * Math.max(0, Math.abs(s.x) - 0.04)), y: r(s.y || 0), z: r(s.z), ry: r(s.ry || 0), hipY: s.hipY ?? 0.5 });   // (the couch's: a hair inboard, as meTick sits you)
+    return {
+      doors: doors.map(d => ({ x: r(d.pivot.position.x), z: r(d.pivot.position.z), base: r(d.base), openA: r(d.openA), push: d.push, locked: d.locked, at: r(d.at), c: r(d.c), alongX: d.alongX, hinge: d.hinge, shut: box(d.shut), openBox: box(d.openBox) })),
+      frontDoor: { x: r(frontDoor.leaves[1].position.x), z: r(frontDoor.leaves[1].position.z), near: { x: 0.9, z: -0.2, r: 1.3 }, openA: -1.35 },   // the right leaf (see frontDoorTick)
+      seats: [...SEATS.map(s => seat(s, "couch")), seat(bath.seat, "toilet"), ...theaterSeats.map(s => seat(s.seat || s, "theater")), ...roof.seats.map(h => seat(h.userData.seatPos, "roof"))],
+    };
+  });
+  writeFileSync(out, JSON.stringify(data, null, 1));
+  console.log(out, { doors: data.doors.length, seats: data.seats.length });
+  await browser.close(); process.exit(0);
+}
 
 const download = page.waitForEvent("download", { timeout: 600000 });
 const stats = await page.evaluate(async () => {
@@ -34,7 +53,7 @@ const stats = await page.evaluate(async () => {
     o.userData = {};                                // (the game's own bookkeeping: it points back into the game, and can't be written out)
     if (!o.isMesh) return;
     const ms = [].concat(o.material);
-    if (ms.some(m => m.isShaderMaterial)) { o.visible = false; n.shader++; return; }
+    if (ms.some(m => m.isShaderMaterial || m === mat.cloud)) { o.visible = false; n.shader++; return; }   // (the clouds too: they drift, so they're not part of the place)
     if (!o.visible || ms.every(m => m.visible === false)) { o.visible = false; n.unseen++; return; }
     if (o.isInstancedMesh) { n.instanced++; inst.push(o); }
     n.meshes++; n.tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
