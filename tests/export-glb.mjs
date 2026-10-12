@@ -128,6 +128,7 @@ if (dataOnly) {
           tools: Object.fromEntries(Object.entries(TOOLS).map(([id, t]) => [id, { label: t.label, home: at(t.home), size: ["width", "height", "depth"].map(k => t.home.geometry.parameters[k]) }])),   // the janitor's closet: where each tool lives (the box it's put back in)
           bins: Object.values(trashBins).map(b => ({ id: b.id, name: b.name, cap: b.cap, x: b.x, z: b.z, rimY: b.rimY ?? 0.9, r: b.r ?? 0.25, towels: !!b.towels, stand: b.stand })),
           chute: { at: chute.at, stand: chute.stand },
+          phone: PHONE_AT.toArray(), holds: HOLDS_AT.toArray(),   // the desk phone and the holds tray, on the back cabinet
           rewinders: rewinders.filter(rw => rw.tapeMesh.parent?.visible !== false).map(rw => at(rw.tapeMesh)),   // the counter's rewinder(s): where the tape sits in each
           // Returns: the slot customers drop tapes into (from the lane), and the bin behind it you take them out of
           returns: { slot: at(returnSlotMesh), bin: mid(tagged("returns")) },
