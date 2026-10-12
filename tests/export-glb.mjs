@@ -4,7 +4,8 @@
 // Instanced things (the trees) go out as one ordinary mesh each: Godot doesn't read glTF's instancing extension.
 //   node tests/export-glb.mjs ../VaultBusterGodot/world/vaultbuster.glb
 // With --data first, no .glb: the things there are to use, as JSON (each door's hinge, swing and the floor it sweeps;
-// every seat), for whatever's on the other end to work them the way the game does.
+// every seat; the screens a tape plays on), for whatever's on the other end to work them the way the game does. And
+// beside it tapes.json: every copy on the shelves, where its slot is, and the episodes on it.
 //   node tests/export-glb.mjs --data ../VaultBusterGodot/data/interact.json
 import { URL, launch } from "./browser.mjs";
 import { resolve } from "path";
@@ -29,11 +30,21 @@ if (dataOnly) {
     return {
       doors: doors.map(d => ({ x: r(d.pivot.position.x), z: r(d.pivot.position.z), base: r(d.base), openA: r(d.openA), push: d.push, locked: d.locked, at: r(d.at), c: r(d.c), alongX: d.alongX, hinge: d.hinge, shut: box(d.shut), openBox: box(d.openBox) })),
       frontDoor: { x: r(frontDoor.leaves[1].position.x), z: r(frontDoor.leaves[1].position.z), near: { x: 0.9, z: -0.2, r: 1.3 }, openA: -1.35 },   // the right leaf (see frontDoorTick)
+      screens: [[screenMesh, "tv", 4.5], [theaterScreenMesh, "theater", 9]].filter(([m]) => m).map(([m, kind, reach]) => {   // where a tape plays: E on one from within reach (see vcrUse)
+        const p = m.getWorldPosition(new THREE.Vector3()), n = m.getWorldDirection(new THREE.Vector3());
+        return { kind, x: r(p.x), y: r(p.y), z: r(p.z), ry: r(Math.atan2(n.x, n.z)), w: m.geometry.parameters.width, h: m.geometry.parameters.height, reach };
+      }),
       seats: [...SEATS.map(s => seat(s, "couch")), seat(bath.seat, "toilet"), ...theaterSeats.map(s => seat(s.seat || s, "theater")), ...roof.seats.map(h => seat(h.userData.seatPos, "roof"))],
     };
   });
   writeFileSync(out, JSON.stringify(data, null, 1));
-  console.log(out, { doors: data.doors.length, seats: data.seats.length });
+  const tapes = await page.evaluate(() => {
+    const r = v => +v.toFixed(4);
+    return catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.pos).map(c => ({ k: copyKey(c), t: tapeName(c), c: c.category, n: c.newRelease ? 1 : 0, p: [r(c.pos.x), r(c.pos.y), r(c.pos.z)], ry: r(c.ry), e: c.seasons[0].episodes }));
+  });
+  const tapesOut = resolve(out, "..", "tapes.json");
+  writeFileSync(tapesOut, JSON.stringify({ size: { w: 0.032, h: 0.192, d: 0.105 }, tapes }));   // size: TAPE (thick, tall, wide: the cover's on a wide face)
+  console.log(out, { doors: data.doors.length, seats: data.seats.length, screens: data.screens.length }, tapesOut, { tapes: tapes.length });
   await browser.close(); process.exit(0);
 }
 
