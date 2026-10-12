@@ -53,6 +53,24 @@ if (dataOnly) {
         boxes: { floor: TVU.uFloorBox.value.toArray().map(r), boh: TVU.uBohBox.value.toArray().map(r), bohSplit: TVU.uBohSplit.value.toArray().map(r), lobby: TVU.uLobbyBox.value.toArray().map(r), theater: TVU.uThBox.value.toArray().map(r) },
         lamps: lamps.map(l => ({ p: l.getWorldPosition(new THREE.Vector3()).toArray().map(r), on: !!l.userData.on, color: l.color.getHex(), energy: LAMP_ON, range: l.distance })),
       },
+      // the loose and the small: where each is, and its numbers
+      things: (() => {
+        const at = o => o.getWorldPosition(new THREE.Vector3()).toArray().map(r);
+        const mid = os => { const b = new THREE.Box3(); for (const o of os) b.expandByObject(o); return b.getCenter(new THREE.Vector3()).toArray().map(r); };   // the middle of a few meshes
+        const tagged = t => aimables.filter(o => o.userData[t]);
+        const sh = roof.cine.sheet, u = roof.cineU.uImg.value;
+        return {
+          stool: { x: r(stool.x), z: r(stool.z), ...STOOL },                       // seat height, how far ahead it's carried, a shove's spin, its cap, the bearing's drag
+          cutout: { x: r(cutout.x), z: r(cutout.z), ry: r(cutout.ry) },            // the standee
+          cooler: { pivot: at(coolerDoor), openA: 1.75, hit: mid(tagged("coolerDoor")) },
+          lock: { at: mid(tagged("frontLock")), turn: at(frontLock.turn), wall: box(frontWallBox) },
+          flush: { at: mid(tagged("flush")), water: bath.water ? at(bath.water) : null, drop: 0.07 },
+          towels: tagged("towels").length ? { at: mid(tagged("towels")) } : null,
+          bed: { at: mid(tagged("bed")) },
+          cine: { proj: mid(roof.cine.proj), vcr: mid(roof.cine.vcr),               // the movie on the roof: the projector, its VCR, the sheet (and the part of it the picture lands on)
+            sheet: { p: at(sh), q: sh.getWorldQuaternion(new THREE.Quaternion()).toArray().map(r), w: r(sh.geometry.parameters.width), h: r(sh.geometry.parameters.height), img: [u.x, u.y, u.z, u.w].map(r) } },
+        };
+      })(),
       seats: [...SEATS.map(s => seat(s, "couch")), seat(bath.seat, "toilet"), ...theaterSeats.map(s => seat(s.seat || s, "theater")), ...roof.seats.map(h => seat(h.userData.seatPos, "roof"))],
     };
   });
