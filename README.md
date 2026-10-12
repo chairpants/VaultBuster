@@ -153,6 +153,7 @@ Everything runs as plain `<script>` files loaded in order. There are no ES modul
 | `meta.js` | Generated release year and TMDB vote count per title (`window.VAULT_META`), used to sort the New Releases walls |
 | `tests/smoke.mjs` | The smoke tests (see Testing) |
 | `tests/shot.mjs` | A screenshot (or frame timing) from anywhere in a fresh store |
+| `tests/export-glb.mjs` | The whole built world written out as one `.glb`, grouped by room, for Blender or Godot (one way: the game doesn't read it back) |
 
 ### Testing
 
