@@ -391,7 +391,7 @@ renderer.setAnimationLoop(() => {
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
-  custTick(dt); frontDoorTick(dt); fireExitTick(dt); tonyTick(dt); if (CUSTOMER) cmTick(dt);
+  custTick(dt); frontDoorTick(dt); fireExitTick(dt); fullVidTick(); tonyTick(dt); if (CUSTOMER) cmTick(dt);
   empTick(dt);
   trashTick(dt);
   deadLightTick(dt);
