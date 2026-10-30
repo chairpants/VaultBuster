@@ -220,6 +220,7 @@ const ROOM_FRAG = `
 {
   vec3 rN = inverseTransformDirection(normal, viewMatrix), P = vTvPos;
   vec3 fl = mix(uInGround, uInSky, 0.5 * rN.y + 0.5) + uInAmb + uInDirC * max(dot(rN, uInDir), 0.0);
+  vec3 flS = mix(uInGround, uInSky, 0.3 * rN.y + 0.7) + uInAmb * 1.2 + uInDirC * (0.45 + 0.35 * dot(rN, uInDir));   // the same, as fluorescents and white walls give it: from everywhere, little of it from one way (all but the auditorium)
   float day = uZone.w;
   vec3 rl;
   if (P.x > uFloorBox.x && P.x < uFloorBox.y && P.z > -0.05 && P.z < uFloorBox.z && P.y < uFloorBox.w) {
@@ -234,24 +235,24 @@ const ROOM_FRAG = `
       pool += trofferLight(vec3(${TROFFER_GRID.x.toFixed(2)} + c.x * ${TROFFER_GRID.step.toFixed(2)}, ${TROFFER_GRID.y.toFixed(2)}, ${TROFFER_GRID.z.toFixed(2)} + c.y * ${TROFFER_GRID.step.toFixed(2)}), vec3(P.x, 0.0, P.z));
     }
     for (int k = 0; k < 3; k++) if (uDeadL[k].z > 0.0) pool -= uDeadL[k].z * trofferLight(vec3(uDeadL[k].x, ${TROFFER_GRID.y.toFixed(2)}, uDeadL[k].y), vec3(P.x, 0.0, P.z));
-    pool = pow(max(pool, 0.0) * 14.0, 1.6);        // the light on the floor there: ~1.45 under a panel, ~0.55 between four
+    pool = mix(1.0, max(pool, 0.0) * 14.0, 0.6);   // the light on the floor there: ~1.15 under a panel, ~0.8 between four
     float up = max(rN.y, 0.0), down = max(-rN.y, 0.0);
-    float side = mix(0.62, 1.12, smoothstep(0.05, 2.9, P.y)) * (0.8 + 0.2 * pool);   // walls and shelf faces: brighter up toward the panels, dim at the foot
-    float lit = mix(mix(side, pool, up), 0.82, down);   // (the ceiling's tiles between the panels: a little dimmer)
+    float side = mix(0.8, 1.06, smoothstep(0.05, 2.9, P.y)) * (0.9 + 0.1 * pool);   // walls and shelf faces: brighter up toward the panels, dim at the foot
+    float lit = mix(mix(side, pool, up), 0.88, down);   // (the ceiling's tiles between the panels: a little dimmer)
     float edge = min(min(P.x - uFloorBox.x, uFloorBox.y - P.x), uFloorBox.z - P.z);
-    lit *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 1.0, edge)) * up;                       // the floor along the walls, in their shade
-    rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl * lit
+    lit *= 1.0 - 0.15 * (1.0 - smoothstep(0.0, 1.0, edge)) * up;                       // the floor along the walls, in their shade
+    rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * flS * lit
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
   } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
     bool closet = P.x > uBohSplit.z && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
     float lvl = closet ? 0.8 * uBoh.w : P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.z : uBoh.y);
-    rl = (0.03 + 0.97 * lvl) * fl * (closet ? vec3(1.12, 0.95, 0.74) : vec3(1.0));
+    rl = (0.03 + 0.97 * lvl) * flS * (closet ? vec3(1.12, 0.95, 0.74) : vec3(1.0));
   } else if (P.x > uShaft.x && P.x < uLobbyBox.y && P.z > uShaft.y && P.z < uLobbyBox.w && P.y < uTall.y + 0.05) {   // the booth's stairs: bulbs on cords, warm
-    rl = (0.03 + 0.97 * uThLight.w) * fl * vec3(1.12, 0.95, 0.74);
+    rl = (0.03 + 0.97 * uThLight.w) * flS * vec3(1.12, 0.95, 0.74);
   } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uTall.z && P.z < uLobbyBox.w && P.y > uTall.x && P.y < uTall.y + 0.05) {   // the booth: lamps low on its walls, red working lights when they're off
-    rl = (0.03 + 0.97 * uThLight.z) * fl * vec3(1.12, 0.95, 0.74) + (1.0 - uThLight.z) * fl * vec3(0.16, 0.012, 0.0);
+    rl = (0.03 + 0.97 * uThLight.z) * flS * vec3(1.12, 0.95, 0.74) + (1.0 - uThLight.z) * flS * vec3(0.16, 0.012, 0.0);
   } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uLobbyBox.z && P.z < uLobbyBox.w && P.y < uBohSplit.y + 0.05) {
-    rl = (0.04 + 0.96 * uThLight.x) * fl * vec3(1.08, 0.93, 0.80);
+    rl = (0.04 + 0.96 * uThLight.x) * flS * vec3(1.08, 0.93, 0.80);
   } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uTall.y + 0.1) {
     vec3 thFl = (0.025 + 0.30 * uThLight.y + 0.12 * uThSconce) * fl * vec3(1.15, 0.82, 0.55);   // house lights + a low warm sconce wash
     vec3 sL = uThScreenP - P; float sd2 = dot(sL, sL); sL *= inversesqrt(sd2);
@@ -278,7 +279,7 @@ const ROOM_FRAG = `
     float k = clamp(1.0 - past / sp.w, 0.0, 1.0);
     spill += uSpillC[i].rgb * (1.0 - smoothstep(-soft, soft, edge)) * k * k * (0.35 + 0.65 * max(dot(rN, normalize(sp.xyz - P)), 0.0));
   }
-  rl = max(rl, spill * fl);
+  rl = max(rl, spill * flS);
   reflectedLight.indirectDiffuse += rl * BRDF_Lambert(diffuseColor.rgb);
 }
 `;
