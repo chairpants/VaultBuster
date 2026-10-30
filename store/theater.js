@@ -81,13 +81,13 @@
   const R_Z0 = 36.6, R_ROWS = 6, R_STEP_Z = 1.3, R_DROP = 0.26, R_END = R_Z0 + R_ROWS * R_STEP_Z; // 44.4
   const PIT_Y = -R_ROWS * R_DROP;          // -1.56
   const AX = -6.03;                        // the aisle: from the side wall's face to here
-  const EXIT = { z0: 36.25, z1: 37.15, land: -6.8 };   // the emergency exit in the side wall by the aisle; the landing inside it, out to here
+  const EXIT = { z0: 45.0, z1: 45.9 };   // the emergency exit: in the side wall by the aisle, at the screen end, down where the aisle comes out
 
   floorHeightAt = (x, z) => {
     if (x > SHAFT.x0 && x < BX0 - 0.12 && z > TALL.z0 && z < TALL.z1) return stairsAt(x, z);
     if (z <= R_Z0 || x < TX0 || x > TX1 || z > TZ1) return 0;
     if (z < R_END) {
-      if (x < AX) return x < EXIT.land && z < 37.3 ? 0 : ((z - R_Z0) / (R_END - R_Z0)) * PIT_Y;   // the side aisle's ramp (the exit's landing level with the back)
+      if (x < AX) return ((z - R_Z0) / (R_END - R_Z0)) * PIT_Y;   // the side aisle's ramp
       const r = Math.min(R_ROWS - 1, Math.floor((z - R_Z0) / R_STEP_Z));
       return -(r + 1) * R_DROP;
     }
@@ -135,8 +135,6 @@
     g.rotateY(-Math.PI / 2); g.translate(AX - 0.002, 0, 0);   // extruded across the aisle's width
     scene.add(new THREE.Mesh(g, riserMat));
   }
-  // the emergency exit's landing, level with the back of the house, the ramp starting down past it
-  box(EXIT.land - IN0, 0.14, 37.3 - R_Z0, new THREE.MeshLambertMaterial({ color: 0x2a1416 }), (IN0 + EXIT.land) / 2, -0.07, (R_Z0 + 37.3) / 2);
 
   // stadium tiers & seats, v2: real cinema chairs — shared side standards
   // with armrests and cup holders, a reclined padded back in a plastic shell,
@@ -231,12 +229,12 @@
     }
   }
 
-  // acoustic wall drapery + warm brass wall sconces (on the aisle's side, the first panel stops short of the exit)
+  // acoustic wall drapery + warm brass wall sconces (on the aisle's side, the last panel starts past the exit)
   const sconceMat = thSconceMat = new THREE.MeshLambertMaterial({ color: 0xffe0a3, emissive: 0xff9d3b, emissiveIntensity: 0.85 });
   for (const s of [-1, 1]) {
     const wx = TX + s * (TW / 2 - 0.12);
     for (let z = 37.2; z < 46.5; z += 2.2) {
-      const [a, b] = s < 0 && z - 0.75 < EXIT.z1 + 0.2 ? [EXIT.z1 + 0.2, z + 0.75] : [z - 0.75, z + 0.75], c = (a + b) / 2;
+      const [a, b] = s < 0 && z - 0.75 < EXIT.z1 + 0.2 && z + 0.75 > EXIT.z0 - 0.2 ? [EXIT.z1 + 0.2, z + 0.75] : [z - 0.75, z + 0.75], c = (a + b) / 2;
       box(0.05, 2.2, b - a, curtainMat, wx, 0.8, c);
       box(0.08, 0.28, 0.16, brass, wx - s * 0.04, 1.55, c);
       const shade = glow(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.05, 0.22, 10), sconceMat));
@@ -351,18 +349,18 @@
   const exitSign = glow(textPlane("EXIT", 0.46, 0.18, "#ffffff", "#b3121d", "Arial Black", 76));
   exitSign.position.set(CINEMA_DOOR, DOOR_H + 0.25, TZ0 + WALL_T / 2 + 0.02); scene.add(exitSign);   // over the door, facing the seats
 
-  // the emergency exit, in the side wall by the aisle: inside, a steel door in its frame, a panic bar, a lit EXIT over it;
-  // outside, a stoop, the door flat in its frame (nothing to open it by), a wall pack, a notice
+  // the emergency exit, in the side wall by the aisle at the screen end: inside, down on the pit's floor, a steel door in its
+  // frame, a panic bar, a lit EXIT over it; outside (up a stair inside the wall), a stoop, the door flat in its frame (nothing to open it by), a wall pack, a notice
   {
-    const xi = IN0, xo = TX0 - WALL_T / 2 - 0.15, { z0, z1 } = EXIT, zc = (z0 + z1) / 2, lam = c => new THREE.MeshLambertMaterial({ color: c });
+    const xi = IN0, xo = TX0 - WALL_T / 2 - 0.15, { z0, z1 } = EXIT, zc = (z0 + z1) / 2, F = PIT_Y, lam = c => new THREE.MeshLambertMaterial({ color: c });
     const at = (w, h, d, m, x, y, z, out = false) => { const o = box(w, h, d, m, x, y, z); if (out) o.layers.set(EXTERIOR_LAYER); return o; };
-    at(0.04, 2.1, z1 - z0 - 0.1, lam(0x3a3d42), xi + 0.02, 1.05, zc);
-    for (const [a, b, y0, y1] of [[z0, z0 + 0.05, 0, 2.15], [z1 - 0.05, z1, 0, 2.15], [z0, z1, 2.1, 2.15]]) at(0.06, y1 - y0, b - a, lam(0x2b2d30), xi + 0.03, (y0 + y1) / 2, (a + b) / 2);
-    at(0.05, 0.04, z1 - z0 - 0.24, lam(0xb8bcc2), xi + 0.11, 1.0, zc);                 // the panic bar
-    for (const z of [z0 + 0.1, z1 - 0.1]) at(0.09, 0.08, 0.08, lam(0x8f9398), xi + 0.085, 1.0, z);
-    at(0.06, 0.18, 0.36, lam(0xf2f2ee), xi + 0.03, 2.39, zc);
+    at(0.04, 2.1, z1 - z0 - 0.1, lam(0x3a3d42), xi + 0.02, F + 1.05, zc);
+    for (const [a, b, y0, y1] of [[z0, z0 + 0.05, 0, 2.15], [z1 - 0.05, z1, 0, 2.15], [z0, z1, 2.1, 2.15]]) at(0.06, y1 - y0, b - a, lam(0x2b2d30), xi + 0.03, F + (y0 + y1) / 2, (a + b) / 2);
+    at(0.05, 0.04, z1 - z0 - 0.24, lam(0xb8bcc2), xi + 0.11, F + 1.0, zc);                 // the panic bar
+    for (const z of [z0 + 0.1, z1 - 0.1]) at(0.09, 0.08, 0.08, lam(0x8f9398), xi + 0.085, F + 1.0, z);
+    at(0.06, 0.18, 0.36, lam(0xf2f2ee), xi + 0.03, F + 2.39, zc);
     const sign = glow(textPlane("EXIT", 0.34, 0.16, "#d0101a", "#f6f6f2", "Arial Black", 76));
-    sign.position.set(xi + 0.0605, 2.39, zc); sign.rotation.y = Math.PI / 2; scene.add(sign);
+    sign.position.set(xi + 0.0605, F + 2.39, zc); sign.rotation.y = Math.PI / 2; scene.add(sign);
     const gy = LOT.y < 0 && pavedAt(xo - 0.6, zc) ? LOT.y : 0;
     at(0.9, 0.15, z1 - z0 + 0.5, lam(0x9a9a96), xo - 0.45, gy + 0.075, zc, true);
     at(0.04, 2.3 - gy - 0.15, z1 - z0, lam(0x4a4f57), xo - 0.02, (gy + 0.15 + 2.3) / 2, zc, true);
