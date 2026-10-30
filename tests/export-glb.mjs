@@ -7,14 +7,21 @@
 // every seat; the screens a tape plays on), for whatever's on the other end to work them the way the game does. And
 // beside it tapes.json: every copy on the shelves, where its slot is, and the episodes on it.
 //   node tests/export-glb.mjs --data ../VaultBusterGodot/data/interact.json
-// With --people first, a cast: two dozen customers as customers.js builds them (their jointed-blocks build, each joint
+// With --people first, a cast: two dozen customers (and Dana, and your own body twice: uniformed, and not) as customers.js builds them (their jointed-blocks build, each joint
 // named, so whatever's on the other end can pose them), a sheet of each one's face in every mood, and who they are.
 //   node tests/export-glb.mjs --people ../VaultBusterGodot/people
+// With --tony first: just Tony, from next door, beside them (tony.glb, tony.json, face_35.png).
+//   node tests/export-glb.mjs --tony ../VaultBusterGodot/people
+// With --extras first, a second .glb: what a fresh store hasn't got out (so the world's .glb hasn't either): the tapes
+// of the library's locked tiers and their sections' signs, the second rewinder, and the rewinders as sports cars. It sits beside the world, on top of it.
+//   node tests/export-glb.mjs --extras ../VaultBusterGodot/world/extras.glb
+// With --cars first: one car of each style (and the rain on the storefront glass, as three pictures beside it).
+//   node tests/export-glb.mjs --cars ../VaultBusterGodot/world/cars.glb
 import { URL, launch } from "./browser.mjs";
 import { resolve } from "path";
 import { writeFileSync } from "fs";
 
-const dataOnly = process.argv[2] === "--data", people = process.argv[2] === "--people", out = resolve(process.argv[dataOnly || people ? 3 : 2] || (dataOnly ? "interact.json" : people ? "people" : "vaultbuster.glb"));
+const dataOnly = process.argv[2] === "--data", tonyOnly = process.argv[2] === "--tony", people = process.argv[2] === "--people" || tonyOnly, extras = process.argv[2] === "--extras", cars = process.argv[2] === "--cars", out = resolve(process.argv[dataOnly || people || extras || cars ? 3 : 2] || (dataOnly ? "interact.json" : people ? "people" : cars ? "cars.glb" : extras ? "extras.glb" : "vaultbuster.glb"));
 const browser = await launch({ gpu: true });
 const page = await (await browser.newContext({ viewport: { width: 1000, height: 600 }, deviceScaleFactor: 1 })).newPage();
 const errors = []; page.on("pageerror", e => errors.push(String(e)));
@@ -28,12 +35,15 @@ await page.evaluate(() => __t.stopSaving());
 
 if (people) {
   const download = page.waitForEvent("download", { timeout: 600000 });
-  const cast = await page.evaluate(async () => {
+  const cast = await page.evaluate(async only => {
     const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
     const MOODS = ["neutral", "browse", "happy", "love", "meh", "wait", "impatient", "angry", "alarm", "thanks", "shifty", "ask", "off", "on", "shock", "watch"];
     const holder = new THREE.Scene(), who = [], random = Math.random;
-    for (let i = 0; i < 25; i++) {                 // two dozen customers, and Dana (the last: in her uniform)
-      const dana = i === 24, female = dana || i % 2 === 1, o = { ...(dana ? DANA_APP.outfit : VaultCustomers.randomOutfit(seeded(1000 + i * 7), female)), skinned: false };   // (skinned: false: the blocks, not the one stretched skin over them)
+    for (let i = only ?? 0; i < (only != null ? only + 1 : 35); i++) {   // (only: just the one, by its number. 35: Tony, from next door, as tonys/inside.js dresses him)                 // two dozen customers, Dana (in her uniform), you (in the uniform, and in your own clothes: player.js's me), and eight more in the uniform for whoever's hired (staff.js's rollApplicant: his khakis and polo, hers)
+      const dana = i === 24, you = i === 25 || i === 26, crew = i > 26 && i < 35, female = dana || (!you && i % 2 === 1);
+      const hired = crew && { ...VaultCustomers.randomOutfit(seeded(3000 + i * 13), female), top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: female ? "jeans" : "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e", hat: null, sleeve: female ? "cap" : "short", hightop: false, tights: null };
+      const yours = you && { ...VaultCustomers.randomOutfit(seeded(1985), false), height: 1, build: 1, hat: null, ...(i === 25 ? { top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" } : {}) };
+      const o = { ...(i === 35 ? { ...VaultCustomers.randomOutfit(seeded(4417), false), hat: null } : dana ? DANA_APP.outfit : yours || hired || VaultCustomers.randomOutfit(seeded(1000 + i * 7), female)), skinned: false };   // (skinned: false: the blocks, not the one stretched skin over them)
       const c = VaultCustomers.build(o), R = c.rig, body = c.group.children[0];
       const shown = new Set(c.parts.filter(p => p.visible)); c.holdTape(3); c.parts.filter(p => p.visible && !shown.has(p)).forEach((m, k) => m.name = `p${i}_tape${k}`);   // the tapes in their hand: there, to be hidden
       const N = n => `p${i}_${n}`;   // (every name its own: an importer may not allow two nodes one name, even under different parents)
@@ -47,27 +57,119 @@ if (people) {
       c.holdProp(null);
       // their face in every mood, off the little canvas it's drawn on (no blinks: they'd be caught mid-blink)
       Math.random = () => 1;
-      const fc = c.screen.material.map.image, sheet = document.createElement("canvas"); sheet.width = fc.width * 4; sheet.height = fc.height * 4;
+      const fc = c.screen.material.map.image, sheet = document.createElement("canvas"); sheet.width = fc.width * 4; sheet.height = fc.height * 8;   // (and under them, the same sixteen mid-blink)
       const g = sheet.getContext("2d");
       c.tick(0.05, 0); c.tick(0.2, 0);
       MOODS.forEach((m, k) => { c.setMood(m); for (let n = 0; n < 5; n++) c.tick(0.05, 0); g.drawImage(fc, (k % 4) * fc.width, Math.floor(k / 4) * fc.height); });
+      // ...and blinking: a blink's 0.12 s, so each is timed to start 0.15 s into the mood and be caught at 0.25, as the open-eyed one was
+      Math.random = () => (0.12 - 2) / 3; c.tick(1.01, 0); c.tick(0.2, 0);
+      MOODS.forEach((m, k) => { c.setMood(m); for (let n = 0; n < 5; n++) c.tick(0.05, 0); g.drawImage(fc, (k % 4) * fc.width, (4 + Math.floor(k / 4)) * fc.height); c.tick(0.05, 0); });
       Math.random = random;
       c.setMood("neutral"); c.tick(0.05, 0);
       for (const m of props) m.visible = true;
       c.group.traverse(n => { n.userData = {}; });
       holder.add(c.group);
-      who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, staff: dana ? DANA_APP.first : undefined, face: sheet.toDataURL("image/png") });
+      who.push({ height: o.height, build: o.build, female: !!o.female, gait: c.gait, staff: dana ? DANA_APP.first : i === 25 ? "You" : i === 26 ? "You (own clothes)" : crew ? "Crew" : i === 35 ? "Tony" : undefined, face: sheet.toDataURL("image/png") });
     }
     const glb = await new GLTFExporter().parseAsync(holder, { binary: true, onlyVisible: true });
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "people.glb"; document.body.appendChild(a); a.click();
     return { moods: MOODS, who, mb: +(glb.byteLength / 1048576).toFixed(1) };
-  });
+  }, tonyOnly ? 35 : null);
   const { mkdirSync } = await import("fs");
   mkdirSync(out, { recursive: true });
-  await (await download).saveAs(resolve(out, "people.glb"));
-  cast.who.forEach((w, i) => { writeFileSync(resolve(out, `face_${i}.png`), Buffer.from(w.face.split(",")[1], "base64")); delete w.face; });
-  writeFileSync(resolve(out, "people.json"), JSON.stringify({ moods: cast.moods, who: cast.who }, null, 1));
+  await (await download).saveAs(resolve(out, tonyOnly ? "tony.glb" : "people.glb"));
+  cast.who.forEach((w, i) => { writeFileSync(resolve(out, `face_${tonyOnly ? 35 : i}.png`), Buffer.from(w.face.split(",")[1], "base64")); delete w.face; });
+  writeFileSync(resolve(out, tonyOnly ? "tony.json" : "people.json"), JSON.stringify(tonyOnly ? cast.who[0] : { moods: cast.moods, who: cast.who }, null, 1));
   console.log(out, { people: cast.who.length, mb: cast.mb });
+  await browser.close(); process.exit(0);
+}
+
+if (cars) {                                      // the cars (one of each style, painted a colour nobody would: the other end paints them), and the rain on the glass
+  const download = page.waitForEvent("download", { timeout: 600000 });
+  const { mkdirSync } = await import("fs");
+  const got = await page.evaluate(async () => {
+    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const holder = new THREE.Scene(); let s = 0;
+    for (; s < 6; s++) {
+      const c = driveIn({ s, c: 0xff00ff }, null), g = c.g; driveOut(c);   // (not parked yet: just gone, and the car's ours)
+      g.name = "car" + s; g.position.set(0, 0, 0); g.rotation.set(0, 0, 0);
+      let k = 0;
+      g.traverse(m => {
+        if (!m.isMesh) return;
+        if (m.userData.pool) { m.visible = false; return; }
+        if (m.userData.lamp) m.name = `car${s}_lamp_${m.userData.lamp}_${k++}`;
+        if (m.material.color && m.material.color.getHex() === 0xff00ff) m.material.name = "paint";
+      });
+      g.userData = { L: g.userData.car.L, W: g.userData.car.W };
+      g.traverse(m => { if (m !== g) m.userData = {}; });
+      holder.add(g);
+    }
+    // the rain on the storefront glass: its three sheets (the beads, and two sets of runners), as they were drawn
+    const glass = []; scene.traverse(o => { const im = o.isMesh && o.material.map && o.material.map.image; if (im && im.width === 256 && im.height === 512 && Math.abs(o.position.y - 1.55) < 0.01 && !glass.includes(im)) glass.push(im); });
+    const glb = await new GLTFExporter().parseAsync(holder, { binary: true, onlyVisible: true });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "cars.glb"; document.body.appendChild(a); a.click();
+    return { styles: s, sizes: holder.children.map(g => [g.userData.L, g.userData.W]), glass: glass.map(c => c.toDataURL("image/png")), mb: +(glb.byteLength / 1048576).toFixed(1) };
+  });
+  await (await download).saveAs(out);
+  got.glass.forEach((d, i) => writeFileSync(resolve(out, "..", `glass_${i}.png`), Buffer.from(d.split(",")[1], "base64"))); got.glass = got.glass.length;
+  console.log(out, got, errors.length ? errors : "");
+  await browser.close(); process.exit(0);
+}
+
+if (extras) {                                    // what a fresh store hasn't got out yet, and so the world's .glb hasn't either
+  const download = page.waitForEvent("download", { timeout: 600000 });
+  const { existsSync, readFileSync } = await import("fs"), bareAt = resolve(out, "..", "bare.json");
+  const got = await page.evaluate(async bare => {
+    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const holder = new THREE.Scene();
+    // the library's locked tiers: every copy that isn't on the shelves yet, put out, and just those lifted out of the
+    // shelves' merged meshes (a cover's 4 corners, a body's 24), each mesh under its own material
+    // (and whatever else the world's .glb has nothing on the shelf for: the copies that were out on rental when it was
+    // written. Which ones those were is bare.json beside it, as the other end reports them: godot -- --shot --bare)
+    const locked = []; for (const t of catalog) for (const c of [t, ...(t.copies || [])]) if (c.slot && (c.libLocked || (bare ? bare.includes(copyKey(c)) : c.offShelf))) locked.push(c);
+    for (let tier = 1; tier <= LIBRARY.length; tier++) libUnlock(tier);
+    for (const c of locked) setOnShelf(c, true);
+    const want = new Map();                        // mesh -> the vertices wanted from it
+    const add = (mesh, v0, n) => { let w = want.get(mesh); if (!w) want.set(mesh, w = new Set()); for (let i = 0; i < n; i++) w.add(v0 + i); };
+    for (const c of locked) { add(c.slot.cover, c.slot.cv, 4); add(bodyMesh, c.slot.bv, 24); }
+    let k = 0;
+    for (const [mesh, vs] of want) {
+      const src = mesh.geometry, geo = new THREE.BufferGeometry(), order = [...vs].sort((a, b) => a - b), at = new Map(order.map((v, i) => [v, i]));
+      for (const name of Object.keys(src.attributes)) {
+        const A = src.attributes[name], out = new Float32Array(order.length * A.itemSize);
+        order.forEach((v, i) => { for (let j = 0; j < A.itemSize; j++) out[i * A.itemSize + j] = A.array[v * A.itemSize + j]; });
+        geo.setAttribute(name, new THREE.BufferAttribute(out, A.itemSize));
+      }
+      const idx = src.index ? src.index.array : order, tris = [];
+      for (let i = 0; i + 2 < idx.length; i += 3) if (vs.has(idx[i]) && vs.has(idx[i + 1]) && vs.has(idx[i + 2])) tris.push(at.get(idx[i]), at.get(idx[i + 1]), at.get(idx[i + 2]));
+      geo.setIndex(tris);
+      const m = new THREE.Mesh(geo, mesh.material); m.name = `library_${k++}`;
+      mesh.updateWorldMatrix(true, false); mesh.matrixWorld.decompose(m.position, m.quaternion, m.scale);
+      for (const mt of [].concat(m.material)) if (mt.map && !mt.transparent && !mt.alphaTest) mt.map.userData.mimeType = "image/jpeg";
+      holder.add(m);
+    }
+    // the signs that said COMING SOON, as they read once the section's in (named for the tier that takes: the last of
+    // theirs): each section's header strip, the endcaps' genre lists, the MONSTERVISION topper
+    const tierOf = cat => LIBRARY.findIndex(L => L.cats.includes(cat)) + 1;
+    let signs = 0;
+    const sign = (o, tier, kind) => { o.updateWorldMatrix(true, true); const c = o.clone(true); c.name = `${kind}${signs++}_tier${tier}`; o.matrixWorld.decompose(c.position, c.quaternion, c.scale); c.visible = true; holder.add(c); };
+    scene.traverse(o => { o.userData = {}; });
+    const strips = Object.entries(catStripMat).filter(([cat]) => cat !== "__soon" && tierOf(cat)), tags = endTags.map(t => [t.mat, Math.max(0, ...t.cats.map(tierOf))]).filter(([, tier]) => tier);
+    const using = []; scene.traverse(o => { if (!o.isMesh) return; for (const [cat, m] of strips) if (o.material === m) using.push([o, tierOf(cat), "strip"]); for (const [m, tier] of tags) if (o.material === m) using.push([o, tier, "tag"]); });
+    for (const [o, tier, kind] of using) sign(o, tier, kind);
+    if (mvTopper) sign(mvTopper, tierOf("MonsterVision"), "topper");
+    // the rewinders: the second one (bought later) as the plain box, and both as the sports car (the high-speed upgrade)
+    rewinderOn(rewinders[1], true);
+    const copy = (rw, name) => { rw.g.traverse(o => { o.userData = {}; }); rw.g.updateWorldMatrix(true, true); const g = rw.g.clone(true); g.name = name; rw.g.matrixWorld.decompose(g.position, g.quaternion, g.scale); holder.add(g); };
+    copy(rewinders[1], "rewinder2_box");
+    rewinders.forEach((rw, i) => { rewinderKit.model(rw, true); copy(rw, `rewinder${i + 1}_car`); });
+    holder.traverse(o => { o.userData = {}; });
+    const glb = await new GLTFExporter().parseAsync(holder, { binary: true, onlyVisible: true });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([glb], { type: "model/gltf-binary" })); a.download = "extras.glb"; document.body.appendChild(a); a.click();
+    return { tapes: locked.length, meshes: k, signs, mb: +(glb.byteLength / 1048576).toFixed(1) };
+  }, existsSync(bareAt) ? JSON.parse(readFileSync(bareAt, "utf8")) : null);
+  await (await download).saveAs(out);
+  console.log(out, got, errors.length ? errors : "");
   await browser.close(); process.exit(0);
 }
 
