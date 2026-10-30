@@ -353,7 +353,7 @@ const bagsDown = [];                              // set down somewhere: { bin, 
 const bagHand = new THREE.Group();
 const binList = () => Object.values(trashBins);
 const binFull = b => b.n >= b.cap;
-const binNear = (x, z) => z < STORE.z ? trashBins.lobby : x < BOH.splitX ? trashBins.breakroom : trashBins.restroom;
+const binNear = (x, z) => z < STORE.z ? trashBins.lobby : x < BOH.splitX ? trashBins.restroom : trashBins.breakroom;
 const unaim = o => o.traverse(m => { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); });
 for (const b of binList()) {
   b.n = Math.min(b.cap, SAVE?.trash?.bins?.[b.id] ?? Math.floor(b.cap * 0.3 * Math.random())); b.acc = 0;

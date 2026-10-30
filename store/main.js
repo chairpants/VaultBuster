@@ -31,7 +31,7 @@ function saveState() {
     : e.kind === "snack" ? { kind: "snack", i: units.indexOf(e.ref), left: i === invSel ? snackLeft : e.left, total: i === invSel ? snackTotal : e.total }
     : e.kind === "item" ? { kind: "item", id: e.ref.id } : { kind: "popcorn", pop: e.ref };
   const data = {
-    v: SAVE_V, mode: MODE, redNights: redNights || undefined, role: CUSTOMER ? "customer" : MODE === "customer" ? "staff" : undefined, cm: CUSTOMER ? cmSave() : undefined, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
+    v: SAVE_V, mode: MODE, redNights: redNights || undefined, role: CUSTOMER ? "customer" : MODE === "customer" ? "staff" : undefined, cm: CUSTOMER ? cmSave() : undefined, log: logData.slice(-60), player: { x: onStool ? stoodAt.x : player.onRoof ? ROOF_DOWN.x : player.inBooth ? (SHAFT.x0 + SHAFT.split) / 2 : player.x, z: onStool ? stoodAt.z : player.onRoof ? ROOF_DOWN.z : player.inBooth ? (TALL.z0 + SHAFT.top) / 2 : player.z, yaw: player.yaw, pitch: player.pitch },   // off the stool: its spot is inside a collider
     phone: { next: phone.next }, postits: postits.map(n => ({ m: n.m.num, result: n.result, at: n.at, rz: +n.rz.toFixed(3) })), holds: holds.map(h => ({ member: h.member.num, title: copyKey(h.title), at: h.at, day: h.day, copy: h.copy && copyKey(h.copy), by: h.by, alert: h.alert })),
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg, drunk: { gut: +drunk.gut.toFixed(3), blood: +drunk.blood.toFixed(3), hang: drunk.hang, owe: drunk.owe },
@@ -167,7 +167,7 @@ function roomOf(o) {
   return rs.size === 1 ? [...rs][0] : null;
 }
 function roomSort() {                          // file new top-level objects into their rooms (posters load late, so this runs a few times)
-  const movers = new Set([me.group, stool.g, cutout.g, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
+  const movers = new Set([me.group, stool.g, cutout.g, BOOTH.g, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
   for (const o of [...scene.children]) {
     if (roomSeen.has(o) || roomGroupSet.has(o)) continue;
     roomSeen.add(o);
@@ -179,7 +179,7 @@ function roomSort() {                          // file new top-level objects int
 }
 const roomFrustum = new THREE.Frustum(), roomProj = new THREE.Matrix4(), roomPort = new THREE.Vector3();
 const roomSortAt = [0.5, 2, 5, 10, 20];       // seconds in
-let hallDoor, cinemaDoor;
+let hallDoor, cinemaDoor, stairDoor;
 function regionTick() {
   if (roomSortAt.length && clockT >= roomSortAt[0]) { roomSortAt.shift(); roomSort(); }
   hallDoor ??= doors.find(d => d.push && !d.alongX); cinemaDoor ??= doors.find(d => d.push && d.alongX);
@@ -189,24 +189,28 @@ function regionTick() {
     camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
   }
-  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor)]];
+  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor) || player.inBooth]];   // (the booth's window looks out over the house)
   const seen = new Set([player.onRoof ? "out" : roomAt(camera.position.x, camera.position.z)]);   // (on the roof: just the outdoors, and the closet down the hatch)
   roof.g.visible = player.onRoof || !!roof.climb;
   if (!player.onRoof) for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
+  // the booth and its stairs (BOOTH.g): from in there, from the auditorium (through its window), or through the stairs' open door
+  stairDoor ??= doors.find(d => !d.push && d.alongX && Math.abs(d.c - SHAFT.door) < 0.01);
+  const { x: cx, z: cz } = camera.position, inShaft = cx > SHAFT.x0 && cx < BOH.x0 && cz > SHAFT.z0 && cz < BOH.z1;
+  BOOTH.g.visible = !player.onRoof && (player.inBooth || inShaft || (seen.has("theater") && cz > BOH.z1) || (seen.has("lobby") && open(stairDoor)));
 }
 let clockT = 0;
 const ambFwd = new THREE.Vector3(), coolerSndAt = new THREE.Vector3();
 let coolerWas = false;
-const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 6, 2.6, 29], ["breakroom", 5, 2.6, 31.5],
-  ["restroom", 9.6, 2.6, 31.5], ["lobby", -2.5, 3, 30.5], ["theater", -3, 5, 38]].map(([zone, x, y, z]) => ({ zone, x, y, z, level: 0 }));   // a hum over each light zone
+const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 5.7, 2.6, 29], ["breakroom", 8.4, 2.6, 32.4],
+  ["restroom", 3.9, 2.6, 32.4], ["lobby", -2.5, 3, 31.5], ["theater", -3, 5, 40]].map(([zone, x, y, z]) => ({ zone, x, y, z, level: 0 }));   // a hum over each light zone
 let paused = false, pausedTape = false;          // the pause screen's up: nothing moves
 function ambTick(dt) {
   if (!window.VaultAmbience) return;             // the store's sound: where you're listening from, which lights are humming
   camera.getWorldDirection(ambFwd);
   AMB_ZONES.forEach(z => z.level = zoneLvl[z.zone] ?? 0);
   VaultAmbience.tick({ dt, cam: { x: camera.position.x, y: camera.position.y, z: camera.position.z, fx: ambFwd.x, fy: ambFwd.y, fz: ambFwd.z }, zones: AMB_ZONES,
-    night: 1 - tod.level, rain: WX.kind === "rain" ? WX.k : 0, snow: WX.kind === "snow" ? WX.k : 0, wind: WX.wind, gust: WX.gust, outdoors: !!player.onRoof || camera.position.y > ROOF.y, talk: ambTalkers(), units: roof.units, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
+    night: 1 - tod.level, rain: WX.kind === "rain" ? WX.k : 0, snow: WX.kind === "snow" ? WX.k : 0, wind: WX.wind, gust: WX.gust, outdoors: !!player.onRoof || camera.position.y > (deckY(camera.position.x, camera.position.z) ?? ROOF.y), talk: ambTalkers(), units: roof.units, active: !paused && started && !shift.report && (document.pointerLockElement === canvas || posTerm.isOpen()) });
 }
 function ambTalkers() {                         // who's talking right now, for the murmur (positions, at most six; the nearest ones)
   const t = [];

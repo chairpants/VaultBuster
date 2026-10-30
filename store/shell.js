@@ -191,18 +191,16 @@ box(3.84, 0.12, 0.35, mat.frame, 0, 2.66, 0.1);                                 
   exit.visible = false; exit.position.set(0, 1.25, DZ + 0.06); exit.userData.exitDoor = true; scene.add(exit); aimables.push(exit);
 }
 
-// back of house: hallway along the back wall, breakroom + restroom off it.
+// back of house: hallway along the back wall, restroom + break room off it, the janitor's closet at its end.
 // Lower drop ceiling than the sales floor, plain walls, no stripe
 const BX0 = BOH.x0, BZ0 = Z, BZ1 = BOH.z1, BH = BOH.h, HZ = BOH.hallZ, SX = BOH.splitX;
 wall(HZ, BZ1 + T / 2, BX0, false, BH, mat.wall);                          // west, rooms part
 wall(BZ0, HZ, BX0, false, BH, mat.wall, [BOH_DOORS.future]);              // west, hall part: the future door
-wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall, [{ c: BOH_DOORS.closet, w: CLOSET.doorW }]);      // east: the janitor's closet door
+wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall);                          // east
 wall(BX0, XR, BZ1, true, BH, mat.wall);                                   // rear
-wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.breakroom, BOH_DOORS.restroom]);   // hall | rooms
-wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // breakroom | restroom
-wall(XR, CLOSET.x1 + T / 2, BZ0, true, BH, mat.wall);                    // janitor's closet: its sides (in line with the store's back wall and the hall's)...
-wall(XR, CLOSET.x1 + T / 2, HZ, true, BH, mat.wall);
-wall(BZ0, HZ, CLOSET.x1, false, BH, mat.wall);                            // ...and its back
+wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.restroom, BOH_DOORS.breakroom]);   // hall | rooms
+wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // restroom | break room
+wall(BZ0, HZ, CLOSET.x0, false, BH, mat.wall, [{ c: BOH_DOORS.closet, w: CLOSET.doorW }]);   // across the hall's end: the janitor's closet door
 const vctTex = makeTexture((ctx, W, H) => {   // speckled vinyl composition tile, 8 x 8 30 cm squares per repeat
   const n = 8, s = W / n, cols = ["#d8d2c3", "#cec7b5", "#e1dccf", "#c9c3b4"];
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = cols[Math.floor(Math.random() * cols.length)]; ctx.fillRect(x * s, y * s, s, s); }
@@ -220,15 +218,15 @@ const floorPatch = (tex, tileM, x0, x1, z0, z1) => {
   const f = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshLambertMaterial({ map: t }));
   f.rotation.x = -Math.PI / 2; f.position.set((x0 + x1) / 2, 0.002, (z0 + z1) / 2); scene.add(f);
 };
-floorPatch(vctTex, 2.4, BX0, XR, BZ0, HZ);                                // hall — starts right where the store's carpet ends, mid-opening
-floorPatch(vctTex, 2.4, BX0, SX, HZ, BZ1);                                // breakroom
-floorPatch(bathTex, 0.8, SX, XR, HZ, BZ1);                                // restroom
+floorPatch(vctTex, 2.4, BX0, CLOSET.x0, BZ0, HZ);                         // hall — starts right where the store's carpet ends, mid-opening
+floorPatch(bathTex, 0.8, BX0, SX, HZ, BZ1);                               // restroom
+floorPatch(vctTex, 2.4, SX, XR, HZ, BZ1);                                 // break room
 // ceilings: the hall gets its own, its grid shifted so a row of tiles runs down the middle between
 // the walls (the hall lights sit in it) with a sliver of tile either side; the rooms keep the store's grid
 const hallMid = (BZ0 + WALL_T / 2 + HZ - WALL_T / 2) / 2, rowStart = hallMid - CEIL_TILE.z / 2;
-const hallCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, BZ0, HZ); hallCeilTex.offset.y = (BZ0 - (rowStart % CEIL_TILE.z)) / CEIL_REP; hallCeilTex.needsUpdate = true;
-const hallCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, HZ - BZ0), new THREE.MeshLambertMaterial({ map: hallCeilTex }));
-hallCeil.rotation.x = Math.PI / 2; hallCeil.position.set((BX0 + XR) / 2, BH, (BZ0 + HZ) / 2); scene.add(hallCeil);
+const hallCeilTex = ceilGrid(ceilTex.clone(), BX0, CLOSET.x0, BZ0, HZ); hallCeilTex.offset.y = (BZ0 - (rowStart % CEIL_TILE.z)) / CEIL_REP; hallCeilTex.needsUpdate = true;
+const hallCeil = new THREE.Mesh(new THREE.PlaneGeometry(CLOSET.x0 - BX0, HZ - BZ0), new THREE.MeshLambertMaterial({ map: hallCeilTex }));
+hallCeil.rotation.x = Math.PI / 2; hallCeil.position.set((BX0 + CLOSET.x0) / 2, BH, (BZ0 + HZ) / 2); scene.add(hallCeil);
 const bohCeilTex = ceilGrid(ceilTex.clone(), BX0, XR, HZ, BZ1); bohCeilTex.needsUpdate = true;
 const bohCeil = new THREE.Mesh(new THREE.PlaneGeometry(XR - BX0, BZ1 - HZ), new THREE.MeshLambertMaterial({ map: bohCeilTex }));
 bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (HZ + BZ1) / 2); scene.add(bohCeil);
@@ -236,12 +234,12 @@ bohCeil.rotation.x = Math.PI / 2; bohCeil.position.set((BX0 + XR) / 2, BH, (HZ +
 // the sales floor opens straight into the hall; the rooms get painted doors, the theater a maroon push door
 casing(Z, BOH_DOORS.store, true, BOH_OPENING_W);
 const painted = new THREE.MeshLambertMaterial({ color: 0xd9d4c7 });
-makeDoor({ at: HZ, c: BOH_DOORS.breakroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
+makeDoor({ at: HZ, c: BOH_DOORS.breakroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,   // (made in this order: a save keeps the doors by it)
   signs: [{ text: "BREAK ROOM", side: -1 }] });
 makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
   signs: [{ text: "RESTROOM", side: -1 }] });
 makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, leafMat: theaterDoorMat, push: true, porthole: true,
   signs: [{ text: "THEATER", side: 1 }] });
-makeDoor({ at: XR, c: BOH_DOORS.closet, alongX: false, hinge: 1, swing: -1, w: CLOSET.doorW, leafMat: painted,   // narrow; hinged on the restroom side, swings out into the hall
+makeDoor({ at: CLOSET.x0, c: BOH_DOORS.closet, alongX: false, hinge: 1, swing: -1, w: CLOSET.doorW, leafMat: painted,   // narrow; hinged on the break room's side, swings out into the hall
   signs: [{ text: "JANITOR", side: -1 }] });
 

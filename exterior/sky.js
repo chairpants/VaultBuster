@@ -48,7 +48,7 @@ const wxFall = (() => {                           // the rain (streaks) and the 
   const uni = { uT: { value: 0 }, uK: { value: 0 }, uNight: { value: 0 }, uWind: { value: new THREE.Vector2() }, uDrift: { value: new THREE.Vector2() } };   // wind: m/s now; drift: how far it's carried things
   const box = (cx, cz, sx, sz, h, y0, follow) => ({ ...uni, uC: { value: new THREE.Vector2(cx, cz) }, uS: { value: new THREE.Vector2(sx, sz) }, uH: { value: h }, uY0: { value: y0 }, uFollow: { value: follow } });
   const FAR = [4, -16.2, 68, 31.5, 12, 0, 0], NEAR = [0, 0, 26, 26, 9.5, -0.5, 1];
-  const foot = ROOF.rects.map(([a, b, c, d]) => `(p.x > ${a.toFixed(2)} && p.x < ${b.toFixed(2)} && p.z > ${c.toFixed(2)} && p.z < ${d.toFixed(2)})`).join(" || ");
+  const foot = ROOF.decks.map(({ r: [a, b, c, d], y }) => `(p.y < ${(y + 0.05).toFixed(2)} && p.x > ${a.toFixed(2)} && p.x < ${b.toFixed(2)} && p.z > ${c.toFixed(2)} && p.z < ${d.toFixed(2)})`).join(" || ");
   const head = `attribute float end; attribute float seed; uniform float uT, uH, uY0, uFollow; uniform vec2 uC, uS, uWind, uDrift;
     vec3 place(vec3 q, float fall, vec2 drift) {     // world position: held in the world, wrapped into the box round its center
       vec2 c0 = mix(uC, cameraPosition.xz, uFollow) - uS * 0.5;
@@ -56,7 +56,7 @@ const wxFall = (() => {                           // the rain (streaks) and the 
       vec3 p; p.y = y0 + mod(q.y * uH - fall, uH); p.xz = c0 + mod(vec2(q.x, -q.z) * uS + drift - c0, uS);
       return p;
     }
-    bool indoors(vec3 p) { return p.y < ${(ROOF.y + 0.05).toFixed(2)} && (${foot}); }
+    bool indoors(vec3 p) { return ${foot}; }
     `;
   const OFF = "gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;";
   const rainMat = u => new THREE.ShaderMaterial({ uniforms: u, transparent: true, depthWrite: false,
@@ -141,14 +141,13 @@ const wxDrifts = (() => {
   run(WALL_L, -2.1, -0.06, -1, 0.2, 0.09); run(2.1, STORE.x, -0.06, -1, 0.2, 0.09);   // the foot of the storefront, not across the doors
   for (const lx of LOT.lampX) for (let a = 0; a < 7; a++) { const t = a / 7 * 6.28 + rnd() * 0.4; add(lx + Math.cos(t) * 0.36, (CURB + LOT.roadNear) / 2 + Math.sin(t) * 0.36, 0.16 + rnd() * 0.08, 0.12, 0.08 + rnd() * 0.06); }   // round the lamp footings
   for (const sp of spots) if (pavedAt(sp.x, sp.z)) sp.y += LOT.y;   // (in the gutter and against the lot side of the curb: down on the paving)
-  const inFoot = (x, z) => ROOF.rects.some(([a, b, c, d]) => x > a && x < b && z > c && z < d);
-  for (const [a, b, c, d] of ROOF.rects)          // up on the roof, against the inside of the parapet (not where one part of the roof runs on into the next)
+  for (const { r: [a, b, c, d], y } of ROOF.decks)   // up on the roof, against the inside of the parapet or the tall block's wall (not where one part of the roof runs on into the next)
     for (const [xa, za, xb, zb, nx, nz] of [[a, c, b, c, 0, 1], [a, d, b, d, 0, -1], [a, c, a, d, 1, 0], [b, c, b, d, -1, 0]]) {   // each side, (nx, nz) pointing in
       const len = Math.hypot(xb - xa, zb - za);
       for (let t = 0.35; t < len - 0.35; t += 0.35 + rnd() * 0.5) {
         const x = xa + (xb - xa) * t / len, z = za + (zb - za) * t / len;
-        if (inFoot(x - nx * 0.05, z - nz * 0.05)) continue;
-        add(x + nx * 0.26, z + nz * 0.26, 0.3 + rnd() * 0.45, 0.14 + rnd() * 0.1, 0.05 + rnd() * 0.07, ROOF.y - 0.01, nx ? Math.PI / 2 : 0);
+        if (deckY(x - nx * 0.05, z - nz * 0.05) === y) continue;
+        add(x + nx * 0.26, z + nz * 0.26, 0.3 + rnd() * 0.45, 0.14 + rnd() * 0.1, 0.05 + rnd() * 0.07, y - 0.01, nx ? Math.PI / 2 : 0);
       }
     }
   const geo = new THREE.SphereGeometry(1, 12, 5, 0, Math.PI * 2, 0, Math.PI / 2);

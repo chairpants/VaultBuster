@@ -12,7 +12,7 @@ const holdAlertFor = copy => holds.find(h => h.alert && !h.copy && h.title === t
 const storeBusy = () => !!(co || custWaiting() || custLine.length || custAsks.some(k => k.state === "asking"));   // somebody in the store needs serving
 let ringOut = null;
 function heardFrom(x, z, falloff = true) {      // how loud a sound out on the sales floor is where you are: the whole floor hears it (fainter
-  const room = player.z < STORE.z ? 1 : player.z < BOH.hallZ && player.x > BOH.x0 && player.x < STORE.x ? 0.4 : 0;   // with distance), the hall a little through the doorway, the back rooms not at all
+  const room = player.z < STORE.z ? 1 : player.z < BOH.hallZ && player.x > BOH.x0 && player.x < CLOSET.x0 ? 0.4 : 0;   // with distance), the hall a little through the doorway, the back rooms not at all
   if (!falloff || !room) return room;              // (falloff off: the caller's sound already fades with distance, it just needs the walls)
   return room * Math.max(0.15, 1 / (1 + (Math.hypot(player.x - x, player.z - z) / 8) ** 2));
 }

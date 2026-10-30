@@ -8,18 +8,24 @@
 // paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
 const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
 scene.add(roof.g); roof.g.visible = false;
-const ROOF_LADDER = { x: 12.2, z: 28.28 };                 // the rungs' line: against the closet's south wall, beside the chute
-const ROOF_HATCH = { x0: 11.88, x1: 12.48, z0: 28.12, z1: 28.87 };
-const ROOF_UP = { x: 11.4, z: 29.3 }, ROOF_DOWN = { x: 11.68, z: 28.8 };   // where you step off at the top / at the bottom
-// the ladder out back, on the theater's east wall by the cardboard bed. Its bottom half rides latched up out of reach of
-// the ground till somebody on the roof kicks it down (once: it stays down, and it's saved); then it's a way up from outside
-const BACK_LADDER = { x: 1.62, z: 41.3, mid: 2.3, raise: 2.0, up: { x: 0.55, z: 41.3 }, down: { x: 2.15, z: 41.3 } };   // x: the rungs' line, 14 cm off the wall's stucco (which is 15 cm outside the roof's edge); up / down: where you step off
+const ROOF_LADDER = { x: 10.6, z: 28.28 };                 // the rungs' line: against the closet's north wall (the store's back wall), beside the chute
+const ROOF_HATCH = { x0: 10.28, x1: 10.88, z0: 28.12, z1: 28.87 };
+const ROOF_UP = { x: 9.8, z: 29.3 }, ROOF_DOWN = { x: 10.08, z: 28.8 };   // where you step off at the top / at the bottom
+// the ladder out back, on the back of house's back wall by the cardboard bed (the tall block's walls are too tall for it). Its
+// bottom half rides latched up out of reach of the ground till somebody on the roof kicks it down (once: it stays down, and
+// it's saved); then it's a way up from outside
+const BACK_LADDER = { x: 6.0, z: 35.39, wall: 35.25, mid: 2.3, raise: 2.0, up: { x: 6.0, z: 34.32 }, down: { x: 6.0, z: 35.92 } };   // z: the rungs' line, 14 cm off the wall's stucco (wall: its face); up / down: where you step off
 const CLIMBS = {                                // where the camera goes on each ladder: the rungs' line (stood off it), which way you face, where you step off
   hatch: { x: ROOF_LADDER.x, z: ROOF_LADDER.z + 0.42, yaw: 0, up: ROOF_UP, down: ROOF_DOWN },
-  back: { x: BACK_LADDER.x + 0.42, z: BACK_LADDER.z, yaw: Math.PI / 2, up: BACK_LADDER.up, down: BACK_LADDER.down },
+  back: { x: BACK_LADDER.x, z: BACK_LADDER.z + 0.42, yaw: 0, up: BACK_LADDER.up, down: BACK_LADDER.down },
 };
-const onDeck = (x, z) => ROOF.rects.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
-const playerFloor = () => player.onRoof ? ROOF.y : floorHeightAt(player.x, player.z);
+const onDeck = (x, z) => deckY(x, z) != null;
+function roofY(x, z) {                          // underfoot up top: the store's roof, the tall block's, or the iron stair between them (a ramp up its treads)
+  const foot = IRON.x0 + IRON.n * IRON.run;
+  if (x > IRON.land && x < foot && z > IRON.z0 && z < ROOF.tall.z0) return x <= IRON.x0 ? ROOF.tall.y : ROOF.y + (foot - x) / (foot - IRON.x0) * (ROOF.tall.y - ROOF.y);
+  return deckY(x, z) ?? ROOF.y;
+}
+const playerFloor = () => player.onRoof ? roofY(player.x, player.z) : player.inBooth ? TALL.booth : floorHeightAt(player.x, player.z);
 const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === "carried" || boxCarry.length || bagCarry.length || toolHeld || cmove.item;
 {
   const Y = ROOF.y, G = roof.g, T = 0.2, PH = ROOF.wall;
@@ -33,8 +39,10 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const galv = phong(0xa9aeb3, 40), alum = phong(0xd3d6da, 80), dark = lam(0x2a2c2f), beige = phong(0xd9d3c3, 20), cement = lam(0x9d9a92);
 
-  // ---- the deck: gravel ballast over the membrane, one sheet over the whole outline (a hole for the hatch) ----
-  const P = [[-7.84, -0.1], [11.1, -0.1], [11.1, 27.9], [12.7, 27.9], [12.7, 29.9], [11.1, 29.9], [11.1, 33.1], [1.33, 33.1], [1.33, 46.6], [-7.07, 46.6], [-7.07, 33.1], [-7.84, 33.1]];
+  // ---- the decks: gravel ballast over the membrane, one sheet over each (a hole in the store's for the hatch): the store's
+  // and the back of house's at 4 m, the tall block's (the auditorium and the booth) at 6.4 ----
+  const TY = ROOF.tall.y, { x0: TX0, x1: TX1, z0: TZ0, z1: TZ1 } = ROOF.tall;
+  const P = [[-7.84, -0.1], [11.1, -0.1], [11.1, 35.1], [TX1, 35.1], [TX1, TZ0], [-7.84, TZ0]], PT = [[TX0, TZ0], [TX1, TZ0], [TX1, TZ1], [TX0, TZ1]];
   const gravelTex = makeTexture((ctx, W, H) => {   // 1.2 m of pea gravel: thousands of rounded stones, each lit from the top left
     ctx.fillStyle = "#77736c"; ctx.fillRect(0, 0, W, H);
     const cols = ["#a8a49b", "#6f6b64", "#bdb6a8", "#5d5a55", "#9a8f7d", "#c9c2b3", "#837d72", "#b1a48d"];
@@ -55,9 +63,11 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     const sh = new THREE.Shape(P.map(([x, z]) => new THREE.Vector2(x, -z))), hole = new THREE.Path();
     const { x0, x1, z0, z1 } = ROOF_HATCH; hole.moveTo(x0, -z0); hole.lineTo(x0, -z1); hole.lineTo(x1, -z1); hole.lineTo(x1, -z0); hole.lineTo(x0, -z0); sh.holes.push(hole);
     const deck = put(new THREE.ShapeGeometry(sh), gravel, 0, Y, 0); deck.rotation.x = -Math.PI / 2;   // (shape y = -world z; its uvs are world metres)
+    put(new THREE.ShapeGeometry(new THREE.Shape(PT.map(([x, z]) => new THREE.Vector2(x, -z)))), gravel, 0, TY, 0).rotation.x = -Math.PI / 2;
   }
 
-  // ---- parapets: a wall just inside every edge, the stucco skin outside it all the way down, aluminium coping on top ----
+  // ---- parapets: a wall just inside every edge, the stucco skin outside it all the way down (or down to the store's roof,
+  // round the tall block over it), aluminium coping on top. The tall block's front is open over the iron stair's landing ----
   const stucco = lam(0xcdbf9f), base = lam(0x8f8573), coping = phong(0xc2c6cb, 50), fasciaBlue = lam(0x00349c), fasciaY = lam(0xf2c200);
   const membrane = new THREE.MeshLambertMaterial({ map: makeTexture((ctx, W, H) => {   // 3 m of the parapet's inside: the roof's white sheet run up it, weathered
     ctx.fillStyle = "#c4c5bf"; ctx.fillRect(0, 0, W, H);
@@ -74,25 +84,49 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   const tileU = (o, k) => { const uv = o.geometry.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (i >= 16 ? k : i < 8 ? 0.07 : 1)); return o; };   // (a box face's u runs 0..1 across its length: repeat it every 3 m along the long faces, the ends a sliver of it)
   const joints = [];                               // where the coping's 10 ft lengths meet, a cover plate over each joint
   const skin = new THREE.Group(); scene.add(skin);   // (the building's outside, in the scene not the roof group: seen from up here over the edge, and from anywhere out there)
-  for (let i = 0; i < P.length; i++) {
-    const [ax, az] = P[i], [bx_, bz] = P[(i + 1) % P.length], len = Math.hypot(bx_ - ax, bz - az), dx = (bx_ - ax) / len, dz = (bz - az) / len;
+  // each edge: from, to, its deck's height, how far down its skin goes (to the ground, or the store's roof under the tall
+  // block's front and side), and whether it has a parapet (the tall front's gap over the stair: just the wall under it)
+  const EDGES = [[-7.84, -0.1, 11.1, -0.1, Y, 0], [11.1, -0.1, 11.1, 35.1, Y, 0], [11.1, 35.1, TX1, 35.1, Y, 0], [-7.84, TZ0, -7.84, -0.1, Y, 0],
+    [TX0, TZ0, IRON.land, TZ0, TY, Y], [IRON.land, TZ0, IRON.x0, TZ0, TY, Y, false], [IRON.x0, TZ0, TX1, TZ0, TY, Y], [TX1, TZ0, TX1, 35.1, TY, Y],
+    [TX1, 35.1, TX1, TZ1, TY, 0], [TX1, TZ1, TX0, TZ1, TY, 0], [TX0, TZ1, TX0, TZ0, TY, 0]];
+  for (const [ax, az, bx_, bz, EY, from, parapet = true] of EDGES) {
+    const len = Math.hypot(bx_ - ax, bz - az), dx = (bx_ - ax) / len, dz = (bz - az) / len;
     let nx = -dz, nz = dx; const mx = (ax + bx_) / 2, mz = (az + bz) / 2;
-    if (!onDeck(mx + nx * 0.05, mz + nz * 0.05)) { nx = -nx; nz = -nz; }   // n: inward, onto the deck
+    if (deckY(mx + nx * 0.05, mz + nz * 0.05) !== EY) { nx = -nx; nz = -nz; }   // n: inward, onto its deck
     const along = Math.abs(dx) > 0.5, ry = along ? 0 : Math.PI / 2;
     const wall = (inset, th, y0, y1, m, extra = 0, par = G) => { const o = bx(len + extra, y1 - y0, th, m, mx + nx * inset, (y0 + y1) / 2, mz + nz * inset, par); o.rotation.y = ry; return o; };
-    tileU(wall(T / 2, T, Y, Y + PH, membrane), len / 3);                     // the parapet, its inside face in the roof's membrane
-    wall(0.02, 0.4, Y + PH, Y + PH + 0.05, coping, 0.32);                    // coping over wall and skin
-    for (let s = 3.05; s < len - 0.3; s += 3.05) joints.push([ax + dx * s + nx * 0.02, az + dz * s + nz * 0.02, ry]);
     const front = Math.abs(az + 0.1) < 0.01 && Math.abs(bz + 0.1) < 0.01;  // the storefront: above the glass only, a blue fascia with a yellow stripe
     if (front) {                                   // (2 cm thicker and longer than the sides' skin: it laps over their ends at the corners, no faces in the same plane)
-      wall(-0.085, 0.17, 2.75, Y + PH, fasciaBlue, 0.34, skin); wall(-0.1, 0.2, 3.45, 3.6, fasciaY, 0.4, skin);
-    } else { wall(-0.075, 0.15, 0, Y + PH, stucco, 0.3, skin); wall(-0.1, 0.16, 0, 0.5, base, 0.36, skin); }   // a darker band at the foot: 3 cm proud of the stucco at its face and ends, its back 2 cm inside it (flush, its back fought the stucco's in the return beside the storefront glass)
+      wall(-0.085, 0.17, 2.75, EY + PH, fasciaBlue, 0.34, skin); wall(-0.1, 0.2, 3.45, 3.6, fasciaY, 0.4, skin);
+    } else {
+      wall(-0.075, 0.15, from, parapet ? EY + PH : EY, stucco, 0.3, skin);
+      if (!from) wall(-0.1, 0.16, 0, 0.5, base, 0.36, skin);   // a darker band at the foot: 3 cm proud of the stucco at its face and ends, its back 2 cm inside it (flush, its back fought the stucco's in the return beside the storefront glass)
+    }
+    if (!parapet) continue;
+    tileU(wall(T / 2, T, EY, EY + PH, membrane), len / 3);                   // the parapet, its inside face in the roof's membrane
+    wall(0.02, 0.4, EY + PH, EY + PH + 0.05, coping, 0.32);                  // coping over wall and skin
+    for (let s = 3.05; s < len - 0.3; s += 3.05) joints.push([ax + dx * s + nx * 0.02, az + dz * s + nz * 0.02, ry, EY]);
     if (along) col(Math.min(ax, bx_), Math.max(ax, bx_), Math.min(az, az + nz * T), Math.max(az, az + nz * T));
     else col(Math.min(ax, ax + nx * T), Math.max(ax, ax + nx * T), Math.min(az, bz), Math.max(az, bz));
   }
+  // the iron stair up the tall block's front, from the store's roof: open treads on two stringers, the landing at the top on
+  // its legs, a rail up the open side and round the landing
+  {
+    const iron = lam(0x2a2c2f), r = (TY - Y) / IRON.n, foot = IRON.x0 + IRON.n * IRON.run, zc = (IRON.z0 + IRON.z1) / 2, st = new THREE.Group(); G.add(st);   // (up top only: down below, room culling would take it for the lobby's)
+    const beam = (a, b, w) => stick(a, b, w / 2, iron, st);
+    for (let i = 0; i < IRON.n; i++) { const x1 = IRON.x0 + (IRON.n - i) * IRON.run; bx(IRON.run, 0.03, IRON.z1 - IRON.z0, iron, x1 - IRON.run / 2, Y + (i + 1) * r - 0.015, zc, st); }
+    for (const z of [IRON.z0 + 0.02, IRON.z1 - 0.02]) beam(V(foot + 0.1, Y, z), V(IRON.x0, TY - 0.03, z), 0.06);
+    bx(IRON.x0 - IRON.land, 0.05, TZ0 - IRON.z0, iron, (IRON.land + IRON.x0) / 2, TY - 0.025, (IRON.z0 + TZ0) / 2, st);
+    for (const x of [IRON.land + 0.03, IRON.x0 - 0.03]) beam(V(x, Y, IRON.z0 + 0.03), V(x, TY - 0.05, IRON.z0 + 0.03), 0.06);
+    const rz = IRON.z0 + 0.02;
+    beam(V(foot - 0.1, Y + r + 0.9, rz), V(IRON.x0, TY + 0.9, rz), 0.04); beam(V(IRON.x0, TY + 0.9, rz), V(IRON.land + 0.02, TY + 0.9, rz), 0.04);
+    beam(V(IRON.land + 0.02, TY + 0.9, rz), V(IRON.land + 0.02, TY + 0.9, TZ0 - 0.15), 0.04);
+    for (const [x, y] of [[foot - 0.1, Y + r], [(foot + IRON.x0) / 2, (Y + TY) / 2], [IRON.x0, TY], [IRON.land + 0.02, TY]]) beam(V(x, y, rz), V(x, y + 0.9, rz), 0.04);
+    ext(st);
+  }
   {
     const jm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.012, 0.44), phong(0xd4d8dc, 70), joints.length), o = new THREE.Object3D();
-    joints.forEach(([x, z, ry], i) => { o.position.set(x, Y + PH + 0.056, z); o.rotation.set(0, ry, 0); o.updateMatrix(); jm.setMatrixAt(i, o.matrix); });
+    joints.forEach(([x, z, ry, y], i) => { o.position.set(x, y + PH + 0.056, z); o.rotation.set(0, ry, 0); o.updateMatrix(); jm.setMatrixAt(i, o.matrix); });
     skin.add(jm);
   }
   ext(skin);
@@ -126,9 +160,10 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     colliders.push({ x0: lx - 0.26, x1: lx + 0.26, z0: CLOSET_Z0, z1: lz + 0.03, y1: Y });
     // a caged bulb on the parapet by the hatch, on at night (see roofTick)
     roof.bulb = new THREE.MeshBasicMaterial({ color: 0x4a4a44 });
-    glow(put(new THREE.SphereGeometry(0.045, 10, 8), roof.bulb, 12.35, Y + PH - 0.18, 27.9 + T + 0.08));
-    bx(0.14, 0.14, 0.05, dark, 12.35, Y + PH - 0.18, 27.9 + T + 0.025);
-    for (const a of [0, 1, 2]) { const w = put(new THREE.TorusGeometry(0.06, 0.004, 4, 12), dark, 12.35, Y + PH - 0.18, 27.9 + T + 0.08); w.rotation.y = a * Math.PI / 3; }
+    const bxp = STORE.x + 0.1 - T, bz = 29.2;      // (the side parapet's inside face, just past the hatch)
+    glow(put(new THREE.SphereGeometry(0.045, 10, 8), roof.bulb, bxp - 0.08, Y + PH - 0.18, bz));
+    bx(0.05, 0.14, 0.14, dark, bxp - 0.025, Y + PH - 0.18, bz);
+    for (const a of [0, 1, 2]) { const w = put(new THREE.TorusGeometry(0.06, 0.004, 4, 12), dark, bxp - 0.08, Y + PH - 0.18, bz); w.rotation.y = Math.PI / 2 + a * Math.PI / 3; }
   }
 
   // ---- rooftop AC units: packaged units on curbs, louvred coil grilles down the long sides, two condenser fans on top ----
@@ -179,7 +214,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
 
   // ---- the whirlybird over the lobby: a turbine vent that turns with the wind ----
   {
-    const tx = -3.2, tz = 30.4, t = new THREE.Group(); t.position.set(tx, Y, tz); G.add(t);
+    const tx = -3.2, tz = 30.4, t = new THREE.Group(); t.position.set(tx, roofY(tx, tz), tz); G.add(t);
     cy(0.2, 0.24, 0.25, alum, 0, 0.125, 0, 16, t);                               // the throat on its flashing
     cy(0.34, 0.34, 0.015, alum, 0, 0.01, 0, 20, t);
     const head = new THREE.Group(); head.position.y = 0.28; t.add(head); roof.turbine = head;
@@ -231,11 +266,11 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     col(ax - 0.5, ax + 0.5, az - 0.5, az + 0.5);
   }
   // ---- vent stacks with their boots, drains, and walkway pads out to the units ----
-  for (const [vx, vz] of [[9.2, 32.4], [5.8, 32.6], [-1.2, 31.6], [-4.8, 40.5]]) {
-    cy(0.16, 0.2, 0.12, lam(0x5a5c5e), vx, Y + 0.06, vz, 12); cy(0.05, 0.05, 0.42, lam(0x9a9c9e), vx, Y + 0.21, vz, 10);
+  for (const [vx, vz] of [[9.2, 34.4], [5.8, 34.6], [-1.2, 31.6], [-4.8, 42.5]]) {
+    const y = roofY(vx, vz); cy(0.16, 0.2, 0.12, lam(0x5a5c5e), vx, y + 0.06, vz, 12); cy(0.05, 0.05, 0.42, lam(0x9a9c9e), vx, y + 0.21, vz, 10);
   }
-  for (const [dx, dz] of [[1.5, 8], [1.5, 22], [-2.9, 40], [-6.5, 15]]) {
-    cy(0.22, 0.24, 0.02, dark, dx, Y + 0.01, dz, 16); const s = put(new THREE.SphereGeometry(0.12, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), dark, dx, Y + 0.02, dz); s.scale.y = 0.8;
+  for (const [dx, dz] of [[1.5, 8], [1.5, 22], [-2.9, 42], [-6.5, 15]]) {
+    const y = roofY(dx, dz); cy(0.22, 0.24, 0.02, dark, dx, y + 0.01, dz, 16); const s = put(new THREE.SphereGeometry(0.12, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), dark, dx, y + 0.02, dz); s.scale.y = 0.8;
   }
   const padM = lam(0x8f908c);
   const pads = (pts) => { for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx2, bz] = pts[i + 1], n = Math.ceil(Math.hypot(bx2 - ax, bz - az) / 0.75);
@@ -293,14 +328,14 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   roof.shades = aoM;
   const shade = (x, z, w, d, ry = 0, par = G, y = Y) => { const o = put(aoGeo, aoM, x, y + 0.006, z, par); o.scale.set(w, 1, d); o.rotation.y = ry; o.renderOrder = 1; return o; };
   for (const u of roof.units) { shade(u.x, u.z, 3.1, 2.1); shade(u.x - 1.6, u.z + 0.5, 0.5, 0.5); }
-  shade(-3.2, 30.4, 0.95, 0.95); for (const [ex, ez] of [[9.6, 31.4], [5.2, 31.6]]) shade(ex, ez, 1.05, 1.05);
+  shade(-3.2, 30.4, 0.95, 0.95, 0, G, TY); for (const [ex, ez] of [[9.6, 31.4], [5.2, 31.6]]) shade(ex, ez, 1.05, 1.05);
   shade(8.4, 3.2, 1.6, 1.4); shade(-6.4, 24, 1.1, 1.1);
-  for (const [vx, vz] of [[9.2, 32.4], [5.8, 32.6], [-1.2, 31.6], [-4.8, 40.5]]) shade(vx, vz, 0.55, 0.55);
+  for (const [vx, vz] of [[9.2, 34.4], [5.8, 34.6], [-1.2, 31.6], [-4.8, 42.5]]) shade(vx, vz, 0.55, 0.55, 0, G, roofY(vx, vz));
 
   // ---- the gravel's weathering: blown thin and bare in the windy corners, dark rings of silt round the drains where
   // the water sits, rust under the gas line, a green slick where the condensate dribbles, grime along the parapets.
   // One sheet over the deck, its picture laid over the whole building ----
-  const DX0 = -7.84, DXW = 20.54, DZ0 = -0.1, DZD = 46.7, DRAINS = [[1.5, 8], [1.5, 22], [-2.9, 40], [-6.5, 15]];
+  const DX0 = -7.84, DXW = 18.94, DZ0 = -0.1, DZD = 48.7, DRAINS = [[1.5, 8], [1.5, 22], [-2.9, 42], [-6.5, 15]];
   {
     const W = 512, H = 1024, px = x => (x - DX0) / DXW * W, py = z => (z - DZ0) / DZD * H, m = W / DXW;   // m: pixels per metre (near enough both ways)
     const tex = makeTexture((ctx, W, H) => {
@@ -309,12 +344,12 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
       let sd = 7; const r = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
       for (let i = 0; i < 90; i++) blot(DX0 + r() * DXW, DZ0 + r() * DZD, 1 + r() * 3.5, i % 3 ? `rgba(34,30,26,${0.1 + r() * 0.14})` : `rgba(236,230,214,${0.08 + r() * 0.1})`);
       ctx.strokeStyle = "rgba(30,27,24,0.28)"; ctx.lineWidth = 0.9 * m; ctx.lineJoin = "round"; ctx.beginPath();   // swept up against the parapets
-      P.forEach(([x, z], i) => i ? ctx.lineTo(px(x), py(z)) : ctx.moveTo(px(x), py(z))); ctx.closePath(); ctx.stroke();
+      for (const Q of [P, PT]) { ctx.beginPath(); Q.forEach(([x, z], i) => i ? ctx.lineTo(px(x), py(z)) : ctx.moveTo(px(x), py(z))); ctx.closePath(); ctx.stroke(); }
       for (const [x, z] of DRAINS) { blot(x, z, 2.2, "rgba(18,20,22,0.42)"); blot(x, z, 1.1, "rgba(120,106,82,0.35)"); }
-      for (const [x, z] of [[-4.6, 26], [5.6, 13.5], [-1.5, 43]]) blot(x, z, 1.6, "rgba(18,20,22,0.3)");   // the low spots that pond
+      for (const [x, z] of [[-4.6, 26], [5.6, 13.5], [-1.5, 45]]) blot(x, z, 1.6, "rgba(18,20,22,0.3)");   // the low spots that pond
       for (const u of roof.units) for (let k = 0; k < 3; k++) blot(u.x - 0.85, u.z - 1.6 - k * 0.8, 0.28, "rgba(122,62,24,0.45)");
       blot(6.4, 18.6, 0.7, "rgba(46,70,38,0.5)");
-      for (const [x, z, s] of [[-7.0, 0.9, 1.4], [10.2, 0.8, 1.1], [-6.2, 45.7, 1.2], [10.3, 32.4, 0.8]]) {   // scoured to the bare sheet
+      for (const [x, z, s] of [[-7.0, 0.9, 1.4], [10.2, 0.8, 1.1], [-6.2, 47.7, 1.2], [10.3, 34.4, 0.8]]) {   // scoured to the bare sheet
         ctx.fillStyle = "rgba(186,187,181,0.92)"; ctx.beginPath();
         for (let a = 0; a < 18; a++) { const t = a / 18 * Math.PI * 2, rr = s * m * (0.55 + r() * 0.45); ctx.lineTo(px(x) + Math.cos(t) * rr * 1.3, py(z) + Math.sin(t) * rr * 0.8); }
         ctx.fill();
@@ -326,6 +361,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     hole.moveTo(x0, -z0); hole.lineTo(x0, -z1); hole.lineTo(x1, -z1); hole.lineTo(x1, -z0); hole.lineTo(x0, -z0); sh.holes.push(hole);
     const o = put(new THREE.ShapeGeometry(sh), new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }), 0, Y + 0.003, 0);
     o.rotation.x = -Math.PI / 2; roof.grime = o.material;
+    put(new THREE.ShapeGeometry(new THREE.Shape(PT.map(([x, z]) => new THREE.Vector2(x, -z)))), o.material, 0, TY + 0.003, 0).rotation.x = -Math.PI / 2;   // (the tall block's, the same picture)
   }
   // puddles: standing water in the low spots and round the drains after rain, the sky shining in them; they outlast the
   // wet on the lot (see roofTick)
@@ -338,8 +374,8 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     })();
     const pm = new THREE.MeshBasicMaterial({ color: 0x8a96a6, alphaMap: blob, transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
     const pg = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-    for (const [x, z, w, d, ry] of [[1.5, 8, 3.2, 2.4, 0.3], [1.6, 22.2, 2.6, 2.2, 1.1], [-2.9, 40, 2.8, 2.0, 0.2], [-6.4, 15, 1.6, 2.6, 0], [-4.6, 26, 2.6, 1.7, 0.7], [5.6, 13.5, 2.2, 1.6, 2.0], [-1.5, 43, 2.0, 1.4, 0.4]]) {
-      const o = put(pg, pm, x, Y + 0.008, z); o.scale.set(w, 1, d); o.rotation.y = ry; o.renderOrder = 2;
+    for (const [x, z, w, d, ry] of [[1.5, 8, 3.2, 2.4, 0.3], [1.6, 22.2, 2.6, 2.2, 1.1], [-2.9, 42, 2.8, 2.0, 0.2], [-6.4, 15, 1.6, 2.6, 0], [-4.6, 26, 2.6, 1.7, 0.7], [5.6, 13.5, 2.2, 1.6, 2.0], [-1.5, 45, 2.0, 1.4, 0.4]]) {
+      const o = put(pg, pm, x, roofY(x, z) + 0.008, z); o.scale.set(w, 1, d); o.rotation.y = ry; o.renderOrder = 2;
     }
     roof.puddles = pm;
   }
@@ -348,6 +384,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   {
     const sm = lam(0xb7b2a4), hole = new THREE.MeshBasicMaterial({ color: 0x141414 });
     for (const [x, z, nx, nz] of SCUPPERS) {
+      const Y = deckY(x + nx * 0.3, z + nz * 0.3);                         // (the tall block's are up on its roof)
       const ry = nx ? Math.PI / 2 : 0, at = (k, y, w, h, d, m, par) => { const o = bx(w, h, d, m, x + nx * k, y, z + nz * k, par); o.rotation.y = ry; return o; };
       at(T + 0.004, Y + 0.09, 0.42, 0.2, 0.012, galv); at(T + 0.012, Y + 0.09, 0.34, 0.13, 0.006, hole);   // the opening's sheet-metal lining, from the deck
       const o = -0.24;                                                    // outside the skin
@@ -355,7 +392,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
       at(o, Y - 0.12, 0.42, 0.34, 0.22, sm, skin);                        // the collector head
       at(o, (Y - 0.3 + 0.32) / 2, 0.1, Y - 0.62, 0.08, sm, skin);           // the downspout
       at(o - 0.12, 0.26, 0.1, 0.08, 0.28, sm, skin);                      // its kick-out at the foot
-      for (const y of [1.0, 2.2, 3.3]) at(-0.18, y, 0.14, 0.03, 0.06, sm, skin);   // straps
+      for (let y = 1.0; y < Y - 0.5; y += 1.15) at(-0.18, y, 0.14, 0.03, 0.06, sm, skin);   // straps
     }
   }
 
@@ -560,14 +597,16 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   {
     const fr = cy(0.135, 0.12, 0.022, lam(0xd8743a), -7.25, Y + 0.02, 18.3, 20); fr.rotation.set(0.12, 0, 0.08);
     for (const [x, z] of [[1.95, 8.45], [-6.25, 15.5], [-7.4, 31.2]]) put(new THREE.SphereGeometry(0.033, 10, 8), lam(0xc8dc48), x, Y + 0.03, z);
-    const kick = put(new THREE.SphereGeometry(0.2, 16, 10), lam(0xa8302c), -5.4, Y + 0.06, 46.1); kick.scale.y = 0.32;
+    const kick = put(new THREE.SphereGeometry(0.2, 16, 10), lam(0xa8302c), -5.4, TY + 0.06, 48.1); kick.scale.y = 0.32;
   }
 
   // ---- the back ladder (see BACK_LADDER): galvanised like the hatch's, its rails carried up over the parapet. The top
-  // half's fixed to the wall; the bottom half slides in it, and sits pulled up till it's kicked loose ----
+  // half's fixed to the wall; the bottom half slides in it, and sits pulled up till it's kicked loose. Built out from the wall
+  // along x (lx: out to the rungs, lz across them), turned to stand out from the back wall ----
   {
-    const { x: lx, z: lz, mid, raise } = BACK_LADDER, WX = 1.48, top = Y + PH + 1.0, OVER = 0.2, fixed = new THREE.Group(), slide = new THREE.Group();
-    scene.add(fixed, slide); slide.position.y = raise;
+    const { mid, raise } = BACK_LADDER, lx = BACK_LADDER.z, lz = 0, WX = BACK_LADDER.wall, top = Y + PH + 1.0, OVER = 0.2, fixed = new THREE.Group(), slide = new THREE.Group();
+    const turn = new THREE.Group(); turn.position.x = BACK_LADDER.x; turn.rotation.y = -Math.PI / 2; scene.add(turn);   // (local x is world z; local z, world -x)
+    turn.add(fixed, slide); slide.position.y = raise;
     const rung = (y, len, par, x = lx) => { put(new THREE.CylinderGeometry(0.016, 0.016, len, 8), galv, x, y, lz, par).rotation.x = Math.PI / 2; };
     for (const s of [-1, 1]) {
       bx(0.016, top - mid, 0.05, galv, lx, (mid + top) / 2, lz + s * 0.22, fixed);
@@ -581,9 +620,10 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     for (let y = 0.3; y < mid; y += 0.3) rung(y, 0.52, slide, lx + 0.03);
     ext(fixed); ext(slide);
     // what you aim at (the ladder itself is on the exterior layer, which the aiming ray doesn't see): the rails over the parapet from up top, the foot from the ground
-    const hit = (w, h, d, x, y) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ visible: false })); o.position.set(x, y, lz); scene.add(o); return o; };
+    const hit = (w, h, d, x, y) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ visible: false })); o.position.set(x, y, lz); turn.add(o); return o; };
+    const bxw = BACK_LADDER.x;
     roof.back = { down: false, v: 0, slide, top: hit(0.6, 1.2, 0.6, lx - OVER, Y + PH + 0.5), foot: hit(0.3, 2.7, 0.6, lx, 1.45),
-      col: { x0: WX, x1: lx + 0.06, z0: lz - 0.28, z1: lz + 0.28, y1: 3 }, at: new THREE.Vector3(lx, 1, lz) };   // col: in the way once it's down
+      col: { x0: bxw - 0.28, x1: bxw + 0.28, z0: WX, z1: lx + 0.06, y1: 3 }, at: new THREE.Vector3(bxw, 1, lx) };   // col: in the way once it's down
   }
   tonyRoof({ lam, phong, put, bx, cy, ext, V, alum, gravel, coping, shade });   // Tony's roof, seen from ours (tonys/outside.js)
 }
@@ -706,10 +746,10 @@ function golfTick(dt) {
   if (golf.st === "flight" || golf.st === "done" || golf.st === "spout") {
     const b = golf.ball.position, out = new THREE.Vector3(b.x - golfTee.x, 0, b.z - golfTee.z), far = out.length();
     const back = far > 0.5 ? out.divideScalar(far) : F, chase = b.clone().addScaledVector(back, -Math.min(4, 2.4 + far * 0.05));
-    chase.y = Math.max(b.y + 1.3, (onDeck(chase.x, chase.z) ? ROOF.y : 0) + 0.6);   // (ponytail: no wall/tree collision: it can pass through the parapet or a tree)
+    chase.y = Math.max(b.y + 1.3, (onDeck(chase.x, chase.z) ? roofY(chase.x, chase.z) : 0) + 0.6);   // (ponytail: no wall/tree collision: it can pass through the parapet or a tree)
     if (golf.st === "flight") golf.cam.addScaledVector(golf.v, dt);   // (carried along with it, so the easing below is only the swing round behind it, not a lag)
     golf.cam.lerp(chase, Math.min(1, dt * 3));
-    const over = onDeck(golf.cam.x, golf.cam.z) ? ROOF.y + 0.6 : onTony(golf.cam.x, golf.cam.z) ? TONY.wall + 0.3 : 0;   // (never down inside a building: over its roof, looking down)
+    const over = onDeck(golf.cam.x, golf.cam.z) ? roofY(golf.cam.x, golf.cam.z) + 0.6 : onTony(golf.cam.x, golf.cam.z) ? TONY.wall + 0.3 : 0;   // (never down inside a building: over its roof, looking down)
     if (golf.cam.y < over) golf.cam.y = over;
   } else golf.cam.copy(home);
   if (golf.st === "flight" || golf.st === "done" || golf.st === "spout") {
@@ -734,7 +774,7 @@ function golfFly(dt) {
     }
     const nx = b.x + v.x * h, ny = b.y + v.y * h, nz = b.z + v.z * h;
     if (ny < 2.4 && cars.some(c => golfCarHit(c, b, nx, ny, nz))) continue;   // off a car (see golfCarHit)
-    if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < ROOF.y + 0.15) {   // through a scupper, if it's rolled right into one
+    if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < deckY(b.x, b.z) + 0.15) {   // through a scupper, if it's rolled right into one
       const sc = SCUPPERS.find(([x, z, sx]) => sx ? Math.abs(nz - z) < 0.15 && Math.abs(nx - x) < 0.3 : Math.abs(nx - x) < 0.15 && Math.abs(nz - z) < 0.3);
       if (sc) { golfSpout(sc); return; }
     }
@@ -743,13 +783,19 @@ function golfFly(dt) {
       if (onTony(b.x, nz) !== onTony(b.x, b.z)) v.z *= -0.4;
       v.y *= 0.7; continue;
     }
-    if (onDeck(b.x, b.z) && !onDeck(nx, nz) && ny < ROOF.y + ROOF.wall + GOLF.R) {   // the parapet: off it and back
+    const dy0 = deckY(b.x, b.z), dy1 = deckY(nx, nz);
+    if (dy1 != null && dy1 > (dy0 ?? 0) + 0.1 && ny < dy1 + (dy0 == null ? ROOF.wall : 0)) {   // the building's wall, or the tall block's from the store's roof: off it and back
+      if (deckY(nx, b.z) !== dy0) v.x *= -0.4;
+      if (deckY(b.x, nz) !== dy0) v.z *= -0.4;
+      v.y *= 0.7; continue;
+    }
+    if (dy0 != null && (dy1 == null || dy1 < dy0 - 0.1) && ny < dy0 + ROOF.wall + GOLF.R) {   // the parapet: off it and back
       if (!onDeck(nx, b.z)) v.x *= -0.4;
       if (!onDeck(b.x, nz)) v.z *= -0.4;
       v.y *= 0.7; continue;
     }
     if (Math.hypot(nx - golfTee.x, nz - golfTee.z) > GOLF.MAX) { v.x *= -0.15; v.z *= -0.15; continue; }   // into the trees: it drops out of them (ponytail: a ring round the tee, not the real treeline)
-    const fl = (onDeck(nx, nz) ? ROOF.y : onTony(nx, nz) ? TONY.y : pavedAt(nx, nz) ? LOT.y : 0) + GOLF.R;
+    const fl = (onDeck(nx, nz) ? deckY(nx, nz) : onTony(nx, nz) ? TONY.y : pavedAt(nx, nz) ? LOT.y : 0) + GOLF.R;
     b.set(nx, ny, nz);
     if (golf.rolled || b.y < fl) {
       b.y = fl;

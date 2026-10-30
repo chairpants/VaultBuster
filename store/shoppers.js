@@ -4,7 +4,7 @@
 // patient, then leave — rung up (E on them at the counter) or not, in which
 // case the tape they walk out with sets the gates off. Paths come from a grid
 // A* over the colliders, rebuilt per trip, so doors and the moved standee count.
-const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: CLOSET.x1, z1: 46.5, pad: 0.3 };   // (x1: out to the janitor's closet)
+const NAV = { cell: 0.25, x0: WALL_L, z0: 0, x1: STORE.x, z1: 48.5, pad: 0.3 };
 function navGrid(skip, extra = []) {                // extra: temporary obstacles (you, standing in the way)
   const { cell, x0, z0, pad } = NAV, nx = Math.ceil((NAV.x1 - x0) / cell), nz = Math.ceil((NAV.z1 - z0) / cell);
   const g = new Uint8Array(nx * nz), hard = new Uint8Array(nx * nz);   // g: blocked with walking room around things; hard: the things themselves
