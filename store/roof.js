@@ -89,19 +89,22 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   const EDGES = [[-7.84, -0.1, 11.1, -0.1, Y, 0], [11.1, -0.1, 11.1, 35.1, Y, 0], [11.1, 35.1, TX1, 35.1, Y, 0], [-7.84, TZ0, -7.84, -0.1, Y, 0],
     [TX0, TZ0, IRON.land, TZ0, TY, Y], [IRON.land, TZ0, IRON.x0, TZ0, TY, Y, false], [IRON.x0, TZ0, TX1, TZ0, TY, Y], [TX1, TZ0, TX1, 35.1, TY, Y],
     [TX1, 35.1, TX1, TZ1, TY, 0], [TX1, TZ1, TX0, TZ1, TY, 0],
-    [TX0, TZ1, TX0, FIRE_EXIT.z1, TY, 0], [TX0, FIRE_EXIT.z1, TX0, FIRE_EXIT.z0, TY, FIRE_EXIT.head], [TX0, FIRE_EXIT.z0, TX0, TZ0, TY, 0]];   // (over the emergency exit: from its head up)
-  for (const [ax, az, bx_, bz, EY, from, parapet = true] of EDGES) {
+    [TX0, TZ1, TX0, FIRE_EXIT.z1, TY, 0, true, "b"], [TX0, FIRE_EXIT.z1, TX0, FIRE_EXIT.z0, TY, FIRE_EXIT.head], [TX0, FIRE_EXIT.z0, TX0, TZ0, TY, 0, true, "a"]];   // (over the emergency exit: from its head up; either side of it, the skin stops at its opening)
+  for (const [ax, az, bx_, bz, EY, from, parapet = true, flush] of EDGES) {   // flush: that end (a, b) doesn't lap past it (an opening's there)
     const len = Math.hypot(bx_ - ax, bz - az), dx = (bx_ - ax) / len, dz = (bz - az) / len;
     let nx = -dz, nz = dx; const mx = (ax + bx_) / 2, mz = (az + bz) / 2;
     if (deckY(mx + nx * 0.05, mz + nz * 0.05) !== EY) { nx = -nx; nz = -nz; }   // n: inward, onto its deck
     const along = Math.abs(dx) > 0.5, ry = along ? 0 : Math.PI / 2;
-    const wall = (inset, th, y0, y1, m, extra = 0, par = G) => { const o = bx(len + extra, y1 - y0, th, m, mx + nx * inset, (y0 + y1) / 2, mz + nz * inset, par); o.rotation.y = ry; return o; };
+    const wall = (inset, th, y0, y1, m, extra = 0, par = G, cut = null) => {   // (extra: lapped past both ends, but at a cut end)
+      const ea = cut === "a" ? 0 : extra / 2, eb = cut === "b" ? 0 : extra / 2, sh = (eb - ea) / 2;
+      const o = bx(len + ea + eb, y1 - y0, th, m, mx + nx * inset + dx * sh, (y0 + y1) / 2, mz + nz * inset + dz * sh, par); o.rotation.y = ry; return o;
+    };
     const front = Math.abs(az + 0.1) < 0.01 && Math.abs(bz + 0.1) < 0.01;  // the storefront: above the glass only, a blue fascia with a yellow stripe
     if (front) {                                   // (2 cm thicker and longer than the sides' skin: it laps over their ends at the corners, no faces in the same plane)
       wall(-0.085, 0.17, 2.75, EY + PH, fasciaBlue, 0.34, skin); wall(-0.1, 0.2, 3.45, 3.6, fasciaY, 0.4, skin);
     } else {
-      wall(-0.075, 0.15, from, parapet ? EY + PH : EY, stucco, 0.3, skin);
-      if (!from) wall(-0.1, 0.16, 0, 0.5, base, 0.36, skin);   // a darker band at the foot: 3 cm proud of the stucco at its face and ends, its back 2 cm inside it (flush, its back fought the stucco's in the return beside the storefront glass)
+      wall(-0.075, 0.15, from, parapet ? EY + PH : EY, stucco, 0.3, skin, flush);
+      if (!from) wall(-0.1, 0.16, 0, 0.5, base, 0.36, skin, flush);   // a darker band at the foot: 3 cm proud of the stucco at its face and ends, its back 2 cm inside it (flush, its back fought the stucco's in the return beside the storefront glass)
     }
     if (!parapet) continue;
     tileU(wall(T / 2, T, EY, EY + PH, membrane), len / 3);                   // the parapet, its inside face in the roof's membrane
