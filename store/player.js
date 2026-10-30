@@ -325,7 +325,11 @@ canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoo
     return;
   }
   if (tvMenu && tvMenuWheel(e.deltaY < 0 ? 1 : -1)) return;               // nudging a menu slider
-  if (seated) seatFov = Math.max(28, Math.min(70, seatFov + e.deltaY * 0.02));
+  if (seated) {                                   // lean in; all the way in on a playing screen, one notch more: it full screen (a notch back: the room)
+    if (fullVid.on) { if (e.deltaY > 0) fullVidSet(false); return; }
+    if (e.deltaY < 0 && seatFov <= 28.01 && fullVidAim()) { fullVidSet(true); return; }
+    seatFov = Math.max(28, Math.min(70, seatFov + e.deltaY * 0.02));
+  }
   else if (held && inspecting) {
     coverZoom = Math.max(1, Math.min(6, coverZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
     $("inspectArt").style.transform = `scale(${coverZoom})`;
@@ -337,7 +341,7 @@ canvas.addEventListener("wheel", e => {          // lean in on the couch, or zoo
 });
 let lastActive = 0;                          // last mouse-look or key — the crosshair hides after a few still seconds
 addEventListener("mousemove", e => {
-  if (document.pointerLockElement !== canvas || golf.on || arcade.on) return;   // (golfing: the camera's the swing's; at the arcade machine, its screen)
+  if (document.pointerLockElement !== canvas || golf.on || arcade.on || fullVid.on) return;   // (golfing: the camera's the swing's; at the arcade machine, its screen; full screen on a tape: held still)
   lastActive = performance.now();
   const k = 0.0022 * SETTINGS.sens / 100;   // (SETTINGS: sensitivity, invert)
   player.yaw -= e.movementX * k;

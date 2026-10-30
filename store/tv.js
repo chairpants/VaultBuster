@@ -70,6 +70,19 @@ function showTableBox(tape) {
 }
 
 let playing = null; // { tape, idx, eps }
+// sat down and zoomed all the way in on a screen with a tape playing, one notch more: the picture full screen, edge to edge,
+// the view held still; a notch back out (or getting up, or the tape coming out) and it's the room again
+const fullVid = { on: false };
+const FULL_AIM = 20 * Math.PI / 180;          // how far off a screen's middle you can be looking and still go full screen on it
+const fullVidCam = new THREE.Vector3(), fullVidTo = new THREE.Vector3();
+function fullVidAim() {                         // a tape's playing, and you're looking at a screen it's on
+  if (!playing || !videoMat || screenMesh.material !== videoMat) return false;
+  camera.getWorldDirection(fullVidCam);
+  const on = [...miniScreens, ...(roof.cine?.on && roof.cine.sheet ? [roof.cine.sheet] : [])];
+  return on.some(m => m.getWorldPosition(fullVidTo).sub(camera.position).angleTo(fullVidCam) < FULL_AIM);
+}
+function fullVidSet(on) { fullVid.on = on; document.body.classList.toggle("fullvid", on); }
+function fullVidTick() { if (fullVid.on && (!seated || !playing || screenMesh.material !== videoMat)) fullVidSet(false); }
 async function playEpisode(idx, tape = playing?.tape) {
   if (!tape) return;
   const eps = tape.seasons[0].episodes;
