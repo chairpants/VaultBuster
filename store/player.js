@@ -347,7 +347,7 @@ function blocked(x, z) {
   const r = player.r, near = Math.hypot(x - player.x, z - player.z) < 1;   // (a step from where you are: anywhere else, just what's there)
   if (player.onRoof) return !onDeck(x, z) || (near && Math.abs(roofY(x, z) - roofY(player.x, player.z)) > 0.35)   // up top: the decks (the tall block's a wall from the low one but up the iron stair),
     || roof.cols.some(c => x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);                    // their parapets and their kit
-  if (player.inBooth) return x < BOOTH.x0 + r || z < BOOTH.z0 + r || z > BOOTH.z1 - r || (x > BOOTH.x1 - r && (z > SHAFT.top - r || x > BOOTH.x1 + 0.4))   // the booth: out only to the stairs' top
+  if (player.inBooth) return x < BOOTH.x0 + r || z < BOOTH.z0 + r || z > BOOTH.z1 - r || (x > BOOTH.x1 - r && (z > SHAFT.top - r || z < BOOTH.z0 + 0.08 + r || x > BOOTH.x1 + 0.4))   // the booth: out only to the stairs' top (clear of its walls: their colliders, past it)
     || BOOTH.cols.some(c => x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
   if (near) {                                    // no climbing a step much over a stair's (the booth's stairs' top from the lobby), nor dropping off one but into the booth
     const f0 = floorHeightAt(player.x, player.z), f1 = floorHeightAt(x, z);
@@ -405,8 +405,9 @@ function move(dt) {
   const spd = sp * (crouched ? 0.55 : 1) * (hungover() ? 0.75 : 1);
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
   const x0 = player.x, z0 = player.z, top = !player.inBooth && floorHeightAt(x0, z0) > TALL.booth - 0.1;
-  if (!blocked(player.x + dx, player.z)) player.x += dx;
-  if (!blocked(player.x, player.z + dz)) player.z += dz;
+  const stuck = blocked(x0, z0);                 // (somewhere you can't be, however you got there: any way out goes)
+  if (stuck || !blocked(player.x + dx, player.z)) player.x += dx;
+  if (stuck || !blocked(player.x, player.z + dz)) player.z += dz;
   if (top && player.x < SHAFT.x0) player.inBooth = true;                    // off the stairs' top into the booth,
   else if (player.inBooth && player.x > BOOTH.x1 + 0.15) player.inBooth = false;   // and back out onto it
   const walked = Math.hypot(player.x - x0, player.z - z0); if ((walkXp += walked) > 12) { walkXp = 0; gainXp("you", "con", 1); }
