@@ -80,7 +80,7 @@ const LIBRARY = [                               // the library comes in tiers, e
   { cats: ["Classic Sitcoms", "Sketch Comedy & Late Night"] },
   { cats: ["Anime", "Horror & Anthology", "MonsterVision"] },
 ];
-const owned = id => !!upg[id];                   // (sandbox too: it starts with nothing, just a fat budget)
+const owned = id => !!upg[id];
 const libTier = () => upg.library || 0;
 const libLocked = c => LIBRARY.slice(libTier()).some(t => t.cats.includes(c.category));
 const UPGRADES = [
@@ -98,11 +98,7 @@ const UPGRADES = [
   { id: "dana", name: "STAFF TRAINING", cost: 250, desc: "THE STAFF LEARN 50% FASTER" },
   { id: "ad", name: "NEWSPAPER AD", cost: 120, repeat: true, desc: SIM ? "NEW MEMBERS, A BIT OF BUZZ (1/DAY)" : "+REPUTATION (ONE A DAY)" },
 ];
-if (!SIM && SAVE?.upg && !upg.v) {              // a sandbox saved back when sandbox had everything: it keeps it
-  for (const u of UPGRADES) if (!u.repeat) upg[u.id] = true;
-  upg.library = LIBRARY.length;
-}
-if (MODE === "customer" && !upg.v) {             // customer mode: a store that's been going a while
+if (MODE === "sandbox" || (MODE === "customer" && !upg.v)) {   // sandbox: everything, from the start (its saves too); customer mode: a store that's been going a while
   for (const u of UPGRADES) if (!u.repeat) upg[u.id] = true;
   upg.library = LIBRARY.length;
 }
