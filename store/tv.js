@@ -184,6 +184,7 @@ function onE() {
   if (aimHolds && !held) { holdPull(); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
+  if (aimFireExit) { fireExitUse(aimFireExit); return; }
   if (aimEmp && afterClose() && !aimEmp.leaving && aimEmp.state !== "toExit") { sendHome(aimEmp); return; }   // closed: off you go
   if (aimEmp && aimEmp.state === "stoolSit") {   // they're on the stool: a shove, same as your own spins (keep it up and they get dizzy)
     stoolPush(); aimEmp.bored = 0; aimEmp.c.lookAt(null); aimEmp.c.setMood(aimEmp.dizzy > 0.5 ? "meh" : "love"); return;
