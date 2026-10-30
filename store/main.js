@@ -167,7 +167,7 @@ function roomOf(o) {
   return rs.size === 1 ? [...rs][0] : null;
 }
 function roomSort() {                          // file new top-level objects into their rooms (posters load late, so this runs a few times)
-  const movers = new Set([me.group, stool.g, cutout.g, BOOTH.g, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
+  const movers = new Set([me.group, stool.g, cutout.g, BOOTH.g, fireExit.leaf, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
   for (const o of [...scene.children]) {
     if (roomSeen.has(o) || roomGroupSet.has(o)) continue;
     roomSeen.add(o);
@@ -189,7 +189,7 @@ function regionTick() {
     camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
   }
-  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor) || player.inBooth]];   // (the booth's window looks out over the house)
+  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor) || player.inBooth], ["theater", "out", fireExit.a > 0]];   // (the emergency exit, open: out to its stairwell)   // (the booth's window looks out over the house)
   const seen = new Set([player.onRoof ? "out" : roomAt(camera.position.x, camera.position.z)]);   // (on the roof: just the outdoors, and the closet down the hatch)
   roof.g.visible = player.onRoof || !!roof.climb;
   if (!player.onRoof) for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
@@ -391,7 +391,7 @@ renderer.setAnimationLoop(() => {
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
-  custTick(dt); frontDoorTick(dt); tonyTick(dt); if (CUSTOMER) cmTick(dt);
+  custTick(dt); frontDoorTick(dt); fireExitTick(dt); tonyTick(dt); if (CUSTOMER) cmTick(dt);
   empTick(dt);
   trashTick(dt);
   deadLightTick(dt);

@@ -33,7 +33,7 @@ const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the 
 const BOH_DOORS = { store: 4.6, restroom: 5.0, breakroom: 8.55, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west wall and the closet's)
 const breakFx = { clock: null, punch: null, clock12: null, coffee: null, coffeeLed: null, tv: null, tvMesh: null, vcr: null, tvT: 0 };   // the break room's moving parts (see breakroomTick)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
-const fireExit = { leaf: null, out: null, to: null, busy: false };   // the theater's emergency exit: its leaves, inside and out, where it lets you out (see fireExitUse)
+const fireExit = { leaf: null, shut: null, a: 0, open: false, t: 0 };   // the theater's emergency exit door: its leaf, its collider while it's shut, how far it's swung (see fireExitTick)
 const boothGlow = { lamps: null, stairs: null, red: null };   // the booth's wall lamps' lenses, the stairwell's bulbs, the booth's red working lights (on while its lights are off)
 const CLOSET = { x0: 9.4, x1: STORE.x, doorW: 0.8 };   // the hall's end, x0 its wall across the hall (the door's in it) to the building's side wall
 const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 48.6, 0, -1], [7.5, 35.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal
@@ -62,6 +62,10 @@ const deckY = (x, z) => { for (const { r: [a, b, c, d], y } of ROOF.decks) if (x
 // the auditorium's), and the auditorium's door from the lobby, at its far end by the store's side wall
 const TALL = { ceil: 6.0, booth: 3.0, z0: 29.8, z1: 34.9 };
 const CINEMA_DOOR = -6.85;
+// the auditorium's emergency exit, in its side wall by the aisle at the screen end, down on the pit's floor (its opening's
+// head 2.15 over it): out into a stairwell sunk in the ground beside the building, its landing at the door, steps up toward
+// the back to the paving there; well: its outer side, its end before the door, where the steps start, where they come up
+const FIRE_EXIT = { z0: 44.85, z1: 45.95, head: 0.59, well: { x0: -9.25, z0: 44.65, stair: 46.1, z1: 48.6 } };
 // the stairwell up to the booth, walled in, in the lobby's corner by the back of house: its side wall's outside face (x0) and
 // its front wall's (z0); between its two flights (split); where they start (top: the end of the floor inside the door) and
 // turn (the landing at the back). Up one flight toward the back by the back of house's wall, round, up the other toward the front

@@ -102,7 +102,7 @@ function custRideWith(cust, lead) {
 }
 function frontDoorTick(dt) {                      // anyone right at the door: it swings open (the chime rings); then the closer pulls it shut
   const d = frontDoor, near = custs.some(k => k.c && Math.hypot(k.c.group.position.x - 0.9, k.c.group.position.z + 0.2) < 1.3)
-    || (CUSTOMER && Math.hypot(player.x - 0.9, player.z + 0.2) < 1.3 && cmDoorOpen(player.z > 0));
+    || (!player.onRoof && Math.hypot(player.x - 0.9, player.z + 0.2) < 1.3 && (!CUSTOMER || cmDoorOpen(player.z > 0)));
   if (near && !d.open) { d.open = true; window.VaultAmbience?.door("push", "open", 0.9, 1.1, 0.1); window.VaultAmbience?.chime(CUST_DOOR.x, 2.3, 0.2, heardFrom(CUST_DOOR.x, 0.2, false)); }
   if (near) d.hold = 0.7; else if (d.open && (d.hold -= dt) <= 0) d.open = false;
   const was = d.k; d.k = Math.max(0, Math.min(1, d.k + (d.open ? 2.2 : -1.3) * dt));

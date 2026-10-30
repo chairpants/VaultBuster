@@ -88,7 +88,8 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   // block's front and side), and whether it has a parapet (the tall front's gap over the stair: just the wall under it)
   const EDGES = [[-7.84, -0.1, 11.1, -0.1, Y, 0], [11.1, -0.1, 11.1, 35.1, Y, 0], [11.1, 35.1, TX1, 35.1, Y, 0], [-7.84, TZ0, -7.84, -0.1, Y, 0],
     [TX0, TZ0, IRON.land, TZ0, TY, Y], [IRON.land, TZ0, IRON.x0, TZ0, TY, Y, false], [IRON.x0, TZ0, TX1, TZ0, TY, Y], [TX1, TZ0, TX1, 35.1, TY, Y],
-    [TX1, 35.1, TX1, TZ1, TY, 0], [TX1, TZ1, TX0, TZ1, TY, 0], [TX0, TZ1, TX0, TZ0, TY, 0]];
+    [TX1, 35.1, TX1, TZ1, TY, 0], [TX1, TZ1, TX0, TZ1, TY, 0],
+    [TX0, TZ1, TX0, FIRE_EXIT.z1, TY, 0], [TX0, FIRE_EXIT.z1, TX0, FIRE_EXIT.z0, TY, FIRE_EXIT.head], [TX0, FIRE_EXIT.z0, TX0, TZ0, TY, 0]];   // (over the emergency exit: from its head up)
   for (const [ax, az, bx_, bz, EY, from, parapet = true] of EDGES) {
     const len = Math.hypot(bx_ - ax, bz - az), dx = (bx_ - ax) / len, dz = (bz - az) / len;
     let nx = -dz, nz = dx; const mx = (ax + bx_) / 2, mz = (az + bz) / 2;
