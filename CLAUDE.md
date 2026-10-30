@@ -19,13 +19,13 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Sizes and positions everything else is built from (`WALL_L`, `DOOR_W`, `LOT`, colours) | `store/core.js`: palette / constants |
 | `box` / `solid` / `wall` / `makeDoor`, the outer walls, the back hall | `store/shell.js` |
 | Janitor's closet, break room (lockers, table, kitchenette), restroom (toilet, sink) | `store/backrooms.js` |
-| Theater lobby, the auditorium and its seats | `store/theater.js` |
+| Theater lobby, the auditorium and its seats, the projection booth over the lobby and its stairwell (`BOOTH`, `stairsAt`) | `store/theater.js` |
 | The lot, stalls, curbs, driveways, the road, street lamps, parked cars | `exterior/lot.js` |
 | Grass and paving round the building, the dumpster, the cardboard bed out back | `exterior/grounds.js` |
 | Employee counter, returns, back cabinet, entry lane and gates, trash receptacle, snack center (cooler, popcorn machine, snack rack) | `store/lobby.js` |
 | Posters, cover atlases, shelves and the store layout (walls, kids, center, Staff Picks, MonsterVision, standee, candy aisle) | `store/shelves.js` |
 | TV lounge (couch, TV, lamps), the light switches | `store/lounge.js` |
-| The roof and everything on it (AC units, dish, sign, lawn chairs, projector, the kick-down ladder out back: `BACK_LADDER`), golf, and at the end of the file how it all works (`roofClimb`, `roofTick`, `cineTick`) | `store/roof.js` |
+| The roof and everything on it (two decks: the store's at 4 m and the tall block's at 6.4, the iron stair between them, `roofY`; AC units, dish, sign, lawn chairs, projector, the kick-down ladder out back: `BACK_LADDER`), golf, and at the end of the file how it all works (`roofClimb`, `roofTick`, `cineTick`) | `store/roof.js` |
 | Tony's building from outside (brick, awning, glass front), Tony's roof | `tonys/outside.js` |
 | Inside Tony's: dining room, counter, kitchen | `tonys/inside.js` |
 | Tony's arcade cabinets (Space Invaders, Asteroids) | `tonys/arcade.js` |

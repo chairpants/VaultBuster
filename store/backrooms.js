@@ -1,11 +1,12 @@
-// ---- janitor's closet (interior x XR+0.1..CLOSET.x1-0.1, z BZ0+0.1..HZ-0.1). Its narrow door swings out into the hall;
-// from the door (facing +x): mop + bucket in the back right corner, the carpet sweeper against the back
-// wall, a folded step ladder (for the ceiling lights) on the right, a shelf of cleaning stuff up on the back wall ----
+// ---- janitor's closet (interior x CLOSET.x0+0.1..CLOSET.x1-0.1, z BZ0+0.1..HZ-0.1), at the hall's end. Its narrow door
+// swings out into the hall; from the door (facing +x): the trash chute on the back wall (the building's outside wall),
+// mop + bucket in the back right corner, the carpet sweeper beside it, a folded step ladder (for the ceiling lights) on
+// the right, a shelf of cleaning stuff up on the back wall ----
 {
-  const x0 = XR + WALL_T / 2, x1 = CLOSET.x1 - WALL_T / 2, z0 = BZ0 + WALL_T / 2, z1 = HZ - WALL_T / 2;
-  floorPatch(vctTex, 2.4, XR, CLOSET.x1, BZ0, HZ);
-  const csh = new THREE.Shape([[XR, BZ0], [CLOSET.x1, BZ0], [CLOSET.x1, HZ], [XR, HZ]].map(([x, z]) => new THREE.Vector2(x, z))), hatchHole = new THREE.Path();   // plain painted drywall, the roof hatch's opening cut in it (see the roof)
-  hatchHole.moveTo(11.88, 28.12); hatchHole.lineTo(12.48, 28.12); hatchHole.lineTo(12.48, 28.87); hatchHole.lineTo(11.88, 28.87); hatchHole.lineTo(11.88, 28.12); csh.holes.push(hatchHole);
+  const x0 = CLOSET.x0 + WALL_T / 2, x1 = CLOSET.x1 - WALL_T / 2, z0 = BZ0 + WALL_T / 2, z1 = HZ - WALL_T / 2;
+  floorPatch(vctTex, 2.4, CLOSET.x0, CLOSET.x1, BZ0, HZ);
+  const csh = new THREE.Shape([[CLOSET.x0, BZ0], [CLOSET.x1, BZ0], [CLOSET.x1, HZ], [CLOSET.x0, HZ]].map(([x, z]) => new THREE.Vector2(x, z))), hatchHole = new THREE.Path();   // plain painted drywall, the roof hatch's opening cut in it (see the roof)
+  hatchHole.moveTo(10.28, 28.12); hatchHole.lineTo(10.88, 28.12); hatchHole.lineTo(10.88, 28.87); hatchHole.lineTo(10.28, 28.87); hatchHole.lineTo(10.28, 28.12); csh.holes.push(hatchHole);
   const ceil = new THREE.Mesh(new THREE.ShapeGeometry(csh), new THREE.MeshLambertMaterial({ color: 0xe6e3dc }));
   ceil.rotation.x = Math.PI / 2; ceil.position.y = BH; scene.add(ceil);   // (shape y -> world z; facing down)
   const put = (geo, m, x, y, z, par = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); par.add(o); return o; };
@@ -28,10 +29,10 @@
     parts.push(cyl(0.0025, 0.3, alu, bx0 + 0.02, BH - 0.52, bz0), put(new THREE.SphereGeometry(0.008, 8, 6), alu, bx0 + 0.02, BH - 0.675, bz0));   // pull chain + its bead
     for (const o of parts) { o.userData.lightZone = "closet"; aimables.push(o); }
   }
-  // the trash chute, on the wall to the left as you come in: a stainless hopper door
-  // (tips out from the top) down to the dumpster room. Bagged trash goes here
+  // the trash chute, on the back wall (the outside one, the dumpster just the other side of it): a stainless hopper
+  // door (tips out from the top) through the wall. Bagged trash goes here
   {
-    const cx = x0 + 0.45, g = new THREE.Group(); g.position.set(cx, 0, z0); scene.add(g);   // local +z: out of the wall into the room
+    const cz = 28.72, g = new THREE.Group(); g.position.set(x1, 0, cz); g.rotation.y = -Math.PI / 2; scene.add(g);   // local +z: out of the wall into the room
     const brushed = makeTexture((ctx, W, H) => {
       ctx.fillStyle = "#b9bec4"; ctx.fillRect(0, 0, W, H);
       for (let i = 0; i < 220; i++) { ctx.fillStyle = Math.random() < 0.5 ? `rgba(255,255,255,${0.03 + Math.random() * 0.05})` : `rgba(50,55,62,${0.03 + Math.random() * 0.05})`; ctx.fillRect(0, Math.random() * H, W, 1); }
@@ -52,8 +53,8 @@
     const warn = textPlane("NO BOXES · NO LIQUIDS · KEEP CLOSED", 0.46, 0.035, "#1a1a1a", "#f2c200", "Arial", 40);
     warn.material = new THREE.MeshLambertMaterial({ map: warn.material.map }); warn.position.set(0, 0.74, 0.017); g.add(warn); parts.push(warn);
     for (const o of parts) { o.userData.chute = true; aimables.push(o); }
-    chute.door = door; chute.at = [cx, 1.05, z0 + 0.15]; chute.stand = { x: cx, z: z0 + 0.62, ry: Math.PI };
-    colliders.push({ x0: cx - 0.33, x1: cx + 0.33, z0, z1: z0 + 0.16, y1: 1.7 });
+    chute.door = door; chute.at = [x1 - 0.15, 1.05, cz]; chute.stand = { x: x1 - 0.6, z: cz, ry: Math.PI / 2 };
+    colliders.push({ x0: x1 - 0.16, x1, z0: cz - 0.33, z1: cz + 0.33, y1: 1.7 });
   }
 
   // mop bucket: a commercial 26-quart one. Tapered yellow tub with a rolled rim on a dolly with swivel casters,
@@ -124,8 +125,9 @@
   }
   // carpet sweeper: the push kind, no cord. A red enamelled hood over a black base with a rubber bumper all round,
   // a chrome trim strip, a dump pedal, rubber wheels and corner brushes underneath; a chrome bail off pivots at
-  // each end up to the handle, which has a foam grip and a loop to hang it by. Parked with the handle against the wall
-  const swx = x1 - 0.32, swz = z0 + 0.75;
+  // each end up to the handle, which has a foam grip and a loop to hang it by. Parked by the mop bucket, the handle
+  // against the wall over it
+  const swx = x1 - 0.67, swz = z1 - 0.25;
   {
     const { g, head, pole } = toolRig(1.2, 0.055);
     const enamel = new THREE.MeshPhongMaterial({ color: 0x9c1b1f, specular: 0xffffff, shininess: 70 });
@@ -149,8 +151,8 @@
     cyl(0.018, 0.16, lam(0x1c1c1c), 0, 1.2 - 0.09, 0, pole);                              // foam grip
     put(new THREE.TorusGeometry(0.016, 0.004, 6, 14), dark, 0, 1.2 + 0.01, 0, pole);     // hang loop
     scene.add(g);
-    toolPose(g, new THREE.Vector3(swx, 0, swz), new THREE.Vector3(x1 - 0.03, 1.3, swz));
-    tool("sweeper", g, [[0.36, 1.3, 0.42], [swx + 0.1, 0.65, swz]], { x0: swx - 0.13, x1, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
+    toolPose(g, new THREE.Vector3(swx, 0, swz), new THREE.Vector3(x1 - 0.38, 1.3, swz));
+    tool("sweeper", g, [[0.36, 1.3, 0.42], [swx + 0.1, 0.65, swz]], { x0: swx - 0.13, x1: swx + 0.2, z0: swz - 0.19, z1: swz + 0.19, y1: 0.4 });
   }
   // the step ladder: a 5-foot aluminium A-frame. Two sections hinge off the blue top cap: the front one carries the
   // ribbed treads, the rear one just braces; folding spreaders lock them apart. ladder.open(k) swings them from
@@ -210,7 +212,7 @@
   }
   // two short shelves stacked on the back wall, up out of the way and over in the right-hand corner (clear of the roof
   // ladder by the left wall, and whoever's climbing it): carpet shampoo and floor cleaner up top, bleach and glass cleaner below
-  const sz0 = z1 - 0.75, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;
+  const sz0 = z1 - 0.65, sz1 = z1 - 0.08, sd = 0.24, sx = x1 - sd / 2;   // (clear of the chute beside them)
   const items = [
     top => { bx(0.09, 0.26, 0.11, lam(0x6aa84f), sx, top + 0.13, z); cyl(0.02, 0.03, dark, sx, top + 0.275, z); label(0.09, 0.09, 0xf6f6f2, top + 0.12, z, 0.047); },   // carpet shampoo
     top => { bx(0.08, 0.22, 0.1, yellow, sx, top + 0.11, z); cyl(0.018, 0.03, lam(0xd21f26), sx, top + 0.235, z); label(0.08, 0.08, 0xd21f26, top + 0.1, z, 0.042); },   // floor cleaner
@@ -235,16 +237,16 @@ const rr = textPlane("RESTROOMS", 1.0, 0.24, "#fff", "#00349c");         // over
 rr.material = new THREE.MeshLambertMaterial({ map: rr.material.map });
 rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y = Math.PI; scene.add(rr);
 
-// ---- break room, V2 (interior x BX0+0.1..SX-0.1, z HZ+0.1..BZ1-0.1) ----
+// ---- break room, V2 (interior x SX+0.1..XR-0.1, z HZ+0.1..BZ1-0.1) ----
 // Lockers on the west wall (names on Dymo tape, a couple of padlocks, old poster tubes on top) and a coat rail past
 // them; the table mid-room in molded chairs, an empty Tony's box and the TV Guide on it; a kitchenette along the back
 // wall: oak cabinets with panelled doors, a sink sunk in the counter with a dish rack, a Mr. Coffee with its pot on,
 // a microwave blinking 12:00 since the last outage; the almond fridge in the corner under magnets. A TV/VCR up on a
 // bracket (on while someone's at lunch), the punch clock and its card rack by the door, a wall clock that keeps the
-// shift's time, the extinguisher, a first aid kit, the labor-law poster. The door swings in over x 4.45-5.55 up to
+// shift's time, the extinguisher, a first aid kit, the labor-law poster. The door swings in over x 8.0-9.1 up to
 // ~z 30.9, so that strip stays clear
 {
-  const x0 = BX0 + 0.1, x1 = SX - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
+  const x0 = SX + 0.1, x1 = XR - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
   const put = (geo, m, x, y, z, ry = 0, par = scene) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; par.add(o); return o; };
   const bx = (w, h, d, m, x, y, z, par) => put(new THREE.BoxGeometry(w, h, d), m, x, y, z, 0, par);
   const cyl = (rt, rb, h, m, x, y, z, seg = 16, par) => put(new THREE.CylinderGeometry(rt, rb, h, seg), m, x, y, z, 0, par);
@@ -298,7 +300,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
   }
 
   // ---- table and four molded chairs ----
-  const tx = 3.9, tz = 31.75, TW = 1.2, TD = 0.8, TH = 0.74;
+  const tx = x0 + 1.6, tz = 31.75, TW = 1.2, TD = 0.8, TH = 0.74;
   bx(TW, 0.028, TD, laminate, tx, TH - 0.014, tz);
   bx(TW + 0.012, 0.03, TD + 0.012, chrome, tx, TH - 0.03, tz);                                     // the chrome edge band
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) { cyl(0.018, 0.018, TH - 0.045, chrome, tx + sx * (TW / 2 - 0.08), (TH - 0.045) / 2, tz + sz * (TD / 2 - 0.08), 8); cyl(0.03, 0.03, 0.012, blackP, tx + sx * (TW / 2 - 0.08), 0.006, tz + sz * (TD / 2 - 0.08), 10); }
@@ -347,7 +349,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
   chair(tx + TW / 2 + 0.32, tz + 0.05, -Math.PI / 2 + 0.2);                            // end, turned in
 
   // ---- kitchenette: oak base cabinets under a laminate counter with the sink sunk in it, uppers above ----
-  const kx0 = 5.55, kx1 = x1 - 0.72, CD = 0.6, CH = 0.9, kz = z1 - CD / 2, front = z1 - CD;
+  const kx0 = x1 - 2.15, kx1 = x1 - 0.72, CD = 0.6, CH = 0.9, kz = z1 - CD / 2, front = z1 - CD;
   const kw = kx1 - kx0, kc = (kx0 + kx1) / 2, sinkX = kx0 + kw * 0.55, SW = 0.5, SD = 0.38, sz = kz - 0.03;
   const door = (x, y, w, h, zf, knob) => {                                                           // a panelled door: the slab, a raised field, a brass knob
     bx(w - 0.008, h - 0.008, 0.018, oak, x, y, zf - 0.009);
@@ -487,7 +489,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
 
   // ---- by the door: the punch clock and its card rack ----
   {
-    const g = grp(6.4, 1.38, z0, Math.PI);                                                             // (facing +z, into the room)
+    const g = grp(BOH_DOORS.breakroom + 1.05, 1.38, z0, Math.PI);                                                             // (facing +z, into the room)
     bx(0.26, 0.34, 0.15, phong(0xcfc6ae, 30), 0, 0, -0.075, g); bx(0.27, 0.06, 0.16, phong(0x8a8478, 30), 0, -0.19, -0.08, g);
     sheet(pic((ctx, W) => { ctx.fillStyle = "#cfc6ae"; ctx.fillRect(0, 0, W, W); ctx.fillStyle = "#f4f1e6"; ctx.beginPath(); ctx.arc(W / 2, W / 2, W / 2 - 6, 0, 7); ctx.fill(); ctx.strokeStyle = "#222"; ctx.lineWidth = 6; ctx.stroke();
       ctx.fillStyle = "#222"; ctx.font = "bold 18px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; for (let i = 1; i <= 12; i++) { const a = i * Math.PI / 6; ctx.fillText(i, W / 2 + Math.sin(a) * W * 0.36, W / 2 - Math.cos(a) * W * 0.36); }
@@ -496,7 +498,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
     breakFx.punch = { g, h: null, m: null };
     const hand = (len, w) => { const p = new THREE.Group(); p.position.set(0, 0.05, -0.162); g.add(p); bx(w, len, 0.002, lam(0x111111), 0, len / 2 - 0.01, 0, p); return p; };
     breakFx.punch.h = hand(0.04, 0.008); breakFx.punch.m = hand(0.06, 0.005);
-    const r = grp(6.88, 1.32, z0, Math.PI);                                                             // the rack: a row of slots, a card for each of us
+    const r = grp(BOH_DOORS.breakroom + 1.53, 1.32, z0, Math.PI);                                                             // the rack: a row of slots, a card for each of us
     bx(0.2, 0.5, 0.04, phong(0x9a9488, 30), 0, 0, -0.02, r);
     for (let k = 0; k < 6; k++) { bx(0.19, 0.012, 0.03, phong(0x6a665c, 30), 0, -0.22 + k * 0.08, -0.05, r); if (k !== 1 && k < 5) bx(0.09, 0.18, 0.003, lam(0xe4d6a8), (k % 2 ? 0.035 : -0.035), -0.18 + k * 0.08, -0.04, r); }
   }
@@ -535,8 +537,8 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
     ctx.fillStyle = "#c79a74"; for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.arc(-40 + k * 40, -30, 13, 0, 7); ctx.fill(); ctx.fillRect(-52 + k * 40, -16, 24, 36); }
     ctx.fillStyle = "#333"; ctx.font = "italic 20px Arial"; ctx.fillText("grand opening", -62, 80); ctx.restore();
   }, 1152, 560);
-  put(new THREE.PlaneGeometry(1.2, 0.66), new THREE.MeshLambertMaterial({ map: board, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), 3.1, 1.5, z0 + 0.014);   // (clear of the frame's face, 6 mm proud of the wall)
-  bx(1.26, 0.72, 0.02, oakDk, 3.1, 1.5, z0 - 0.004);                                                      // frame
+  put(new THREE.PlaneGeometry(1.2, 0.66), new THREE.MeshLambertMaterial({ map: board, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), x0 + 0.8, 1.5, z0 + 0.014);   // (clear of the frame's face, 6 mm proud of the wall)
+  bx(1.26, 0.72, 0.02, oakDk, x0 + 0.8, 1.5, z0 - 0.004);                                                      // frame
 
   // ---- the wall clock over the table, keeping the shift's time (see breakroomTick), employee of the month beside it ----
   {
@@ -561,8 +563,8 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
     ctx.fillStyle = "#c9a07a"; ctx.beginPath(); ctx.arc(W / 2, 128, 34, 0, 7); ctx.fill(); ctx.fillRect(W / 2 - 46, 168, 92, 48);
     ctx.fillStyle = "#fff"; ctx.font = "bold 20px Arial"; ctx.fillText("DANA", W / 2, 246);
   }, 256, 270);
-  put(new THREE.PlaneGeometry(0.4, 0.42), new THREE.MeshLambertMaterial({ map: eotm, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), 2.85, 1.45, z1 - 0.02, Math.PI);
-  bx(0.44, 0.46, 0.012, lam(0xc9a64a), 2.85, 1.45, z1 - 0.006);                                           // its gold-tone frame
+  put(new THREE.PlaneGeometry(0.4, 0.42), new THREE.MeshLambertMaterial({ map: eotm, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), x0 + 0.75, 1.45, z1 - 0.02, Math.PI);
+  bx(0.44, 0.46, 0.012, lam(0xc9a64a), x0 + 0.75, 1.45, z1 - 0.006);                                           // its gold-tone frame
 
   // ---- vinyl cove base round the room (not across the doorway) ----
   {
@@ -574,13 +576,13 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
   }
 }
 
-// ---- restroom, V2.5 (interior x SX+0.1..XR-0.1, z HZ+0.1..BZ1-0.1) ----
+// ---- restroom, V2.5 (interior x BX0+0.1..SX-0.1, z HZ+0.1..BZ1-0.1) ----
 // A two-piece toilet on the back wall; a pedestal sink under a framed mirror
 // on the west wall, with a single-lever faucet; a paper towel dispenser and a
 // little wastebasket beside it; tiled wainscot all round. The door swings in
-// over x 9.1-10.2 up to ~z 30.9. E flushes the toilet and runs the tap (see bath)
+// over x 4.45-5.55 up to ~z 30.9. E flushes the toilet and runs the tap (see bath)
 {
-  const x0 = SX + 0.1, x1 = XR - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
+  const x0 = BX0 + 0.1, x1 = SX - 0.1, z0 = HZ + 0.1, z1 = BZ1 - 0.1;
   const put = (geo, m, x, y, z, ry = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; scene.add(o); return o; };
   const china = new THREE.MeshPhongMaterial({ color: 0xf7f7f3, specular: 0x9a9a9a, shininess: 85, side: THREE.DoubleSide });
   const chrome = new THREE.MeshPhongMaterial({ color: 0xd4d8dd, specular: 0xffffff, shininess: 110 });
@@ -623,7 +625,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
   wains(x0, BOH_DOORS.restroom - DOOR_W / 2 - 0.04, true, z0, 1); wains(BOH_DOORS.restroom + DOOR_W / 2 + 0.04, x1, true, z0, 1);   // either side of the door
 
   // ---- the toilet: two-piece, elongated bowl, seat and lid up ----
-  const tx = 10.25, zb = z1, bz = zb - 0.44;       // center line; back wall; bowl center
+  const tx = x1 - 0.65, zb = z1, bz = zb - 0.44;   // center line; back wall; bowl center
   const toilet = [];
   toilet.push(place(slab(rrect(0.5, 0.2, 0.045), 0.36, china, 0.012), tx, 0.43, zb - 0.108));                // tank
   toilet.push(place(slab(rrect(0.535, 0.228, 0.05), 0.036, china, 0.012), tx, 0.79, zb - 0.108));            // tank lid
@@ -706,7 +708,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
   // the small wastebasket under it: open top, a liner folded over the rim, a few towels in it
   const bin = place(lathe([[0.1, 0], [0.13, 0.31], [0.124, 0.31], [0.095, 0.012], [0.001, 0.012]], new THREE.MeshPhongMaterial({ color: 0x3d4248, specular: 0x444444, shininess: 30, side: THREE.DoubleSide }), 28), wx + 0.19, 0, pz);
   const liner = put(new THREE.TorusGeometry(0.127, 0.006, 6, 30), new THREE.MeshLambertMaterial({ color: 0xe8e8e8 }), wx + 0.19, 0.31, pz); liner.rotation.x = Math.PI / 2;
-  trashBins.restroom = { id: "restroom", name: "restroom wastebasket", cap: 8, x: wx + 0.19, z: pz, rimY: 0.31, r: 0.1, liner: 0xeeeeee, towels: true, parts: [bin, liner], stand: { x: wx + 0.78, z: pz, ry: -Math.PI / 2 } };
+  trashBins.restroom = { id: "restroom", name: "restroom wastebasket", cap: 8, x: wx + 0.19, z: pz, rimY: 0.31, r: 0.1, liner: 0xeeeeee, towels: true, parts: [bin, liner], stand: { x: wx + 1.28, z: pz, ry: -Math.PI / 2 } };
   colliders.push({ x0: wx + 0.04, x1: wx + 0.34, z0: pz - 0.15, z1: pz + 0.15, y1: 0.35 });
   bath.water = water; bath.waterY = water.position.y; bath.stream = stream; bath.toiletAt = [tx, 0.4, bz]; bath.sinkAt = [fx + 0.15, top, sz];
 }

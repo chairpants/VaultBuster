@@ -100,6 +100,8 @@ function switchSnap(on) {
   const inside = BOH.hallZ + WALL_T / 2;
   plate(BOH_DOORS.breakroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["breakroom"]);
   plate(BOH_DOORS.restroom - DOOR_W / 2 - 0.25, 1.22, inside, 0, ["restroom"]);
-  plate(-1.8, 1.22, BOH.z1 - WALL_T / 2, Math.PI, ["lobby", "theater"]);
+  plate(CINEMA_DOOR + 1.07, 1.22, BOH.z1 - WALL_T / 2, Math.PI, ["lobby", "theater"]);
+  plate(SHAFT.split + 0.1, 1.22, (TALL.z0 + SHAFT.top) / 2, Math.PI / 2, ["stairwell"]);   // at the booth's stairs' foot, across from their door
+  plate(SHAFT.x0, TALL.booth + 1.22, 31.5, -Math.PI / 2, ["stairwell", "booth"]);          // up in the booth, by the stairs' top
 }
 

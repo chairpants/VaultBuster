@@ -136,8 +136,8 @@ check("trash: a full bin spills, bag it, down the chute", await ev(() => { const
   return spilled && bagged && !__t.bagCarry.length && __t.shift.stats.score === s0 + 10; }));
 
 console.log("\nsandbox: the restroom");
-await ev(() => { const d = __t.doors.find(d => !d.push && Math.abs(d.c - 9.65) < 0.1); if (d && !d.open) __t.toggleDoor(d);
-  __t.player.x = 10.25; __t.player.z = 31.2; const dx = 0, dy = 0.41 - 1.65, dz = 32.3 - 31.2; __t.player.yaw = Math.atan2(-dx, -dz); __t.player.pitch = Math.atan2(dy, Math.hypot(dx, dz)); });
+await ev(() => { const d = __t.doors.find(d => !d.push && Math.abs(d.c - 5.0) < 0.1); if (d && !d.open) __t.toggleDoor(d);
+  __t.player.x = 5.05; __t.player.z = 33.2; const dx = 0, dy = 0.41 - 1.65, dz = 34.3 - 33.2; __t.player.yaw = Math.atan2(-dx, -dz); __t.player.pitch = Math.atan2(dy, Math.hypot(dx, dz)); });
 await page.waitForFunction(() => document.getElementById("tvHint").textContent.includes("toilet"), null, { timeout: 120000 }).catch(() => {});
 await page.keyboard.press("KeyE"); await page.waitForTimeout(1500);
 check("sit on the toilet: seated, pants down", await ev(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return __t.seated() && !!__t.seatAt()?.toilet && hip.material !== hip.userData.pantsM; }));

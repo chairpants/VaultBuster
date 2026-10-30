@@ -55,15 +55,15 @@ function beaconAt(i, pos, ry, color, w = TAPE.w, h = TAPE.h, d = TAPE.d) {
 // Instead, each doorway lets light through both ways: a lit room glows out into the dark hall (and the lit hall into a
 // dark room), fading over a few meters, as far as the door is open. [from a zone, to a box, through (x, y, z), reach]
 const SPILLS = (() => {
-  const HZ = BOH.hallZ, Z = STORE.z, X = STORE.x, hall = [BOH.x0, X, Z, HZ];
-  const brk = [BOH.x0, BOH.splitX, HZ, BOH.z1], rr = [BOH.splitX, X, HZ, BOH.z1], cl = [X, CLOSET.x1, Z, HZ], floor = [X - 6, X, Z - 6, Z];
+  const HZ = BOH.hallZ, Z = STORE.z, X = STORE.x, hall = [BOH.x0, CLOSET.x0, Z, HZ];
+  const rr = [BOH.x0, BOH.splitX, HZ, BOH.z1], brk = [BOH.splitX, X, HZ, BOH.z1], cl = [CLOSET.x0, X, Z, HZ], floor = [BOH_DOORS.store - 3, BOH_DOORS.store + 3, Z - 6, Z];
   // a doorway: in a wall along x (z = at) or along z (x = at), centered c, half width hw; the lit side (+1/-1 across the
   // wall), and how far back in there (depth) and how high (y) its light is. The door itself (if any) is found by position
   const dw = (alongX, at, c, hw, side, depth, y, door = true) => ({ alongX, at, c, hw, door,
     src: alongX ? [c, y, at + side * depth] : [at + side * depth, y, c] });
   const brkD = s => dw(true, HZ, BOH_DOORS.breakroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
   const rrD = s => dw(true, HZ, BOH_DOORS.restroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
-  const clD = s => dw(false, X, BOH_DOORS.closet, CLOSET.doorW / 2, s, s > 0 ? 0.6 : 0.9, s > 0 ? 2.28 : 2.55);
+  const clD = s => dw(false, CLOSET.x0, BOH_DOORS.closet, CLOSET.doorW / 2, s, s > 0 ? 0.6 : 0.9, s > 0 ? 2.28 : 2.55);
   const opD = s => dw(true, Z, BOH_DOORS.store, BOH_OPENING_W / 2, s, s < 0 ? 3 : 0.9, s < 0 ? 3.4 : 2.55, false);
   return [
     { from: "breakroom", into: "hall", to: hall, ...brkD(1) },
@@ -571,7 +571,7 @@ function empLeaveStool() {                       // dropped mid-whatever (you ca
 function empTick(dt) { for (const e of staff) withEmp(e, () => empTickOne(dt)); staffChatTick(dt); }   // each of them in turn
 // ---- the staff between customers: leaning on the counter, checking the time, an eye on the lounge TV, a chat with
 // whoever else is on, and lunch in the break room (a half hour, sometime around midday, on a long enough shift) ----
-const LUNCH_CHAIRS = [{ x: 3.6, z: 31.05, ry: 0 }, { x: 4.2, z: 31.1, ry: 0.15 }, { x: 3.9, z: 32.45, ry: Math.PI }, { x: 4.82, z: 31.8, ry: -Math.PI / 2 + 0.2 }];
+const LUNCH_CHAIRS = [{ x: 7.2, z: 31.05, ry: 0 }, { x: 7.8, z: 31.1, ry: 0.15 }, { x: 7.5, z: 32.45, ry: Math.PI }, { x: 8.42, z: 31.8, ry: -Math.PI / 2 + 0.2 }];
 const CHAT_TOPICS = ["last night's X-Files", "a guy who returned a tape full of sand", "the new Pearl Jam album", "weekend plans", "whether Titanic's ever coming out on tape",
   "car trouble", "the Bulls game", "which of the regulars rewinds", "a weird dream", "the best pizza in town", "Friends", "the district manager's tie"];
 function empIdleTick(dt) {                        // at their post with nothing to do: the small stuff (see "post")

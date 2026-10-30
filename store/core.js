@@ -26,15 +26,16 @@ const SLOT_W = 0.13, TAPE = { w: 0.032, h: 0.192, d: 0.105 }; // slot = cover + 
 const WALL_L = -7.74;
 const WALL_SHIFT = WALL_L + STORE.x;       // how far the movie-side wall (and everything anchored to it) moves in, ~3.26
 // back of house: a block built on behind the store's back wall at the TV Shows
-// end — a hallway along the back wall, a breakroom and a restroom off it, and a
-// (locked, for now) door at the hall's far end onto the space behind the lounge
-const BOH = { x0: 2, z1: 33, hallZ: 29.8, splitX: 8.3, h: 2.7 };   // west wall, rear wall, hall/rooms wall, breakroom|restroom wall, ceiling height
+// end — a hallway along the back wall, a restroom and a break room off it, the
+// janitor's closet at the hall's far end, and a door at its near end into the theater's lobby
+const BOH = { x0: 2, z1: 35, hallZ: 29.8, splitX: 5.8, h: 2.7 };   // west wall, rear wall, hall/rooms wall, restroom|break room wall, ceiling height
 const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the store's blue wall stripe
-const BOH_DOORS = { store: 9.7, breakroom: 5.0, restroom: 9.65, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west and east walls)
+const BOH_DOORS = { store: 4.6, restroom: 5.0, breakroom: 8.55, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west wall and the closet's)
 const breakFx = { clock: null, punch: null, clock12: null, coffee: null, coffeeLed: null, tv: null, tvMesh: null, vcr: null, tvT: 0 };   // the break room's moving parts (see breakroomTick)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
-const CLOSET = { x1: 12.6, doorW: 0.8 };
-const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 46.6, 0, -1], [7.5, 33.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal
+const boothGlow = { lamps: null, stairs: null, red: null };   // the booth's wall lamps' lenses, the stairwell's bulbs, the booth's red working lights (on while its lights are off)
+const CLOSET = { x0: 9.4, x1: STORE.x, doorW: 0.8 };   // the hall's end, x0 its wall across the hall (the door's in it) to the building's side wall
+const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 48.6, 0, -1], [7.5, 35.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal
 // the lot out front, front to back (z): the walk, the drive (a lane each way: right-hand, so east is the near lane),
 // the stall row, the curb, a strip of grass, then the road (its two lanes). Two driveways cut through, one at each end
 const LOT_Y_ = -0.12, LOT = { y: LOT_Y_, lane: { 1: -3.3, "-1": -6.3 }, stalls: -7.8, curb: -12.3, roadNear: -13.8, roadFar: -20.4, road: { 1: -15.45, "-1": -18.75 }, gates: [-22.54, 26.86], gateW: 4.4,   // (the stall lines and the lot's ends go by these)
@@ -52,7 +53,21 @@ function pavedAt(x, z) {
   if (z < -1.8 && z > LOT.curb) return x > LOT.gates[0] - hw && x < LOT.gates[1] + hw;
   return z <= LOT.curb && z >= LOT.roadNear && LOT.drives.some(([a, b]) => x > a - 0.3 && x < b + 0.3);
 }
-const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 33.1], [11.1, 12.7, 27.9, 29.9], [-7.07, 1.33, 33.1, 46.6]] };   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
+const ROOF = { y: 4.0, wall: 0.91, rects: [[-7.84, 11.1, -0.1, 35.1], [-7.84, 2.1, 35.1, 48.6]],   // the building's footprint (outer wall faces) and its flat roof: deck top y, parapet height
+  tall: { x0: -7.84, x1: 2.1, z0: 29.6, z1: 48.6, y: 6.4 } };   // the tall block: the auditorium and, over the lobby's back, the projection booth, roofed 2.4 m higher
+ROOF.decks = [{ r: [-7.84, 11.1, -0.1, 29.6], y: ROOF.y }, { r: [2.1, 11.1, 29.6, 35.1], y: ROOF.y }, { r: [ROOF.tall.x0, ROOF.tall.x1, ROOF.tall.z0, ROOF.tall.z1], y: ROOF.tall.y }];
+const deckY = (x, z) => { for (const { r: [a, b, c, d], y } of ROOF.decks) if (x > a && x < b && z > c && z < d) return y; return null; };   // the roof deck's height there (null: off it)
+// in the tall block: the auditorium's ceiling and the booth's, the booth's floor (over the lobby's back, from its front wall to
+// the auditorium's), and the auditorium's door from the lobby, at its far end by the store's side wall
+const TALL = { ceil: 6.0, booth: 3.0, z0: 29.8, z1: 34.9 };
+const CINEMA_DOOR = -6.85;
+// the stairwell up to the booth, walled in, in the lobby's corner by the back of house: its side wall's outside face (x0) and
+// its front wall's (z0); between its two flights (split); where they start (top: the end of the floor inside the door) and
+// turn (the landing at the back). Up one flight toward the back by the back of house's wall, round, up the other toward the front
+const SHAFT = { x0: -0.65, z0: 29.65, split: 0.65, top: 30.9, turn: 33.14, door: 1.3 };
+// outside, the iron stair from the store's roof up the tall block's front to its roof: its top tread's end (x0), its sides (z),
+// its treads and their run, toward +x, down to the store's roof; the landing at the top, back to land, where the parapet's open
+const IRON = { x0: -5.6, z0: 28.6, z1: 29.4, n: 11, run: 0.27, land: -6.6 };
 // the closet's tools, taken out with E and put back the same way, one at a time (see toolTake), held for use
 // (hold, in your body's frame: foot = how far right the business end sits on the floor (as far out as the handle
 // reaches), hand = the top grip [right, up, forward]; see toolTick).
@@ -163,17 +178,19 @@ const TVU = {
   uBoh: { value: new THREE.Vector4(1, 1, 1, 0) },    // hall, break room, restroom switches, the closet bulb
   uFloorBox: { value: new THREE.Vector4() },         // sales floor: x0, x1, z1 (back wall), ceiling
   uBohBox: { value: new THREE.Vector4() },           // back of house: x0, x1, hall|rooms z, z1
-  uBohSplit: { value: new THREE.Vector2() },         // break room | restroom x, ceiling
+  uBohSplit: { value: new THREE.Vector3() },         // restroom | break room x, ceiling, the closet's wall across the hall
   uInSky: { value: new THREE.Color() }, uInGround: { value: new THREE.Color() }, uInAmb: { value: new THREE.Color() },
   uInDirC: { value: new THREE.Color() }, uInDir: { value: new THREE.Vector3() },   // one room's worth of fluorescents
   uSunSky: { value: new THREE.Color() }, uSunGround: { value: new THREE.Color() }, uSunC: { value: new THREE.Color() }, uSunDir: { value: new THREE.Vector3() },
   uMoonSky: { value: new THREE.Color() }, uMoonGround: { value: new THREE.Color() }, uMoonC: { value: new THREE.Color() }, uMoonDir: { value: new THREE.Vector3() },
   uDayC: { value: new THREE.Color() }, uNightC: { value: new THREE.Color() },       // what comes in through the storefront glass by day / by night
   uFogC: { value: new THREE.Color() }, uFogD: { value: 0 },                          // fog outdoors (see wxSky): its color, and density per meter
-  uThLight: { value: new THREE.Vector2(1, 1) },      // x = lobby switch, y = theater house-lights switch
+  uThLight: { value: new THREE.Vector4(1, 1, 1, 1) },   // lobby switch, theater house-lights switch, the booth's, its stairs'
+  uTall: { value: new THREE.Vector4(2.72, 6.0, 29.7, 0) },   // the tall block: the booth over the lobby from this high, its ceiling and the auditorium's, the booth from this z
+  uShaft: { value: new THREE.Vector2(-0.55, 29.75) },   // the booth's stairwell, in the lobby's corner from here (x, z)
   uLobbyBox: { value: new THREE.Vector4() },         // movie lobby: x0, x1, z0, z1
   uThBox: { value: new THREE.Vector4() },            // auditorium: x0, x1, z0, z1
-  uThScreenP: { value: new THREE.Vector3(-2.87, 1.05, 45.8) }, // theater screen center for live bounce
+  uThScreenP: { value: new THREE.Vector3(-2.87, 1.05, 47.8) }, // theater screen center for live bounce
   uThSconce: { value: 1 },                           // auditorium wall sconces 0..1: up between films, fading out once one plays
   // light spilling through doorways into a darker room next door (see spillTick), live ones first (uSpillN): per spill,
   // the light it comes from (xyz, inside the lit room) + reach past the door (w), its color x strength, the box it
@@ -202,13 +219,17 @@ const ROOM_FRAG = `
     float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);
     rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
-  } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05 && (P.z < uBohBox.z || P.x < uFloorBox.y)) {   // (past the side wall only the closet's row: the building's outside skin round there isn't indoors)
-    bool closet = P.x > uFloorBox.y && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
-    float lvl = closet ? 0.8 * uBoh.w : P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.y : uBoh.z);
+  } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
+    bool closet = P.x > uBohSplit.z && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
+    float lvl = closet ? 0.8 * uBoh.w : P.z < uBohBox.z ? uBoh.x : (P.x < uBohSplit.x ? uBoh.z : uBoh.y);
     rl = (0.03 + 0.97 * lvl) * fl * (closet ? vec3(1.12, 0.95, 0.74) : vec3(1.0));
+  } else if (P.x > uShaft.x && P.x < uLobbyBox.y && P.z > uShaft.y && P.z < uLobbyBox.w && P.y < uTall.y + 0.05) {   // the booth's stairs: bulbs on cords, warm
+    rl = (0.03 + 0.97 * uThLight.w) * fl * vec3(1.12, 0.95, 0.74);
+  } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uTall.z && P.z < uLobbyBox.w && P.y > uTall.x && P.y < uTall.y + 0.05) {   // the booth: lamps low on its walls, red working lights when they're off
+    rl = (0.03 + 0.97 * uThLight.z) * fl * vec3(1.12, 0.95, 0.74) + (1.0 - uThLight.z) * fl * vec3(0.16, 0.012, 0.0);
   } else if (P.x > uLobbyBox.x && P.x < uLobbyBox.y && P.z >= uLobbyBox.z && P.z < uLobbyBox.w && P.y < uBohSplit.y + 0.05) {
     rl = (0.04 + 0.96 * uThLight.x) * fl * vec3(1.08, 0.93, 0.80);
-  } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uFloorBox.w + 0.1) {
+  } else if (P.x > uThBox.x && P.x < uThBox.y && P.z >= uThBox.z && P.z < uThBox.w && P.y < uTall.y + 0.1) {
     vec3 thFl = (0.025 + 0.30 * uThLight.y + 0.12 * uThSconce) * fl * vec3(1.15, 0.82, 0.55);   // house lights + a low warm sconce wash
     vec3 sL = uThScreenP - P; float sd2 = dot(sL, sL); sL *= inversesqrt(sd2);
     float sCos = max(sL.z, 0.0) * (0.35 + 0.65 * max(dot(rN, sL), 0.0));
@@ -266,7 +287,7 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
     .replace("#include <common>", `#include <common>
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
       uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
-      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec2 uBohSplit, uThLight; uniform vec3 uThScreenP; uniform float uThSconce;
+      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec3 uBohSplit; uniform vec4 uThLight, uTall; uniform vec2 uShaft; uniform vec3 uThScreenP; uniform float uThSconce;
       uniform vec4 uSpillP[8], uSpillC[8], uSpillB[8], uSpillD[8]; uniform int uSpillN;
       uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC, uFogC; uniform float uFogD;`)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\nfloat tvOut = 0.0;\n" + ROOM_FRAG + TV_FRAG)
@@ -683,13 +704,14 @@ function thSeatTick(dt) {
 }
 
 // the light switch zones: three along the sales floor, then the back of house rooms
-const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater", "closet"];
-const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom", lobby: "theater lobby", theater: "auditorium", closet: "closet" };
-const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS", lobby: "LOBBY", theater: "HOUSE", closet: "LIGHT" };
-function lightZoneAt(x, z) {
+const LIGHT_ZONES = ["front", "aisles", "lounge", "hall", "breakroom", "restroom", "lobby", "theater", "closet", "booth", "stairwell"];
+const ZONE_NAMES = { front: "front", aisles: "aisle", lounge: "lounge", hall: "back hall", breakroom: "break room", restroom: "restroom", lobby: "theater lobby", theater: "auditorium", closet: "closet", booth: "projection booth", stairwell: "booth stairs" };
+const ZONE_LABELS = { front: "FRONT", aisles: "AISLES", lounge: "LOUNGE", hall: "HALL", breakroom: "LIGHTS", restroom: "LIGHTS", lobby: "LOBBY", theater: "HOUSE", closet: "LIGHT", booth: "BOOTH", stairwell: "STAIRS" };
+function lightZoneAt(x, z, y = 0) {
   if (z >= BOH.z1) return "theater";
-  if (z > STORE.z && x < BOH.x0) return "lobby";
-  if (z > STORE.z) return z < BOH.hallZ ? (x > STORE.x ? "closet" : "hall") : x < BOH.splitX ? "breakroom" : "restroom";
+  if (z > SHAFT.z0 && z < BOH.z1 && x > SHAFT.x0 && x < BOH.x0) return "stairwell";
+  if (z > STORE.z && x < BOH.x0) return y > 2.8 && z > TALL.z0 ? "booth" : "lobby";
+  if (z > STORE.z) return z < BOH.hallZ ? (x > CLOSET.x0 ? "closet" : "hall") : x < BOH.splitX ? "restroom" : "breakroom";
   return z < 10 ? "front" : z < 19 ? "aisles" : "lounge";
 }
 const allLights = [];                      // every light that lights-out kills (base intensity in userData.on)

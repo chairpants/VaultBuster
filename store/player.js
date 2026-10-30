@@ -1,5 +1,5 @@
 // ---------------- player ----------------
-const player = { x: 0, z: 2.6, yaw: Math.PI, pitch: 0, r: 0.32 };
+const player = { x: 0, z: 2.6, yaw: Math.PI, pitch: 0, r: 0.32, inBooth: false };   // (inBooth: up in the projection booth, its floor over the lobby's)
 let eyeY = 1.65;                            // eased toward standing/crouch height
 camera.position.set(player.x, 1.65, player.z);
 camera.rotation.y = player.yaw;
@@ -344,7 +344,15 @@ addEventListener("mousemove", e => {
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * k * (SETTINGS.invertY ? -1 : 1)));
 });
 function blocked(x, z) {
-  if (player.onRoof) return !onDeck(x, z) || roof.cols.some(c => x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r);   // up top: the deck, its parapets and its kit
+  const r = player.r, near = Math.hypot(x - player.x, z - player.z) < 1;   // (a step from where you are: anywhere else, just what's there)
+  if (player.onRoof) return !onDeck(x, z) || (near && Math.abs(roofY(x, z) - roofY(player.x, player.z)) > 0.35)   // up top: the decks (the tall block's a wall from the low one but up the iron stair),
+    || roof.cols.some(c => x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);                    // their parapets and their kit
+  if (player.inBooth) return x < BOOTH.x0 + r || z < BOOTH.z0 + r || z > BOOTH.z1 - r || (x > BOOTH.x1 - r && (z > SHAFT.top - r || x > BOOTH.x1 + 0.4))   // the booth: out only to the stairs' top
+    || BOOTH.cols.some(c => x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r);
+  if (near) {                                    // no climbing a step much over a stair's (the booth's stairs' top from the lobby), nor dropping off one but into the booth
+    const f0 = floorHeightAt(player.x, player.z), f1 = floorHeightAt(x, z);
+    if (f1 - f0 > 0.4 || (f0 - f1 > 0.6 && !(f0 > TALL.booth - 0.1 && x < SHAFT.x0))) return true;
+  }
   if (CUSTOMER && outBlocked(x, z)) return true;
   for (const c of colliders) if (!c.staff)       // (you walk through the staff: they can't pin you in a corner)
     if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) {
@@ -396,9 +404,11 @@ function move(dt) {
   const crouched = keys.has("KeyC");
   const spd = sp * (crouched ? 0.55 : 1) * (hungover() ? 0.75 : 1);
   const dx = (f.x * iz + rt.x * ix) * spd * dt, dz = (f.z * iz + rt.z * ix) * spd * dt;
-  const x0 = player.x, z0 = player.z;
+  const x0 = player.x, z0 = player.z, top = !player.inBooth && floorHeightAt(x0, z0) > TALL.booth - 0.1;
   if (!blocked(player.x + dx, player.z)) player.x += dx;
   if (!blocked(player.x, player.z + dz)) player.z += dz;
+  if (top && player.x < SHAFT.x0) player.inBooth = true;                    // off the stairs' top into the booth,
+  else if (player.inBooth && player.x > BOOTH.x1 + 0.15) player.inBooth = false;   // and back out onto it
   const walked = Math.hypot(player.x - x0, player.z - z0); if ((walkXp += walked) > 12) { walkXp = 0; gainXp("you", "con", 1); }
   if ((playerStepD += walked) > (sp > 4 ? 0.95 : 0.72)) { playerStepD = 0; ambStep(player.x, player.z, crouched ? 0.35 : 0.6); }   // your own, quieter (you're wearing sneakers)
 }

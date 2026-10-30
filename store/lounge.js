@@ -624,7 +624,8 @@ function applyLighting() {
   Z.set(zoneLvl.front, zoneLvl.aisles, zoneLvl.lounge, tod.level);
   B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, zoneLvl.closet);
   closetBulb.mat?.color.set(zoneOn.closet ? 0xfff2c4 : 0x3a3833);
-  TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater);
+  boothGlow.lamps?.color.set(zoneOn.booth ? 0xffd890 : 0x3a3833); boothGlow.stairs?.color.set(zoneOn.stairwell ? 0xffd890 : 0x3a3833); boothGlow.red?.color.set(zoneOn.booth ? 0x2a0806 : 0xff2a1a);
+  TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater, zoneLvl.booth, zoneLvl.stairwell);
   for (const l of allLights) l.intensity = l.userData.on * (zoneLvl[l.userData.zone] ?? 1);
   for (const m of posterMats) m.emissiveIntensity = 0.12 + 0.55 * (1 - (zoneLvl[m.userData.zone] ?? 1));   // (the marquee bulbs themselves are untouched)
   const dark = !zoneOn.front && !zoneOn.aisles && !zoneOn.lounge && tod.level < 0.35;

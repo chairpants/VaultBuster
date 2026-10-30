@@ -1,14 +1,17 @@
-// ---- movie theater lobby (x WALL_L..BX0, z BZ0..BZ1) & single-screen stadium theater (z BZ1..46.5) ----
+// ---- movie theater lobby (x WALL_L..BX0, z BZ0..BZ1) & single-screen stadium theater (z BZ1..48.5): the auditorium as
+// wide as the lobby, flush with the store's side wall, and 6 m to its ceiling; over the lobby's back the projection booth,
+// up a walled-in stairwell in the lobby's corner by the back of house (see the booth, below) ----
 {
   const LX0 = WALL_L, LX1 = BX0, LZ0 = Z, LZ1 = BZ1, LH = BOH.h;
   const TX = (LX0 + LX1) / 2;              // -2.87: centerline of lobby & auditorium
-  const TW = 8.2, TX0 = TX - TW / 2, TX1 = TX + TW / 2, TZ0 = LZ1, TZ1 = 46.5, TH = STORE.h;
+  const TW = LX1 - LX0, TX0 = LX0, TX1 = LX1, TZ0 = LZ1, TZ1 = 48.5, TH = TALL.ceil;
+  const IN0 = TX0 + WALL_T / 2, IN1 = TX1 - WALL_T / 2;   // the auditorium's side walls' inside faces
   TVU.uLobbyBox.value.set(LX0 - 0.05, LX1 + 0.05, LZ0, LZ1 + 0.05);
   TVU.uThBox.value.set(TX0 - 0.05, TX1 + 0.05, TZ0, TZ1 + 0.05);
 
-  // lobby walls, art-deco cinema carpet, and ceiling
+  // lobby walls, art-deco cinema carpet, and ceiling (not over the stairwell: it's walled in, up to the booth)
   wall(LZ0, LZ1 + T / 2, LX0, false, LH, mat.wall);
-  wall(LX0, LX1, LZ1, true, LH, mat.wall, [TX]);   // south wall with door into Cinema 1
+  wall(LX0, LX1, LZ1, true, LH, mat.wall, [CINEMA_DOOR]);   // south wall with the door into Cinema 1, at its far end
   const lobbyCarpetTex = makeTexture((ctx, W, H) => {
     ctx.fillStyle = "#58111a"; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = "#d4a017"; ctx.lineWidth = 6;
@@ -24,35 +27,40 @@
       ctx.fillRect(Math.random() * W, Math.random() * H, 2, 2);
     }
   }, 512, 512);
-  floorPatch(lobbyCarpetTex, 2.0, LX0, LX1, LZ0, LZ1);
-  const lobCeilTex = ceilGrid(ceilTex.clone(), LX0, LX1, LZ0, LZ1); lobCeilTex.needsUpdate = true;
-  const lobCeil = new THREE.Mesh(new THREE.PlaneGeometry(LX1 - LX0, LZ1 - LZ0), new THREE.MeshLambertMaterial({ map: lobCeilTex }));
-  lobCeil.rotation.x = Math.PI / 2; lobCeil.position.set(TX, LH, (LZ0 + LZ1) / 2); scene.add(lobCeil);
+  for (const [x0, x1, z0, z1] of [[LX0, SHAFT.x0, LZ0, LZ1], [SHAFT.x0, LX1, LZ0, SHAFT.z0]]) {
+    floorPatch(lobbyCarpetTex, 2.0, x0, x1, z0, z1);
+    const t = ceilGrid(ceilTex.clone(), x0, x1, z0, z1); t.needsUpdate = true;
+    const c = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshLambertMaterial({ map: t }));
+    c.rotation.x = Math.PI / 2; c.position.set((x0 + x1) / 2, LH, (z0 + z1) / 2); scene.add(c);
+  }
 
   // the auditorium door: the same maroon push door as the hall's, no window
-  makeDoor({ at: LZ1, c: TX, alongX: true, hinge: -1, swing: 1, leafMat: theaterDoorMat, push: true,
+  makeDoor({ at: LZ1, c: CINEMA_DOOR, alongX: true, hinge: -1, swing: 1, leafMat: theaterDoorMat, push: true,
     signs: [{ text: "CINEMA 1", side: -1 }, { text: "LOBBY", side: 1 }] });
 
-  // glowing marquee over the Cinema 1 door
-  box(2.2, 0.36, 0.14, mat.dark, TX, DOOR_H + 0.25, LZ1 - T / 2 - 0.07);
+  // glowing marquee over the Cinema 1 door (as far over as the corner lets it)
+  const MQX = LX0 + WALL_T / 2 + 1.14;
+  box(2.2, 0.36, 0.14, mat.dark, MQX, DOOR_H + 0.25, LZ1 - T / 2 - 0.07);
   const mq = glow(textPlane("★ CINEMA 1 · NOW SHOWING ★", 2.08, 0.28, "#ffd400", "#58111a", "Arial Black", 64));
-  mq.position.set(TX, DOOR_H + 0.25, LZ1 - T / 2 - 0.145); mq.rotation.y = Math.PI; scene.add(mq);
+  mq.position.set(MQX, DOOR_H + 0.25, LZ1 - T / 2 - 0.145); mq.rotation.y = Math.PI; scene.add(mq);
 
-  // brass velvet-rope stanchions flanking the Cinema 1 entrance
+  // brass velvet-rope stanchions, not in use: put by out of the way, a pair close together, the rope sagging low, and a pair
+  // as they were by the door
   const brass = new THREE.MeshPhongMaterial({ color: 0xc9a227, specular: 0xffe2a0, shininess: 80 });
   const velvet = new THREE.MeshLambertMaterial({ color: 0x8f111c });
-  for (const sx of [-1, 1]) {
-    for (const px of [TX + sx * 1.05, TX + sx * 2.25]) {
+  for (const [ax, az, bx_, bz, sag] of [[-1.05, 33.3, -1.13, 33.92, 0.52], [-4.95, 34.52, -3.78, 34.34, 0.24]]) {
+    for (const [px, pz] of [[ax, az], [bx_, bz]]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 12), brass);
-      post.position.set(px, 0.45, LZ1 - 0.65); scene.add(post);
+      post.position.set(px, 0.45, pz); scene.add(post);
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.03, 16), brass);
-      base.position.set(px, 0.015, LZ1 - 0.65); scene.add(base);
+      base.position.set(px, 0.015, pz); scene.add(base);
       const ball = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), brass);
-      ball.position.set(px, 0.92, LZ1 - 0.65); scene.add(ball);
+      ball.position.set(px, 0.92, pz); scene.add(ball);
     }
-    const rope = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.022, 8, 24, Math.PI), velvet);
-    rope.position.set(TX + sx * 1.65, 0.84, LZ1 - 0.65); rope.rotation.z = Math.PI; rope.scale.y = 0.35; scene.add(rope);
-    colliders.push({ x0: TX + sx * 1.65 - 0.65, x1: TX + sx * 1.65 + 0.65, z0: LZ1 - 0.78, z1: LZ1 - 0.52, y1: 0.95 });
+    const d = Math.hypot(bx_ - ax, bz - az);
+    const rope = new THREE.Mesh(new THREE.TorusGeometry(d / 2, 0.022, 8, 24, Math.PI), velvet);
+    rope.position.set((ax + bx_) / 2, 0.84, (az + bz) / 2); rope.rotation.set(0, -Math.atan2(bz - az, bx_ - ax), Math.PI); rope.scale.y = sag / (d / 2); scene.add(rope);
+    colliders.push({ x0: Math.min(ax, bx_) - 0.15, x1: Math.max(ax, bx_) + 0.15, z0: Math.min(az, bz) - 0.15, z1: Math.max(az, bz) + 0.15, y1: 0.95 });
   }
 
   // small-town concession & ticket counter in the west end of the lobby
@@ -68,15 +76,18 @@
   adm.position.set(ccx, 2.05, LZ0 + T / 2 + 0.015); scene.add(adm);
 
   // ---- Single-Screen Stadium Auditorium ----
-  // 6 stadium rows stepping down from y = 0 (at z = 34.6) to y = -1.56 (at z = 42.4)
-  const R_Z0 = 34.6, R_ROWS = 6, R_STEP_Z = 1.3, R_DROP = 0.26, R_END = R_Z0 + R_ROWS * R_STEP_Z; // 42.4
+  // 6 stadium rows stepping down from y = 0 (at z = 36.6) to y = -1.56 (at z = 44.4), a row more across the back on the
+  // level floor by the door. One block of seats from the far wall, the aisle down the side by the door: a ramp
+  const R_Z0 = 36.6, R_ROWS = 6, R_STEP_Z = 1.3, R_DROP = 0.26, R_END = R_Z0 + R_ROWS * R_STEP_Z; // 44.4
   const PIT_Y = -R_ROWS * R_DROP;          // -1.56
-  const AISLE_HALF = 0.78;
+  const AX = -6.03;                        // the aisle: from the side wall's face to here
+  const EXIT = { z0: 36.25, z1: 37.15, land: -6.8 };   // the emergency exit in the side wall by the aisle; the landing inside it, out to here
 
   floorHeightAt = (x, z) => {
+    if (x > SHAFT.x0 && x < BX0 - 0.12 && z > TALL.z0 && z < TALL.z1) return stairsAt(x, z);
     if (z <= R_Z0 || x < TX0 || x > TX1 || z > TZ1) return 0;
     if (z < R_END) {
-      if (Math.abs(x - TX) < AISLE_HALF) return ((z - R_Z0) / (R_END - R_Z0)) * PIT_Y; // smooth center ramp
+      if (x < AX) return x < EXIT.land && z < 37.3 ? 0 : ((z - R_Z0) / (R_END - R_Z0)) * PIT_Y;   // the side aisle's ramp (the exit's landing level with the back)
       const r = Math.min(R_ROWS - 1, Math.floor((z - R_Z0) / R_STEP_Z));
       return -(r + 1) * R_DROP;
     }
@@ -92,8 +103,7 @@
   const riserMat = new THREE.MeshLambertMaterial({ color: 0x1e0b0f });
   const stepLightMat = new THREE.MeshBasicMaterial({ color: 0xff1a1a });   // red aisle step lights
 
-  // header above lobby roof at z = TZ0, side walls, and rear screen wall
-  box(TW, TH - LH, WALL_T, thWall, TX, LH + (TH - LH) / 2, TZ0);
+  // side walls and the rear screen wall (the one with the door's under the booth: see the booth)
   aimBlockers.push(
     box(WALL_T, WALL_H, TZ1 - TZ0, thWall, TX0, WALL_CY, (TZ0 + TZ1) / 2),
     box(WALL_T, WALL_H, TZ1 - TZ0, thWall, TX1, WALL_CY, (TZ0 + TZ1) / 2),
@@ -104,29 +114,37 @@
     { x0: TX1 - 0.18, x1: TX1 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
     { x0: TX0, x1: TX1, z0: TZ1 - 0.18, z1: TZ1 + 0.18, y0: WALL_BOT, y1: TH }
   );
+  // the wall with the door, its own colour on this side all the way down (it's the lobby's paint the other side)
+  for (const [x0, x1, y0, y1] of [[IN0, CINEMA_DOOR - 0.61, 0, LH], [CINEMA_DOOR + 0.61, IN1, 0, LH], [CINEMA_DOOR - 0.61, CINEMA_DOOR + 0.61, DOOR_H + 0.06, LH]])
+    box(x1 - x0, y1 - y0, 0.012, thWall, (x0 + x1) / 2, (y0 + y1) / 2, TZ0 + WALL_T / 2 + 0.006);
 
-  // dark cinema ceiling + back entry cross-aisle + sloped ramp + front orchestra pit
+  // dark cinema ceiling + back entry cross-aisle + the side aisle's ramp + front orchestra pit
   const thCeil = new THREE.Mesh(new THREE.PlaneGeometry(TW, TZ1 - TZ0), new THREE.MeshLambertMaterial({ color: 0x121016 }));
   thCeil.rotation.x = Math.PI / 2; thCeil.position.set(TX, TH, (TZ0 + TZ1) / 2); scene.add(thCeil);
   box(TW, 0.04, R_Z0 - TZ0, tierFloorMat, TX, -0.02, (TZ0 + R_Z0) / 2);
   box(TW, 0.04, TZ1 - R_END, tierFloorMat, TX, PIT_Y - 0.02, (R_END + TZ1) / 2);
 
+  const AW = AX - IN0, ACX = (IN0 + AX) / 2;
   const rampLen = Math.hypot(R_END - R_Z0, PIT_Y), rampAng = Math.atan2(-PIT_Y, R_END - R_Z0);
-  const ramp = new THREE.Mesh(new THREE.BoxGeometry(AISLE_HALF * 2, 0.04, rampLen), mat.carpet);
-  ramp.position.set(TX, PIT_Y / 2 - 0.02, (R_Z0 + R_END) / 2); ramp.rotation.x = rampAng; scene.add(ramp);
-  {                                          // solid fill under the ramp, down to the pit: the rows step below its edges, so its sides would show daylight
+  const ramp = new THREE.Mesh(new THREE.BoxGeometry(AW, 0.04, rampLen), mat.carpet);
+  ramp.position.set(ACX, PIT_Y / 2 - 0.02, (R_Z0 + R_END) / 2); ramp.rotation.x = rampAng; scene.add(ramp);
+  {                                          // solid fill under the ramp, down to the pit: the rows step below its edge, so its side would show daylight
     const sh = new THREE.Shape();              // side profile in (z, y): top follows the ramp (tucked just inside its slab), bottom at the pit floor
     sh.moveTo(R_Z0, -0.03); sh.lineTo(R_END, PIT_Y - 0.03); sh.lineTo(R_END, PIT_Y - 0.04); sh.lineTo(R_Z0, PIT_Y - 0.04); sh.lineTo(R_Z0, -0.03);
-    const g = new THREE.ExtrudeGeometry(sh, { depth: AISLE_HALF * 2 - 0.004, bevelEnabled: false });
-    g.rotateY(-Math.PI / 2); g.translate(TX + AISLE_HALF - 0.002, 0, 0);   // extruded across the aisle's width
+    const g = new THREE.ExtrudeGeometry(sh, { depth: AW - 0.004, bevelEnabled: false });
+    g.rotateY(-Math.PI / 2); g.translate(AX - 0.002, 0, 0);   // extruded across the aisle's width
     scene.add(new THREE.Mesh(g, riserMat));
   }
+  // the emergency exit's landing, level with the back of the house, the ramp starting down past it
+  box(EXIT.land - IN0, 0.14, 37.3 - R_Z0, new THREE.MeshLambertMaterial({ color: 0x2a1416 }), (IN0 + EXIT.land) / 2, -0.07, (R_Z0 + 37.3) / 2);
 
-  // stadium tiers & 48 seats, v2: real cinema chairs — shared side standards
+  // stadium tiers & seats, v2: real cinema chairs — shared side standards
   // with armrests and cup holders, a reclined padded back in a plastic shell,
   // and a sprung seat that folds up against the back (see thSeatTick). The
-  // fixed parts merge into 3 meshes; the 48 folding seats are one InstancedMesh
-  const bankW = (TW - AISLE_HALF * 2) / 2;
+  // fixed parts merge into 3 meshes; the folding seats are one InstancedMesh
+  const bankW = IN1 - AX, bankX = (AX + IN1) / 2;
+  const SEAT_X0 = -5.66, PITCH = 0.62, PER_ROW = 12;   // a row's seats, from the aisle to the far wall
+  const FRONT = { from: 3, to: 8 };                    // the front row: room for wheelchairs at each end, the seats in the middle only
   const seatPlush = new THREE.MeshLambertMaterial({ color: 0x9e1b24 });
   const seatDark = new THREE.MeshLambertMaterial({ color: 0x1c1a1e });
   const seatWood = new THREE.MeshLambertMaterial({ color: 0x4a2c18 });
@@ -155,47 +173,40 @@
   const pan = new THREE.BoxGeometry(0.44, 0.025, 0.38).toNonIndexed(); pan.translate(0, -0.125, 0.22);
   const hinges = [];
 
-  for (let r = 0; r < R_ROWS; r++) {
-    const z0 = R_Z0 + r * R_STEP_Z, z1 = z0 + R_STEP_Z, y = -(r + 1) * R_DROP;
-    for (const s of [-1, 1]) {
-      const bx = TX + s * (AISLE_HALF + bankW / 2);
-      // solid tier block down to PIT_Y so aisle walls look closed from the ramp
-      box(bankW, y - PIT_Y + 0.02, R_STEP_Z, tierFloorMat, bx, (y + PIT_Y) / 2 - 0.01, (z0 + z1) / 2);
-      box(bankW, R_DROP + 0.02, 0.04, riserMat, bx, y + R_DROP / 2, z0 + 0.02);
+  for (let r = -1; r < R_ROWS; r++) {               // (r -1: the row across the back, on the level floor)
+    const z0 = r < 0 ? R_Z0 - 1.25 : R_Z0 + r * R_STEP_Z, z1 = z0 + R_STEP_Z, y = r < 0 ? 0 : -(r + 1) * R_DROP;
+    if (r >= 0) {
+      // solid tier block down to PIT_Y so the aisle's side looks closed from the ramp
+      box(bankW, y - PIT_Y + 0.02, R_STEP_Z, tierFloorMat, bankX, (y + PIT_Y) / 2 - 0.01, (z0 + z1) / 2);
+      box(bankW, R_DROP + 0.02, 0.04, riserMat, bankX, y + R_DROP / 2, z0 + 0.02);
       // red aisle step-edge marker light
       const strip = glow(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.018, R_STEP_Z - 0.08), stepLightMat));
-      strip.position.set(TX + s * (AISLE_HALF + 0.04), y + 0.01, (z0 + z1) / 2); scene.add(strip);
-
-      // 4 seats per bank in this row (facing +z toward the screen)
-      const seatPitch = 0.62, bankInner = TX + s * (AISLE_HALF + 0.48), sz = z0 + 0.36;
-      for (let k = 0; k <= 4; k++) {                 // 5 standards: one each side of every seat, shared between neighbours
-        const ax = bankInner + s * (k - 0.5) * seatPitch;
-        pushGeo(darkGeos, standard, ax, y + 0.3, sz - 0.03);
-        pushGeo(woodGeos, armrest, ax, y + 0.625, sz - 0.05);
-        pushGeo(darkGeos, cupHolder, ax, y + 0.63, sz + 0.2);
-      }
-      for (let k = 0; k < 4; k++) {
-        const sx = bankInner + s * k * seatPitch;
-        pushGeo(plushGeos, backPad, sx, y + 0.47, sz - 0.275, RECLINE);    // padded front, reclined
-        pushGeo(darkGeos, backShell, sx, y + 0.43, sz - 0.332, RECLINE);   // the plastic shell behind it
-        const seat = { x: sx, y, z: sz + 0.04, rowZ: z0 + 0.86 };
-        theaterSeats.push(seat);
-        hinges.push({ seat, x: sx, y: y + 0.45, z: sz - 0.19, a: 1, v: 0 });   // starts folded up
-
-        // invisible pick target so aiming at any seat and pressing E sits you right there
-        const seatHit = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.82, 0.52), hitMat);
-        seatHit.position.set(sx, y + 0.42, sz);
-        seatHit.userData.sit = true;
-        seatHit.userData.seatPos = seat;              // the same object as the theaterSeats entry: that's how a seat knows it's taken
-        scene.add(seatHit); aimables.push(seatHit);
-      }
-      // row seat-back collider (leaves 0.72m legroom walkway in front of each row)
-      colliders.push({
-        x0: Math.min(bankInner, bankInner + s * 3 * seatPitch) - 0.28,
-        x1: Math.max(bankInner, bankInner + s * 3 * seatPitch) + 0.28,
-        z0: z0 + 0.08, z1: z0 + 0.56, y0: y, y1: y + 0.95, shadow: false,
-      });
+      strip.position.set(AX + 0.04, y + 0.01, (z0 + z1) / 2); scene.add(strip);
     }
+    const k0 = r === R_ROWS - 1 ? FRONT.from : 0, k1 = r === R_ROWS - 1 ? FRONT.to : PER_ROW - 1, sz = z0 + 0.36;
+    for (let k = k0; k <= k1 + 1; k++) {              // a standard each side of every seat, shared between neighbours
+      const ax = SEAT_X0 + (k - 0.5) * PITCH;
+      pushGeo(darkGeos, standard, ax, y + 0.3, sz - 0.03);
+      pushGeo(woodGeos, armrest, ax, y + 0.625, sz - 0.05);
+      pushGeo(darkGeos, cupHolder, ax, y + 0.63, sz + 0.2);
+    }
+    for (let k = k0; k <= k1; k++) {                  // facing +z toward the screen
+      const sx = SEAT_X0 + k * PITCH;
+      pushGeo(plushGeos, backPad, sx, y + 0.47, sz - 0.275, RECLINE);    // padded front, reclined
+      pushGeo(darkGeos, backShell, sx, y + 0.43, sz - 0.332, RECLINE);   // the plastic shell behind it
+      const seat = { x: sx, y, z: sz + 0.04, rowZ: z0 + 0.86 };
+      theaterSeats.push(seat);
+      hinges.push({ seat, x: sx, y: y + 0.45, z: sz - 0.19, a: 1, v: 0 });   // starts folded up
+
+      // invisible pick target so aiming at any seat and pressing E sits you right there
+      const seatHit = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.82, 0.52), hitMat);
+      seatHit.position.set(sx, y + 0.42, sz);
+      seatHit.userData.sit = true;
+      seatHit.userData.seatPos = seat;              // the same object as the theaterSeats entry: that's how a seat knows it's taken
+      scene.add(seatHit); aimables.push(seatHit);
+    }
+    // row seat-back collider (leaves 0.72m legroom walkway in front of each row)
+    colliders.push({ x0: SEAT_X0 + k0 * PITCH - 0.28, x1: SEAT_X0 + k1 * PITCH + 0.28, z0: z0 + 0.08, z1: z0 + 0.56, y0: y, y1: y + 0.95, shadow: false });
   }
   scene.add(new THREE.Mesh(mergeGeometries(plushGeos), seatPlush));
   scene.add(new THREE.Mesh(mergeGeometries(darkGeos), seatDark));
@@ -205,32 +216,51 @@
   thCushions.frustumCulled = false;                  // instances are spread over the whole house; the base geometry sits at the origin
   hinges.forEach((_, i) => thSeatPose(i));
   scene.add(thCushions);
+  // the front row's wheelchair spaces, two at each end, their sides marked quietly on the floor; a black iron railing on the
+  // step behind each pair, for the row behind (posts, a mid rail, a round top rail)
+  {
+    const FZ = R_Z0 + (R_ROWS - 1) * R_STEP_Z + 0.4, line = new THREE.MeshLambertMaterial({ color: 0x4d4650 });
+    for (const x of [-5.97, -5.04, -4.11, -0.39, 0.54, 1.47]) box(0.04, 0.003, 1.1, line, x, PIT_Y + 0.0015, FZ + 0.05);
+    const black = new THREE.MeshLambertMaterial({ color: 0x151617 }), TOP = PIT_Y + R_DROP, AT = R_Z0 + (R_ROWS - 1) * R_STEP_Z - 0.02;
+    for (const [xa, xb] of [[-6.0, -4.15], [-0.35, 1.85]]) {
+      const n = Math.ceil(xb - xa);
+      for (let i = 0; i <= n; i++) { const x = xa + (xb - xa) * i / n; box(0.04, 0.8, 0.04, black, x, TOP + 0.4, AT); box(0.1, 0.008, 0.1, black, x, TOP + 0.004, AT); }
+      box(xb - xa, 0.025, 0.025, black, (xa + xb) / 2, TOP + 0.4, AT);
+      const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, xb - xa + 0.04, 12), black); rail.rotation.z = Math.PI / 2; rail.position.set((xa + xb) / 2, TOP + 0.8, AT); scene.add(rail);
+      colliders.push({ x0: xa - 0.03, x1: xb + 0.03, z0: AT - 0.04, z1: AT + 0.04, y0: TOP, y1: TOP + 0.82 });
+    }
+  }
 
-  // acoustic wall drapery + warm brass wall sconces
+  // acoustic wall drapery + warm brass wall sconces (on the aisle's side, the first panel stops short of the exit)
   const sconceMat = thSconceMat = new THREE.MeshLambertMaterial({ color: 0xffe0a3, emissive: 0xff9d3b, emissiveIntensity: 0.85 });
   for (const s of [-1, 1]) {
     const wx = TX + s * (TW / 2 - 0.12);
-    for (let z = 35.2; z < 44.5; z += 2.2) {
-      box(0.05, 2.2, 1.5, curtainMat, wx, 0.8, z);
-      box(0.08, 0.28, 0.16, brass, wx - s * 0.04, 1.55, z);
+    for (let z = 37.2; z < 46.5; z += 2.2) {
+      const [a, b] = s < 0 && z - 0.75 < EXIT.z1 + 0.2 ? [EXIT.z1 + 0.2, z + 0.75] : [z - 0.75, z + 0.75], c = (a + b) / 2;
+      box(0.05, 2.2, b - a, curtainMat, wx, 0.8, c);
+      box(0.08, 0.28, 0.16, brass, wx - s * 0.04, 1.55, c);
       const shade = glow(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.05, 0.22, 10), sconceMat));
-      shade.position.set(wx - s * 0.09, 1.68, z); scene.add(shade);
+      shade.position.set(wx - s * 0.09, 1.68, c); scene.add(shade);
     }
   }
 
   // stage, curtains, silver screen, and front-row VCR feed podium
-  const ST_Z0 = 44.8, ST_Y = -0.95;
+  const ST_Z0 = 46.8, ST_Y = -0.95;
   box(TW - 0.2, ST_Y - PIT_Y, TZ1 - ST_Z0, stageWood, TX, (ST_Y + PIT_Y) / 2, (ST_Z0 + TZ1) / 2);
   box(TW - 0.16, 0.05, TZ1 - ST_Z0 + 0.06, brass, TX, ST_Y + 0.025, (ST_Z0 + TZ1) / 2);
   colliders.push({ x0: TX0, x1: TX1, z0: ST_Z0 - 0.05, z1: TZ1, y0: PIT_Y, y1: ST_Y + 0.5 });
 
-  // stage curtains & valance framing the 5.7m x 3.8m screen (3:2, the video canvas's shape), stage top to valance
-  for (const s of [-1, 1]) box(0.9, TH - ST_Y, 0.22, curtainMat, TX + s * (TW / 2 - 0.57), (TH + ST_Y) / 2, 45.75);   // inner edges ±3.08, just clear of the screen
-  box(TW - 0.2, 0.55, 0.26, curtainMat, TX, TH - 0.28, 45.7);
-  box(5.94, 4.04, 0.08, mat.dark, TX, 1.05, 45.92);
+  // the 6.84m x 4.56m screen (3:2, the video canvas's shape), its frame; the curtains either side out to the walls, the
+  // valance over it, from just over the frame
+  const SW = 6.84, SH = 4.56, SY = 1.43, FW = 7.13, FH = 4.85, FY0 = -0.97, VY = FY0 + FH - 0.04, VH = 0.67;
+  const CW = (TW - WALL_T - SW) / 2 - 0.28;             // (inner edges just clear of the screen)
+  for (const s of [-1, 1]) box(CW, VY + VH - ST_Y, 0.22, curtainMat, TX + s * (TW / 2 - WALL_T / 2 - CW / 2), (VY + VH + ST_Y) / 2, 47.75);
+  box(TW - WALL_T, VH, 0.26, curtainMat, TX, VY + VH / 2, 47.7);
+  box(FW, FH, 0.08, mat.dark, TX, FY0 + FH / 2, 47.92);
+  TVU.uThScreenP.value.set(TX, SY, 47.8);
 
-  theaterScreenMesh = glow(new THREE.Mesh(new THREE.PlaneGeometry(5.7, 3.8), mat.dark));
-  theaterScreenMesh.position.set(TX, 1.05, 45.85);
+  theaterScreenMesh = glow(new THREE.Mesh(new THREE.PlaneGeometry(SW, SH), mat.dark));
+  theaterScreenMesh.position.set(TX, SY, 47.85);
   theaterScreenMesh.rotation.y = Math.PI;          // faces -z toward the stadium seats
   scene.add(theaterScreenMesh);
   aimables.push(theaterScreenMesh);
@@ -241,11 +271,12 @@
   const deckLbl = textPlane("THEATER VCR FEED", 0.42, 0.07, "#ffd400", "#14161a");
   deckLbl.position.set(TX, ST_Y + 0.08, ST_Z0 + 0.058); deckLbl.rotation.y = Math.PI; scene.add(deckLbl);
 
-  // projection booth ports + volumetric projector beam + EXIT sign on the back wall (z = TZ0)
-  box(1.4, 0.55, 0.06, mat.dark, TX + 1.8, 2.25, TZ0 + 0.12);
+  // the projection booth's ports up in the back wall (z = TZ0), at the projector's height + volumetric projector beam
+  const PORT_Y = 4.2;
+  box(1.4, 0.55, 0.06, mat.dark, TX + 1.8, PORT_Y, TZ0 + 0.12);
   for (const dx of [-0.35, 0.35]) {
     const port = glow(new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.22), new THREE.MeshBasicMaterial({ color: dx < 0 ? 0xffffff : 0x5577aa })));
-    port.position.set(TX + 1.8 + dx, 2.25, TZ0 + 0.155); scene.add(port);
+    port.position.set(TX + 1.8 + dx, PORT_Y, TZ0 + 0.155); scene.add(port);
   }
   {
     const beamTex = makeTexture((ctx, W, H) => {
@@ -284,8 +315,8 @@
             zc *= 0.8 * inversesqrt(max(max(zc.r, max(zc.g, zc.b)), 0.01));   // brightness -> sqrt: dark sections dim, not black
             diffuseColor.rgb *= mix(vec3(1.0), zc, uBeamOn);`);
     };
-    const P0 = new THREE.Vector3(TX + 1.45, 2.25, TZ0 + 0.16);
-    const P1 = new THREE.Vector3(TX, 1.35, 45.85);
+    const P0 = new THREE.Vector3(TX + 1.45, PORT_Y, TZ0 + 0.16);
+    const P1 = new THREE.Vector3(TX, SY, 47.85);
     const len = 8.5;                                           // stops mid-house so it never hangs over the screen
     // 4 nested concentric cones (no flat crossed fins -> no '+' shape at the port)
     const shells = [
@@ -318,7 +349,219 @@
     scene.add(lens);
   }
   const exitSign = glow(textPlane("EXIT", 0.46, 0.18, "#ffffff", "#b3121d", "Arial Black", 76));
-  exitSign.position.set(TX, DOOR_H + 0.25, TZ0 + WALL_T / 2 + 0.02); scene.add(exitSign);   // over the door, facing the seats
+  exitSign.position.set(CINEMA_DOOR, DOOR_H + 0.25, TZ0 + WALL_T / 2 + 0.02); scene.add(exitSign);   // over the door, facing the seats
+
+  // the emergency exit, in the side wall by the aisle: inside, a steel door in its frame, a panic bar, a lit EXIT over it;
+  // outside, a stoop, the door flat in its frame (nothing to open it by), a wall pack, a notice
+  {
+    const xi = IN0, xo = TX0 - WALL_T / 2 - 0.15, { z0, z1 } = EXIT, zc = (z0 + z1) / 2, lam = c => new THREE.MeshLambertMaterial({ color: c });
+    const at = (w, h, d, m, x, y, z, out = false) => { const o = box(w, h, d, m, x, y, z); if (out) o.layers.set(EXTERIOR_LAYER); return o; };
+    at(0.04, 2.1, z1 - z0 - 0.1, lam(0x3a3d42), xi + 0.02, 1.05, zc);
+    for (const [a, b, y0, y1] of [[z0, z0 + 0.05, 0, 2.15], [z1 - 0.05, z1, 0, 2.15], [z0, z1, 2.1, 2.15]]) at(0.06, y1 - y0, b - a, lam(0x2b2d30), xi + 0.03, (y0 + y1) / 2, (a + b) / 2);
+    at(0.05, 0.04, z1 - z0 - 0.24, lam(0xb8bcc2), xi + 0.11, 1.0, zc);                 // the panic bar
+    for (const z of [z0 + 0.1, z1 - 0.1]) at(0.09, 0.08, 0.08, lam(0x8f9398), xi + 0.085, 1.0, z);
+    at(0.06, 0.18, 0.36, lam(0xf2f2ee), xi + 0.03, 2.39, zc);
+    const sign = glow(textPlane("EXIT", 0.34, 0.16, "#d0101a", "#f6f6f2", "Arial Black", 76));
+    sign.position.set(xi + 0.0605, 2.39, zc); sign.rotation.y = Math.PI / 2; scene.add(sign);
+    const gy = LOT.y < 0 && pavedAt(xo - 0.6, zc) ? LOT.y : 0;
+    at(0.9, 0.15, z1 - z0 + 0.5, lam(0x9a9a96), xo - 0.45, gy + 0.075, zc, true);
+    at(0.04, 2.3 - gy - 0.15, z1 - z0, lam(0x4a4f57), xo - 0.02, (gy + 0.15 + 2.3) / 2, zc, true);
+    at(0.02, 2.25 - gy - 0.15, z1 - z0 - 0.1, lam(0x6b7078), xo - 0.05, (gy + 0.15 + 2.25) / 2, zc, true);
+    for (const y of [0.5, 1.2, 1.9]) at(0.025, 0.1, 0.03, lam(0x9da3a8), xo - 0.0525, y + 0.05, z0 + 0.035, true);
+    at(0.2, 0.22, 0.32, lam(0x5a4b3a), xo - 0.1, 2.71, zc, true); at(0.17, 0.01, 0.28, lam(0xf1e3b5), xo - 0.105, 2.595, zc, true);
+    const note = textPlane("EMERGENCY EXIT ONLY · NO ENTRY", 0.62, 0.07, "#f2f2ee", "#b3121d", "Arial Black", 48);
+    note.material = new THREE.MeshLambertMaterial({ map: note.material.map }); note.position.set(xo - 0.061, 1.55, zc); note.rotation.y = -Math.PI / 2; note.layers.set(EXTERIOR_LAYER); scene.add(note);
+  }
+}
+
+// ---- the projection booth, over the lobby's back (floor 3 m up, ceiling 6; staff only, so grey block, a concrete floor, a
+// dark ceiling; its own lights, on a switch of their own): a window in the wall it shares with the auditorium to watch from
+// and a spinning stool at it, the projector at its port, fed from a platter, the bench films are made up on, the cans, the
+// sound rack; red working lights for when the room's dark. And the stairs up to it: walled in, in the lobby's corner by the
+// back of house, through a door marked for staff, up one flight toward the back, round on a landing, up the other toward
+// the front and out through the side wall into the booth. You're in the booth or you're not (player.inBooth: its floor's
+// over the lobby's), and you get in and out at the stairs' top ----
+const BOOTH = { x0: WALL_L + WALL_T / 2, x1: SHAFT.x0, z0: TALL.z0, z1: TALL.z1 - 0.04, cols: [], g: null };   // its floor (to the port wall's black face), what's on it; g: all of it and the stairs, drawn only when it can be seen (see boothSeen)
+function stairsAt(x, z) {                        // the stairwell's floor: the flights as ramps (the treads drawn over them)
+  const B = TALL.booth, k = (z - SHAFT.top) / (SHAFT.turn - SHAFT.top);
+  if (x > SHAFT.split + 0.05) return z < SHAFT.top ? 0 : z < SHAFT.turn ? k * B / 2 : B / 2;   // the near flight, up toward the back
+  return z >= SHAFT.turn ? B / 2 : z >= SHAFT.top ? B / 2 + (1 - k) * B / 2 : B;            // the far one, back up toward the front, and its top
+}
+{
+  const B = TALL.booth, CEIL = TALL.ceil, UNDER = ROOF.tall.y - 0.05, PORT_Y = 4.2, WIN = [-5.4, -3.4, B + 0.85, B + 1.6];   // the window: x0, x1, sill, head
+  const lam = c => new THREE.MeshLambertMaterial({ color: c });
+  const C = { iron: lam(0x2a2c2f), metal: lam(0xa9aeb3), block: lam(0x5a5f66), paint: lam(0xe8ecf2), port: lam(0x17181b), floor: lam(0x34373b), ceil: lam(0x26282b),
+    tread: lam(0x55595e), nose: lam(0x1d1f22), cast: lam(0x3a3d42), head: lam(0x4a4f57), lamp: lam(0x2c2f34), duct: lam(0x9a9ea4), alu: lam(0xb8bcc2), film: lam(0x3b2a1e),
+    rack: lam(0x141518), unit: lam(0x2a2c30), mat: lam(0x1a1b1d), cork: lam(0x8c6a46), paper: lam(0xe6e2d6), red: lam(0xb3201c), table: lam(0x6b5a44) };
+  const blk = (x0, y0, z0, x1, y1, z1, m) => box(x1 - x0, y1 - y0, z1 - z0, m, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  const wallBlk = (...a) => { const o = blk(...a); aimBlockers.push(o); return o; };
+  const lobbyBlk = (...a) => { const o = wallBlk(...a); lobbySide.add(o); return o; };
+  const cyl = (x, y, z, r, len, axis, m) => {    // axis: "x" | "y" | "z"
+    const o = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 16), m); o.position.set(x, y, z);
+    if (axis === "x") o.rotation.z = Math.PI / 2; else if (axis === "z") o.rotation.x = Math.PI / 2; scene.add(o); return o;
+  };
+  const bar = (a, b, w, d, m) => {               // a beam w by d from a to b
+    const v = new THREE.Vector3().subVectors(b, a), o = new THREE.Mesh(new THREE.BoxGeometry(w, v.length(), d), m);
+    o.position.copy(a).add(b).multiplyScalar(0.5); o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v.normalize()); scene.add(o); return o;
+  };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const bcol = (x0, x1, z0, z1) => BOOTH.cols.push({ x0, x1, z0, z1 });
+  const X0 = BOOTH.x0, XS = SHAFT.x0, n0 = scene.children.length, lobbySide = new Set();   // (lobbySide: the stairwell's walls, seen from the lobby: left out of g)
+
+  // its walls, from just over the lobby's ceiling: the front, the store's side, the back of house's
+  wallBlk(WALL_L - WALL_T / 2 - 0.1, 2.72, TALL.z0 - WALL_T, BX0 + WALL_T / 2 + 0.1, UNDER, TALL.z0, C.block);
+  wallBlk(WALL_L - WALL_T / 2 - 0.1, 2.72, TALL.z0, X0, UNDER, TALL.z1, C.block);
+  wallBlk(BX0 - WALL_T / 2 - 0.02, 2.72, TALL.z0, BX0 + WALL_T / 2 + 0.1, UNDER, TALL.z1, C.block);
+  // the wall it shares with the auditorium, from the lobby's ceiling up, round the window: the auditorium's colour that side,
+  // black this side (nothing to throw light back at the glass)
+  const thWall = lam(0x261015), Z0 = TALL.z1, Z1 = TALL.z1 + WALL_T, WX0 = WALL_L, WX1 = BX0;
+  for (const [x0, x1, y0, y1] of [[WX0, WX1, BOH.h, WIN[2]], [WX0, WX1, WIN[3], CEIL + 0.35], [WX0, WIN[0], WIN[2], WIN[3]], [WIN[1], WX1, WIN[2], WIN[3]]]) wallBlk(x0, y0, Z0, x1, y1, Z1, thWall);
+  for (const [x0, x1, y0, y1] of [[X0, XS, B, WIN[2]], [X0, XS, WIN[3], CEIL], [X0, WIN[0], WIN[2], WIN[3]], [WIN[1], XS, WIN[2], WIN[3]]]) blk(x0, y0, Z0 - 0.04, x1, y1, Z0, C.port);
+  const glass = blk(WIN[0], WIN[2], Z0 + 0.094, WIN[1], WIN[3], Z0 + 0.106, new THREE.MeshPhongMaterial({ color: 0x8c9eb3, transparent: true, opacity: 0.16, shininess: 120, specular: 0xffffff, depthWrite: false }));
+  aimBlockers.push(glass);
+  for (const [x0, x1, y0, y1] of [[WIN[0] - 0.05, WIN[0], WIN[2] - 0.05, WIN[3] + 0.05], [WIN[1], WIN[1] + 0.05, WIN[2] - 0.05, WIN[3] + 0.05], [WIN[0], WIN[1], WIN[3], WIN[3] + 0.05]]) blk(x0, y0, Z0 - 0.08, x1, y1, Z0 - 0.04, C.iron);
+  blk(WIN[0] - 0.1, WIN[2] - 0.05, Z0 - 0.28, WIN[1] + 0.1, WIN[2], Z0 - 0.04, C.iron);   // the sill
+  blk(-1.77, PORT_Y - 0.275, Z0 - 0.12, XS - 0.05, PORT_Y + 0.275, Z0 - 0.06, C.port);      // the port's frame this side
+  blk(X0, B - 0.02, TALL.z0, XS, B, BOOTH.z1, C.floor);
+  blk(X0, CEIL, TALL.z0, BX0 - WALL_T / 2, CEIL + 0.02, Z0, C.ceil);
+
+  // the projector, at its port: cast pedestal, console, the head with its lens through the port, the xenon lamp house behind, its exhaust up through the ceiling
+  const px = -1.42;
+  blk(-2.15, B, 33.25, -0.72, B + 0.008, 34.84, C.mat);
+  blk(px - 0.42, B, 33.65, px + 0.42, B + 0.09, 34.65, C.cast);
+  blk(px - 0.2, B + 0.09, 33.85, px + 0.2, B + 0.92, 34.45, C.cast);
+  blk(px - 0.34, B + 0.92, 33.45, px + 0.34, B + 0.99, 34.7, C.cast);
+  blk(px - 0.2, B + 0.99, 34.08, px + 0.2, B + 1.42, 34.6, C.head);
+  blk(px - 0.17, B + 0.99, 34.0, px + 0.17, B + 1.2, 34.08, C.head);
+  cyl(px, PORT_Y, 34.72, 0.065, 0.24, "z", C.iron);
+  for (const y of [B + 1.06, B + 1.32]) cyl(px - 0.21, y, 34.3, 0.055, 0.03, "x", C.metal);   // the sprockets either side of the gate
+  blk(px - 0.24, B + 0.99, 33.48, px + 0.24, B + 1.62, 34.08, C.lamp);
+  for (let i = 0; i < 4; i++) blk(px - 0.25, B + 1.08 + i * 0.12, 33.5, px - 0.24, B + 1.12 + i * 0.12, 34.06, C.metal);   // its cooling fins
+  cyl(px, (B + 1.62 + CEIL) / 2, 33.78, 0.1, CEIL - B - 1.62, "y", C.duct);
+  blk(-3.05, B, 33.95, -2.65, B + 0.95, 34.6, C.unit);                                       // the lamp's power supply
+  bcol(px - 0.42, px + 0.42, 33.45, BOOTH.z1); bcol(-3.05, -2.65, 33.95, 34.6);
+  // the platter: three decks on a mast, a film wound on the top two, the brain on top; the film over a roller to the projector
+  const pl = V(-4.3, B, 31.9);
+  blk(pl.x - 0.35, B, pl.z - 0.35, pl.x + 0.35, B + 0.12, pl.z + 0.35, C.cast);
+  cyl(pl.x, B + 0.8, pl.z, 0.05, 1.6, "y", C.metal);
+  for (let i = 0; i < 3; i++) { const y = B + 0.55 + i * 0.4; cyl(pl.x, y, pl.z, 0.68, 0.025, "y", C.alu); if (i) cyl(pl.x, y + 0.03, pl.z, 0.47, 0.035, "y", C.film); }
+  cyl(pl.x, B + 1.68, pl.z, 0.11, 0.16, "y", C.head);
+  blk(pl.x + 0.36, B, pl.z - 0.12, pl.x + 0.52, B + 0.9, pl.z + 0.12, C.unit);
+  bcol(pl.x - 0.68, pl.x + 0.68, pl.z - 0.68, pl.z + 0.68);
+  const post = V(-2.45, B, 33.35);
+  cyl(post.x, B + 0.82, post.z, 0.025, 1.64, "y", C.metal); cyl(post.x, B + 1.62, post.z, 0.04, 0.06, "x", C.alu);
+  bar(V(pl.x + 0.06, B + 1.62, pl.z + 0.04), V(post.x, B + 1.66, post.z), 0.035, 0.003, C.film);
+  bar(V(post.x, B + 1.66, post.z), V(px, B + 1.44, 34.2), 0.035, 0.003, C.film);
+  bcol(post.x - 0.08, post.x + 0.08, post.z - 0.08, post.z + 0.08);
+  // the make-up bench along the side wall: rewinds at each end, the splicer, cans waiting
+  const bx0 = X0 + 0.02, bx1 = -6.92;
+  blk(bx0, B + 0.85, 30.4, bx1, B + 0.9, 32.7, C.table);
+  for (const z of [30.45, 32.6]) for (const x of [bx0 + 0.05, bx1 - 0.05]) blk(x - 0.025, B, z - 0.025, x + 0.025, B + 0.85, z + 0.025, C.iron);
+  blk(bx0, B + 0.25, 30.45, bx1, B + 0.28, 32.65, C.table);
+  for (const z of [30.75, 32.35]) { blk(-7.32, B + 0.9, z - 0.05, -7.22, B + 1.05, z + 0.05, C.iron); cyl(-7.27, B + 1.24, z, 0.19, 0.03, "x", C.alu); cyl(-7.2, B + 1.24, z, 0.015, 0.12, "x", C.iron); }
+  blk(-7.4, B + 0.9, 31.45, -7.12, B + 0.97, 31.7, C.metal);                                  // the splicer
+  for (let i = 0; i < 4; i++) cyl(-7.27, B + 0.29 + 0.045 * i + 0.02, 31.2 + (i % 2) * 0.06, 0.2, 0.04, "y", C.metal);
+  bcol(bx0, bx1, 30.4, 32.7);
+  // the can rack on the front wall
+  for (const x of [-7.55, -6.6]) blk(x, B, 29.82, x + 0.04, B + 1.9, 30.27, C.iron);
+  for (let i = 0; i < 4; i++) {
+    const y = B + 0.25 + i * 0.52; blk(-7.55, y, 29.82, -6.56, y + 0.025, 30.27, C.iron);
+    for (let j = 0; j < (i < 3 ? 3 : 2); j++) cyl(-7.33 + j * 0.3, y + 0.05 + (j % 2) * 0.045, 30.04, 0.19, 0.045, "y", (i + j) % 3 ? C.metal : lam(0x8a6d2a));
+  }
+  bcol(-7.6, -6.52, TALL.z0, 30.3);
+  // the sound rack, on the stairwell's wall: black, its units, their lights (always on: it's powered whatever the room's lights)
+  blk(XS - 0.62, B, 32.15, XS, B + 1.9, 32.95, C.rack);
+  for (let i = 0; i < 6; i++) {
+    const y = B + 0.2 + i * 0.26; blk(XS - 0.632, y, 32.2, XS - 0.62, y + 0.2, 32.9, C.unit);
+    for (let j = 0; j < (i % 3) + 2; j++) glow(blk(XS - 0.638, y + 0.144, 32.294 + j * 0.06, XS - 0.632, y + 0.156, 32.306 + j * 0.06, new THREE.MeshBasicMaterial({ color: [0x33ff66, 0xffb020, 0x33ff66, 0xff4030][(i + j) % 4] })));
+  }
+  bcol(XS - 0.62, XS, 32.15, 32.95);
+  // the rest: the extinguisher by the stairs, the clock over the window, the schedule board, a bin
+  cyl(XS - 0.1, B + 0.6, 31.05, 0.08, 0.5, "y", C.red); cyl(XS - 0.1, B + 0.9, 31.05, 0.03, 0.1, "y", C.iron); blk(XS - 0.03, B + 0.5, 30.98, XS, B + 0.75, 31.12, C.iron);
+  cyl(-4.4, B + 2.35, Z0 - 0.06, 0.16, 0.04, "z", C.paper); cyl(-4.4, B + 2.35, Z0 - 0.045, 0.175, 0.03, "z", C.iron);
+  blk(-4.0, B + 1.35, TALL.z0, -2.8, B + 2.05, TALL.z0 + 0.03, C.cork);
+  for (let i = 0; i < 5; i++) blk(-3.92 + (i % 3) * 0.38, B + 1.42 + Math.floor(i / 3) * 0.3, TALL.z0 + 0.03, -3.66 + (i % 3) * 0.38, B + 1.68 + Math.floor(i / 3) * 0.3, TALL.z0 + 0.035, C.paper);
+  cyl(-6.3, B + 0.22, 30.55, 0.17, 0.44, "y", C.iron); bcol(-6.47, -6.13, 30.38, 30.72);
+  // the lights: lamps low on the walls shining down, red working lights lower (on while the room's dark)
+  boothGlow.lamps = new THREE.MeshBasicMaterial({ color: 0xffd890 }); boothGlow.red = new THREE.MeshBasicMaterial({ color: 0x2a0806 });
+  for (const [x, z, ox, oz] of [[-6.2, TALL.z0, 0, 1], [-3.4, TALL.z0, 0, 1], [X0, 33.9, 1, 0], [-6.6, BOOTH.z1, 0, -1], [-2.4, BOOTH.z1, 0, -1]]) {
+    const y = B + 0.95, w = ox ? 0.11 : 0.26, d = ox ? 0.26 : 0.11;
+    box(w, 0.1, d, C.iron, x + ox * 0.055, y + 0.05, z + oz * 0.055);
+    glow(box(ox ? 0.07 : 0.22, 0.006, ox ? 0.22 : 0.07, boothGlow.lamps, x + ox * 0.06, y - 0.003, z + oz * 0.06));
+  }
+  for (const [x, z, ox, oz] of [[XS, 31.35, -1, 0], [XS, 33.6, -1, 0], [-2.2, BOOTH.z1, 0, -1], [-5.6, BOOTH.z1, 0, -1], [-3.4, TALL.z0, 0, 1], [-5.6, TALL.z0, 0, 1], [X0, 33.5, 1, 0]])
+    glow(box(ox ? 0.02 : 0.14, 0.035, ox ? 0.14 : 0.02, boothGlow.red, x + ox * 0.012, B + 0.18, z + oz * 0.012));
+  // a spinning stool at the window, the register's kind
+  {
+    const g = new THREE.Group(); g.position.set(-4.4, B, 34.0); scene.add(g);
+    const chromeS = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 80 });
+    for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2, leg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.3), C.iron); leg.position.set(Math.sin(a) * 0.15, 0.04, Math.cos(a) * 0.15); leg.rotation.y = a; g.add(leg); }
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.62, 10), chromeS); stem.position.y = 0.35; g.add(stem);
+    const seatTop = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.18, 0.08, 20), lam(0x1c1c1e)); seatTop.position.y = 0.68; g.add(seatTop);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.8, 0.45), new THREE.MeshBasicMaterial({ visible: false })); hit.position.set(-4.4, B + 0.4, 34.0); scene.add(hit);
+    hit.userData.sit = true; hit.userData.seatPos = { x: -4.4, y: B, z: 34.0, ry: 0, hipY: 0.7 }; aimables.push(hit);
+    bcol(-4.62, -4.18, 33.78, 34.22);
+  }
+
+  // the stairwell: walls of block, coursed (the lobby's paint on the outside of them), its floor inside the door, the
+  // flights and the landing, the rails on the walls, the bulbs hanging on their cords
+  const x0 = XS + 0.15, mid = SHAFT.split, rise = B / 18, run = (SHAFT.turn - SHAFT.top) / 8, WB = BX0 - WALL_T / 2;
+  lobbyBlk(XS, 0, SHAFT.top, x0, UNDER, TALL.z1, C.block);
+  lobbyBlk(XS, 0, TALL.z0, x0, B, SHAFT.top, C.block);
+  wallBlk(XS, B + 2.1, TALL.z0, x0, UNDER, SHAFT.top, C.block);
+  lobbyBlk(XS, 0, SHAFT.z0, 0.69, BOH.h + 0.02, TALL.z0, C.block);
+  lobbyBlk(0.69, DOOR_H + 0.06, SHAFT.z0, WB, BOH.h + 0.02, TALL.z0, C.block);
+  blk(WB - 0.02, 0, TALL.z0, WB, CEIL + 0.03, TALL.z1, C.block);                             // (over the lobby's paint, in here)
+  for (const [x0_, x1, y0, y1, z0, z1] of [[XS - 0.01, XS, 0, BOH.h, SHAFT.z0, TALL.z1], [XS, 0.69, 0, BOH.h, SHAFT.z0 - 0.01, SHAFT.z0], [0.69, WB + 0.01, DOOR_H + 0.06, BOH.h, SHAFT.z0 - 0.01, SHAFT.z0]])
+    lobbySide.add(blk(x0_, y0, z0, x1, y1, z1, C.paint));                                     // (out there it's the lobby's: its paint)
+  blk(x0, 0, TALL.z1 - 0.02, WB - 0.02, CEIL, TALL.z1, C.block);
+  blk(mid + 0.1, 0, TALL.z0, WB - 0.02, 0.01, SHAFT.top, C.floor);
+  wallBlk(mid, 0, TALL.z0, mid + 0.1, B + 1.1, SHAFT.turn, C.block);                          // between the flights
+  for (let i = 0; i < 8; i++) {                    // up toward the back, by the back of house's wall
+    const z = SHAFT.top + i * run;
+    blk(mid + 0.1, 0, z, WB - 0.02, (i + 1) * rise, z + run, C.tread);
+    blk(mid + 0.1, (i + 1) * rise - 0.015, z - 0.005, WB - 0.02, (i + 1) * rise + 0.003, z + 0.04, C.nose);
+  }
+  blk(x0, 0, SHAFT.turn, WB - 0.02, B / 2, TALL.z1 - 0.02, C.tread);
+  blk(mid + 0.1, B / 2 - 0.015, SHAFT.turn - 0.005, WB - 0.02, B / 2 + 0.003, SHAFT.turn + 0.04, C.nose);
+  for (let j = 0; j < 8; j++) {                    // and round, up toward the front
+    const z = SHAFT.turn - (j + 1) * run, y = B / 2 + (j + 1) * rise;
+    blk(x0, 0, z, mid, y, z + run, C.tread);
+    blk(x0, y - 0.015, z + run - 0.04, mid, y + 0.003, z + run + 0.005, C.nose);
+  }
+  blk(x0, 0, TALL.z0, mid, B, SHAFT.top, C.tread);
+  blk(x0, B - 0.015, SHAFT.top - 0.04, mid, B + 0.003, SHAFT.top + 0.005, C.nose);
+  const r1 = WB - 0.06;
+  bar(V(r1, rise + 0.9, SHAFT.top), V(r1, B / 2 + 0.9, SHAFT.turn), 0.05, 0.05, C.iron);
+  bar(V(x0 + 0.04, B / 2 + rise + 0.9, SHAFT.turn), V(x0 + 0.04, B + 0.9, SHAFT.top), 0.05, 0.05, C.iron);
+  bar(V(WB - 0.04, B / 2 + 0.9, TALL.z1 - 0.06), V(x0 + 0.02, B / 2 + 0.9, TALL.z1 - 0.06), 0.05, 0.05, C.iron);
+  colliders.push({ x0: XS - 0.08, x1: x0 + 0.08, z0: SHAFT.top, z1: TALL.z1 },   // its walls (the side one open at the top of the stairs, into the booth: you can't get up there from the lobby)
+    { x0: XS - 0.08, x1: 0.69, z0: SHAFT.z0 - 0.08, z1: TALL.z0 + 0.08 }, { x0: mid - 0.04, x1: mid + 0.14, z0: TALL.z0, z1: SHAFT.turn },
+    { x0: x0, x1: WB, z0: TALL.z1 - 0.08, z1: TALL.z1 });
+  boothGlow.stairs = new THREE.MeshBasicMaterial({ color: 0xffd890 });
+  for (const [x, y, z] of [[1.3, 2.62, 30.35], [0.6, 3.75, 34.0]]) {   // hanging over the door's landing, over the turn
+    bar(V(x, CEIL, z), V(x, y + 0.16, z), 0.012, 0.012, C.iron);
+    const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.17, 0.15, 24, 1, true), Object.assign(lam(0x2f4636), { side: THREE.DoubleSide })); shade.position.set(x, y + 0.09, z); scene.add(shade);
+    const bulb = glow(new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), boothGlow.stairs)); bulb.position.set(x, y, z); scene.add(bulb);
+  }
+  // all of it but the stairwell's outside in one group, and what doesn't move or get aimed at merged, one mesh a material
+  // (some 250 boxes otherwise, each a draw)
+  BOOTH.g = new THREE.Group(); scene.add(BOOTH.g);
+  for (const o of scene.children.slice(n0, -1)) if (!lobbySide.has(o)) BOOTH.g.add(o);   // (-1: not g itself)
+  {
+    const by = new Map(), solid = new Set(aimBlockers);
+    for (const o of [...BOOTH.g.children]) {
+      if (!o.isMesh || o.layers.mask !== 1 || Object.keys(o.userData).length || aimables.includes(o) || o.material.transparent) continue;
+      o.updateMatrixWorld(); const g = (o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone()).applyMatrix4(o.matrixWorld);
+      for (const k of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(k)) g.deleteAttribute(k);
+      const key = o.material.uuid + (solid.has(o) ? ":solid" : "");
+      if (!by.has(key)) by.set(key, { m: o.material, solid: solid.has(o), gs: [] });
+      by.get(key).gs.push(g); BOOTH.g.remove(o); if (solid.has(o)) aimBlockers.splice(aimBlockers.indexOf(o), 1);
+    }
+    for (const { m, solid: sd, gs } of by.values()) { const mesh = new THREE.Mesh(mergeGeometries(gs), m); BOOTH.g.add(mesh); if (sd) aimBlockers.push(mesh); }
+  }
+  // its door: the break room's kind, marked for staff (made last: a save keeps the doors by their order)
+  makeDoor({ at: (SHAFT.z0 + TALL.z0) / 2, c: SHAFT.door, alongX: true, hinge: 1, swing: 1, leafMat: painted, signs: [{ text: "EMPLOYEES ONLY", side: -1 }] });
 }
 // fluorescent troffers: fixtures taking the place of one ceiling
 // tile each (snapped into its slot). Mostly one glowing white rectangle —
@@ -345,7 +588,7 @@ const troffer = (x, z, y, snapZ = true) => {      // -> where it ended up
   panelBuckets.get(key).push(p);
   return { x, z, y: y - 0.02 };
 };
-for (const [x, z] of [[-5.4, 30.15], [-1.8, 30.15]]) troffer(x, z, BOH.h);   // movie theater lobby troffers
+for (const [x, z] of [[-5.4, 30.15], [-2.6, 30.15]]) troffer(x, z, BOH.h);   // movie theater lobby troffers (clear of the stairwell)
 // every other tile slot across, every fourth along — a tile or more of
 // plain ceiling on every side, so no two fixtures ever touch
 for (let x = -9.9; x <= STORE.x - 1; x += 2 * CEIL_TILE.x) for (let z = 3.15; z <= STORE.z - 1; z += 4 * CEIL_TILE.z) {
@@ -353,7 +596,7 @@ for (let x = -9.9; x <= STORE.x - 1; x += 2 * CEIL_TILE.x) for (let z = 3.15; z 
   TROFFERS.push(troffer(x, z, STORE.h));
 }
 for (const x of [4.5, 8.1]) troffer(x, hallMid, BOH.h, false);              // down the middle of the hall (its ceiling grid is centered there too)
-for (const [x, z] of [[4.5, 31.05], [9.9, 31.05]]) troffer(x, z, BOH.h);   // breakroom, restroom
+for (const [x, z] of [[4.5, 32.4], [8.1, 32.4]]) troffer(x, z, BOH.h);     // restroom, break room
 panelMats = [...panelBuckets].map(([key, bucket]) => {
   const m = new THREE.MeshBasicMaterial({ color: 0xf8fbff, map: diffuserTex });
   m.userData.zone = key.split(":")[0];
@@ -367,7 +610,7 @@ const lin = (hex, k) => new THREE.Color(hex).multiplyScalar(k);
 TVU.uInSky.value.copy(lin(0xdfe8ff, 1.15)); TVU.uInGround.value.copy(lin(0x223355, 1.15));
 TVU.uInAmb.value.copy(lin(0xffffff, 0.32)); TVU.uInDirC.value.copy(lin(0xffffff, 0.55)); TVU.uInDir.value.set(3, 10, -6).normalize();
 TVU.uFloorBox.value.set(XL - 0.05, XR + 0.05, Z, H + 0.05);
-TVU.uBohBox.value.set(BOH.x0, CLOSET.x1 + 0.05, BOH.hallZ, BOH.z1 + 0.05); TVU.uBohSplit.value.set(BOH.splitX, BOH.h);
+TVU.uBohBox.value.set(BOH.x0, CLOSET.x1 + 0.05, BOH.hallZ, BOH.z1 + 0.05); TVU.uBohSplit.value.set(BOH.splitX, BOH.h, CLOSET.x0);
 const lobby = new THREE.PointLight(0xfff2cc, 0.7, 14, 2); lobby.position.set(0.9, 2.4, 3.15);   // under the entry troffer, low enough not to burn a hot spot into the tiles
 lobby.userData.on = lobby.intensity; lobby.userData.zone = "front"; allLights.push(lobby); scene.add(lobby);
 

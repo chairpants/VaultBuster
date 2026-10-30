@@ -74,7 +74,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
   const PW = 0.97, CORNER = 0.31;                   // poster frame width
   const spread = (a, b, n) => { const gap = (b - a - n * PW) / (n + 1); return Array.from({ length: n }, (_, k) => a + gap * (k + 1) + PW * (k + 0.5)); };
   const frontXs = [...spread(WALL_L + CORNER, -2.0, 2), ...spread(2.0, STORE.x - CORNER, 2)];
-  const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(3.2, BOH_DOORS.store - BOH_OPENING_W / 2 - 0.3, 2)];   // right half stops short of the back-hall opening
+  const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(BOH_DOORS.store + BOH_OPENING_W / 2 + 0.3, STORE.x - CORNER, 2)];   // right half starts past the back-hall opening
   frontXs.forEach((x, i) => placePoster(picks[i], x, 2.1, 0.26, 0, i));
   backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.1, STORE.z - 0.26, Math.PI, 4 + i));
   for (let s = 0; s < 16; s++) {           // regular run down both bare side walls, mounted on the beam
@@ -442,7 +442,7 @@ const MAX_COPIES = 12;
 const WALL_RUNS = [
   { x: WALL_L + 0.1, z: 8.1, ry: 0, bays: 12 },                     // register (Movies) wall, front → back, just past the snack center
   { x: WALL_L + 0.1 + BAY.depth, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 2 },   // back wall, left of the lounge
-  { x: 3.89, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 3 },          // back wall, right of the lounge, up to the back-hall opening
+  { x: BOH_DOORS.store + BOH_OPENING_W / 2 + 0.01, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 2 },   // back wall, past the back-hall opening beside the lounge
   { x: STORE.x - 0.1, z: 26.8, ry: Math.PI, bays: 11 },             // far wall, back → front, stopping short of the opening and the kids section
 ];
 const CENTER = { corridor: 1.5, westBays: 2, eastBays: 4, z0: 8.6, gap: 2.0, bands: 4 };   // corridor = half-width of the door→lounge walkway; z0 = front band's door-side face
