@@ -30,7 +30,7 @@ aaApply();
 function titleMenu() {
   const MODES = {
     simulation: ["SIMULATION", "A bare-bones store: no staff, the theater locked up, part of the library. Build it up with what it earns."],
-    sandbox: ["SANDBOX", "Dana on staff, $10,000 in the budget: buy whatever you like and just play store."],
+    sandbox: ["SANDBOX", "Everything unlocked, Dana on staff, $10,000 in the budget: just play store."],
     customer: ["CUSTOMER", "You don't work here. The store runs itself; you come in off the lot with your own wallet, and play by its rules. Some doors are locked."],
   };
   const panels = { main: $("mmMain"), settings: $("mmSettings") };
