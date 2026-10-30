@@ -536,7 +536,7 @@ function pickHover() {
     else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
       + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
     else if (aimStool) tip.innerHTML = stool.by ? `${stool.by.first}'s using the stool` : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
-    else if (aimFireExit) tip.innerHTML = aimFireExit === "in" ? "E — push the bar: out the emergency exit<div class=\"cat\">it won't open from outside</div>" : "Emergency exit<div class=\"cat\">no handle this side: it only opens from inside</div>";
+    else if (aimFireExit) tip.innerHTML = aimFireExit === "in" ? "E — push the bar: open the emergency exit<div class=\"cat\">it won't open from outside</div>" : "Emergency exit<div class=\"cat\">no handle this side: it only opens from inside</div>";
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimExit) tip.innerHTML = !afterClose() ? "Open till midnight · clock out after close" : custs.length ? "Customers still inside" : "E — clock out and go home";
     else if (aimCustomer) tip.innerHTML = aimCustomer.kid ? `E — say hi<div class="cat">${memberName(aimCustomer.member)}'s kid</div>` : custTip(aimCustomer) + `<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;

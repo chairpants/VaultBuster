@@ -81,9 +81,11 @@
   const R_Z0 = 36.6, R_ROWS = 6, R_STEP_Z = 1.3, R_DROP = 0.26, R_END = R_Z0 + R_ROWS * R_STEP_Z; // 44.4
   const PIT_Y = -R_ROWS * R_DROP;          // -1.56
   const AX = -6.03;                        // the aisle: from the side wall's face to here
-  const EXIT = { z0: 45.0, z1: 45.9 };   // the emergency exit: in the side wall by the aisle, at the screen end, down where the aisle comes out
+  const EXIT = FIRE_EXIT, W = EXIT.well;   // the emergency exit: in the side wall by the aisle, at the screen end, down where the aisle comes out
 
   floorHeightAt = (x, z) => {
+    if (x > W.x0 && x < IN0 && z > W.z0 && z < W.z1 && (x < TX0 - WALL_T / 2 || (z > EXIT.z0 && z < EXIT.z1)))   // out the emergency exit: its landing, then the steps up
+      return z < W.stair ? PIT_Y : PIT_Y * (1 - (z - W.stair) / (W.z1 - W.stair));
     if (x > SHAFT.x0 && x < BX0 - 0.12 && z > TALL.z0 && z < TALL.z1) return stairsAt(x, z);
     if (z <= R_Z0 || x < TX0 || x > TX1 || z > TZ1) return 0;
     if (z < R_END) {
@@ -113,7 +115,8 @@
     box(TW, WALL_H, WALL_T, thWall, TX, WALL_CY, TZ1)
   );
   colliders.push(
-    { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
+    { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: TZ0, z1: EXIT.z0, y0: WALL_BOT, y1: TH }, { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: EXIT.z1, z1: TZ1, y0: WALL_BOT, y1: TH },
+    fireExit.shut = { x0: TX0 - 0.18, x1: TX0 + 0.18, z0: EXIT.z0, z1: EXIT.z1, y0: WALL_BOT, y1: TH },   // (the exit, while its door's shut)
     { x0: TX1 - 0.18, x1: TX1 + 0.18, z0: TZ0, z1: TZ1, y0: WALL_BOT, y1: TH },
     { x0: TX0, x1: TX1, z0: TZ1 - 0.18, z1: TZ1 + 0.18, y0: WALL_BOT, y1: TH }
   );
@@ -352,53 +355,68 @@
   const exitSign = glow(textPlane("EXIT", 0.46, 0.18, "#ffffff", "#b3121d", "Arial Black", 76));
   exitSign.position.set(CINEMA_DOOR, DOOR_H + 0.25, TZ0 + WALL_T / 2 + 0.02); scene.add(exitSign);   // over the door, facing the seats
 
-  // the emergency exit, in the side wall by the aisle at the screen end: one way, out. Inside, down on the pit's floor, a
-  // steel door in its frame, a panic bar (E: push it, and you're out, see fireExitUse), a lit EXIT over it; outside (up a
-  // stair inside the wall), a stoop, the door flat in its frame with nothing to open it by, a wall pack, a notice
+  // the emergency exit, in the side wall by the aisle at the screen end: one way, out. A steel door out at the wall's outside
+  // face, swinging out (E on its panic bar: see fireExitTick); a lit EXIT over it inside. Outside, it opens into a stairwell
+  // sunk in the ground beside the building: a landing, concrete steps up toward the back, a railing round it up top; over
+  // the door, a wall pack; on the door, no handle, a notice
   {
     const xi = IN0, xo = TX0 - WALL_T / 2 - 0.15, { z0, z1 } = EXIT, zc = (z0 + z1) / 2, F = PIT_Y, lam = c => new THREE.MeshLambertMaterial({ color: c });
     const at = (w, h, d, m, x, y, z, out = false, par = scene) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); par.add(o); if (out) o.layers.set(EXTERIOR_LAYER); return o; };
-    const steel = lam(0x3a3d42), parts = [];
-    at(0.02, 2.15, z1 - z0, new THREE.MeshBasicMaterial({ color: 0x050505 }), TX0 - WALL_T / 2 + 0.01, F + 1.075, zc);   // the dark stair beyond, through the opening
-    const leaf = new THREE.Group(); leaf.position.set(xi, 0, z1 - 0.05); scene.add(leaf);   // hinged at the screen end, swinging out
-    parts.push(at(0.04, 2.1, z1 - z0 - 0.1, steel, 0.02, F + 1.05, -(z1 - z0 - 0.1) / 2, false, leaf));
-    parts.push(at(0.05, 0.04, z1 - z0 - 0.24, lam(0xb8bcc2), 0.11, F + 1.0, -(z1 - z0 - 0.1) / 2, false, leaf));   // the panic bar
-    for (const z of [-0.05, -(z1 - z0 - 0.15)]) parts.push(at(0.09, 0.08, 0.08, lam(0x8f9398), 0.085, F + 1.0, z, false, leaf));
-    for (const [a, b, y0, y1] of [[z0, z0 + 0.05, 0, 2.15], [z1 - 0.05, z1, 0, 2.15], [z0, z1, 2.1, 2.15]]) at(0.06, y1 - y0, b - a, lam(0x2b2d30), xi + 0.03, F + (y0 + y1) / 2, (a + b) / 2);
+    const frame = lam(0x2b2d30), steel = lam(0x3a3d42), conc = lam(0x9a9a96), iron = lam(0x2a2c2f);
+    for (const [a, b, y0, y1] of [[z0, z0 + 0.05, 0, 2.15], [z1 - 0.05, z1, 0, 2.15], [z0, z1, 2.1, 2.15]]) at(0.06, y1 - y0, b - a, frame, xi + 0.03, F + (y0 + y1) / 2, (a + b) / 2);   // its frame, inside
+    for (const z of [z0 + 0.01, z1 - 0.01]) at(xi - xo, 2.15, 0.02, frame, (xi + xo) / 2, F + 1.075, z);   // the opening's reveal, through the wall
+    at(xi - xo, 0.02, z1 - z0, frame, (xi + xo) / 2, F + 2.14, zc); at(xi - xo, 0.02, z1 - z0, conc, (xi + xo) / 2, F - 0.01, zc);
     at(0.06, 0.18, 0.36, lam(0xf2f2ee), xi + 0.03, F + 2.39, zc);
     const sign = glow(textPlane("EXIT", 0.34, 0.16, "#d0101a", "#f6f6f2", "Arial Black", 76));
     sign.position.set(xi + 0.0605, F + 2.39, zc); sign.rotation.y = Math.PI / 2; scene.add(sign);
-    for (const o of parts) { o.userData.fireExit = "in"; aimables.push(o); }
-    const gy = LOT.y < 0 && pavedAt(xo - 0.6, zc) ? LOT.y : 0;
-    at(0.9, 0.15, z1 - z0 + 0.5, lam(0x9a9a96), xo - 0.45, gy + 0.075, zc, true);
-    at(0.04, 2.3 - gy - 0.15, z1 - z0, lam(0x4a4f57), xo - 0.02, (gy + 0.15 + 2.3) / 2, zc, true);
-    const out = new THREE.Group(); out.position.set(xo - 0.05, 0, z0 + 0.05); scene.add(out);   // hinged at the hinges, swinging out
-    at(0.02, 2.25 - gy - 0.15, z1 - z0 - 0.1, lam(0x6b7078), 0, (gy + 0.15 + 2.25) / 2, (z1 - z0 - 0.1) / 2, true, out);
-    for (const y of [0.5, 1.2, 1.9]) at(0.025, 0.1, 0.03, lam(0x9da3a8), -0.0025, y + 0.05, -0.015, true, out);
-    at(0.2, 0.22, 0.32, lam(0x5a4b3a), xo - 0.1, 2.71, zc, true); at(0.17, 0.01, 0.28, lam(0xf1e3b5), xo - 0.105, 2.595, zc, true);
+    // the door: hinged at the end away from the steps, its leaf along +z from there (turned -y: it swings out, back against the
+    // stairwell's end, clear of the way up). Its inside face the room's,
+    // its outside face (and what's on it) out there's, and something to aim at either side
+    const leaf = new THREE.Group(), LW = z1 - z0 - 0.06; leaf.position.set(xo + 0.03, 0, z0 + 0.03); scene.add(leaf);
+    const inner = at(0.025, 2.1, LW, steel, 0.0125, F + 1.06, LW / 2, false, leaf);
+    const bar = at(0.05, 0.04, LW - 0.2, lam(0xb8bcc2), 0.07, F + 1.0, LW / 2, false, leaf);   // the panic bar
+    const ends = [0.1, LW - 0.1].map(z => at(0.07, 0.08, 0.08, lam(0x8f9398), 0.06, F + 1.0, z, false, leaf));
+    at(0.02, 2.1, LW, lam(0x6b7078), -0.01, F + 1.06, LW / 2, true, leaf);
+    for (const y of [0.5, 1.2, 1.9]) at(0.025, 0.1, 0.03, lam(0x9da3a8), -0.02, F + y, 0.01, true, leaf);   // its hinges
     const note = textPlane("EMERGENCY EXIT ONLY · NO ENTRY", 0.62, 0.07, "#f2f2ee", "#b3121d", "Arial Black", 48);
-    note.material = new THREE.MeshLambertMaterial({ map: note.material.map }); note.position.set(xo - 0.061, 1.55, zc); note.rotation.y = -Math.PI / 2; note.layers.set(EXTERIOR_LAYER); scene.add(note);
-    const hit = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.2, z1 - z0), new THREE.MeshBasicMaterial({ visible: false })); hit.position.set(xo - 0.08, gy + 1.2, zc);   // (what you aim at outside: the door's on the exterior layer, which the aiming ray doesn't see)
-    hit.userData.fireExit = "out"; scene.add(hit); aimables.push(hit);
-    Object.assign(fireExit, { leaf, out, to: { x: xo - 0.75, z: zc, yaw: Math.PI / 2 } });
+    note.material = new THREE.MeshLambertMaterial({ map: note.material.map }); note.position.set(-0.021, F + 1.55, LW / 2); note.rotation.y = -Math.PI / 2; note.layers.set(EXTERIOR_LAYER); leaf.add(note);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.1, LW), new THREE.MeshBasicMaterial({ visible: false })); hit.position.set(-0.04, F + 1.06, LW / 2); leaf.add(hit);   // (the outside's on the exterior layer, which the aiming ray doesn't see)
+    for (const o of [inner, bar, ...ends]) { o.userData.fireExit = "in"; aimables.push(o); }
+    hit.userData.fireExit = "out"; aimables.push(hit);
+    fireExit.leaf = leaf;
+    at(0.2, 0.22, 0.32, lam(0x5a4b3a), xo - 0.1, 0.95, zc, true); at(0.17, 0.01, 0.28, lam(0xf1e3b5), xo - 0.105, 0.835, zc, true);   // the wall pack over it
+    // the stairwell: its walls (the building's side of it too, under the ground), the landing, the steps, the railing
+    const D = F - 0.06, g = new THREE.Group(); scene.add(g);
+    at(0.15, 0.05 - D, W.z1 - W.z0 + 0.15, conc, W.x0 - 0.075, (D + 0.05) / 2, (W.z0 - 0.15 + W.z1) / 2, true, g);
+    at(xo - W.x0 + 0.15, 0.05 - D, 0.15, conc, (W.x0 - 0.15 + xo) / 2, (D + 0.05) / 2, W.z0 - 0.075, true, g);
+    for (const [a, b] of [[W.z0, z0], [z1, W.z1]]) at(0.02, -D, b - a, conc, xo - 0.01, D / 2, (a + b) / 2, true, g);
+    at(0.02, F + 0.01 - D, z1 - z0, conc, xo - 0.01, (D + F) / 2, zc, true, g);
+    at(xo - W.x0, 0.06, W.stair - W.z0, conc, (W.x0 + xo) / 2, F - 0.03, (W.z0 + W.stair) / 2, true, g);
+    const n = 9, run = (W.z1 - W.stair) / n;
+    for (let i = 0; i < n; i++) { const top = F * (1 - (i + 1) / n); at(xo - W.x0, top - D, run, conc, (W.x0 + xo) / 2, (top + D) / 2, W.stair + (i + 0.5) * run, true, g); }
+    const post = (x, z) => at(0.04, 1.0, 0.04, iron, x, 0.5, z, true, g);
+    for (let z = W.z0 - 0.08; z < W.z1; z += 1.0) post(W.x0 - 0.08, z);
+    post(W.x0 - 0.08, W.z1 - 0.02); post(xo - 0.08, W.z0 - 0.08);
+    at(0.04, 0.04, W.z1 - W.z0 + 0.08, iron, W.x0 - 0.08, 1.0, (W.z0 - 0.08 + W.z1) / 2, true, g); at(0.03, 0.03, W.z1 - W.z0 + 0.08, iron, W.x0 - 0.08, 0.5, (W.z0 - 0.08 + W.z1) / 2, true, g);
+    at(xo - W.x0, 0.04, 0.04, iron, (W.x0 + xo) / 2, 1.0, W.z0 - 0.08, true, g); at(xo - W.x0, 0.03, 0.03, iron, (W.x0 + xo) / 2, 0.5, W.z0 - 0.08, true, g);
   }
 }
 
-function fireExitUse(side) {                   // E on the theater's emergency exit: from inside, the bar pushed and you're out; from outside, nothing to open it by
+function fireExitUse(side) {                   // E on the theater's emergency exit: from inside, the bar pushed and it swings open; from outside, nothing to open it by
   if (side !== "in") { toast("No handle this side: it only opens from inside"); return; }
-  if (fireExit.busy) return;
-  if (roofHandsFull()) { toast("Hands full: put that down first"); return; }
-  fireExit.busy = true;
-  const { leaf, out, to } = fireExit, f = $("fade");
-  const swing = (g, a, ms, then) => { const a0 = g.rotation.y, t0 = performance.now(); const step = t => { const k = Math.min(1, (t - t0) / ms); g.rotation.y = a0 + (a - a0) * k * (2 - k); if (k < 1) requestAnimationFrame(step); else then?.(); }; requestAnimationFrame(step); };
-  window.VaultAmbience?.door("push", "open", leaf.position.x, 1, leaf.position.z);
-  swing(leaf, 0.25, 250); f.style.opacity = 1;
-  setTimeout(() => {                             // out, the door open behind you; then it swings shut and latches
-    Object.assign(player, { x: to.x, z: to.z, yaw: to.yaw, pitch: 0, onRoof: false, inBooth: false }); keys.clear();
-    leaf.rotation.y = 0; out.rotation.y = -1.5;
-    setTimeout(() => { f.style.opacity = 0; }, 250);
-    setTimeout(() => swing(out, 0, 700, () => { window.VaultAmbience?.door("push", "close", out.position.x, 1, out.position.z); fireExit.busy = false; }), 1300);
-  }, 450);
+  if (!fireExit.open) { fireExit.open = true; fireExit.t = 0; window.VaultAmbience?.door("push", "open", fireExit.leaf.position.x, 0, fireExit.leaf.position.z); }
+}
+function fireExitTick(dt) {                       // the door: out of your way while it's open; its closer pulls it shut once you're clear of it
+  const E = fireExit, { z0, z1 } = FIRE_EXIT; if (!E.leaf) return;
+  const zc = (z0 + z1) / 2, near = Math.abs(player.z - zc) < 1.4 && player.x < WALL_L + 1.2 && player.x > FIRE_EXIT.well.x0 - 0.5 && !player.onRoof;
+  if (E.open && !near && (E.t += dt) > 1.5) E.open = false;
+  else if (near) E.t = 0;
+  const was = E.a; E.a = Math.max(0, Math.min(1, E.a + (E.open ? 2.0 : -0.9) * dt));
+  E.leaf.rotation.y = -1.5 * (1 - (1 - E.a) ** 2);
+  const i = colliders.indexOf(E.shut);
+  if (E.a > 0.6 && i >= 0) colliders.splice(i, 1);
+  else if (E.a < 0.6 && i < 0) colliders.push(E.shut);
+  if (was > 0 && E.a === 0) window.VaultAmbience?.door("push", "settle", E.leaf.position.x, 0, E.leaf.position.z);
 }
 
 // ---- the projection booth, over the lobby's back (floor 3 m up, ceiling 6; staff only, so grey block, a concrete floor, a

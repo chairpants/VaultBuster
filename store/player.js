@@ -356,7 +356,7 @@ function blocked(x, z) {
   if (CUSTOMER && outBlocked(x, z)) return true;
   for (const c of colliders) if (!c.staff)       // (you walk through the staff: they can't pin you in a corner)
     if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) {
-      if (c === frontWallBox && CUSTOMER && x > 0.05 + player.r && x < 1.75 - player.r && cmDoorOpen(player.z > 0)) continue;   // the customers' door
+      if (c === frontWallBox && x > 0.05 + player.r && x < 1.75 - player.r && (!CUSTOMER || cmDoorOpen(player.z > 0))) continue;   // the right-hand door: customers' (when they're let in), and yours (you've the keys)
       return true;
     }
   return false;

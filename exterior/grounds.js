@@ -3,9 +3,9 @@
 function buildGrounds({ lam, put, bx, cy, ext, dark }) {
   const ground = (x0, x1, z0, z1, m, y = 0) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), m); g.rotation.x = -Math.PI / 2; g.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); scene.add(g); ext(g); };
   for (const [x0, x1, z0, z1] of [[-250, -27.74, LOT.roadNear, 0], [31, 250, LOT.roadNear, 0], [-250, -27.74, -250, LOT.roadFar], [31, 250, -250, LOT.roadFar], [-27.74, 31, -250, -30.4],   // (out front: round the road, which runs on out of sight)
-    [-250, -7.84, 0, 250], [11.1, 250, 0, 250],
+    [-250, -9.4, 0, 250], [-9.4, -7.84, 0, FIRE_EXIT.well.z0 - 0.15], [-9.4, -7.84, FIRE_EXIT.well.z1, 250], [11.1, 250, 0, 250],   // (round the emergency exit's stairwell)
     [2.1, 11.1, 35.1, 48.6], [-7.84, 11.1, 48.6, 250]]) ground(x0, x1, z0, z1, mat.grass);   // (none under the building: the theater's floor goes down below it)
-  for (const [x0, x1, z0, z1] of [[-11.84, -7.84, 0, 52.6], [11.1, 13, 0, 14], [11.1, 16.7, 14, 39.1],
+  for (const [x0, x1, z0, z1] of [[-11.84, -9.4, 0, 52.6], [-9.4, -7.84, 0, FIRE_EXIT.well.z0 - 0.15], [-9.4, -7.84, FIRE_EXIT.well.z1, 52.6], [11.1, 13, 0, 14], [11.1, 16.7, 14, 39.1],
     [2.1, 11.1, 35.1, 39.1], [2.1, 5.33, 39.1, 52.6], [-11.84, 5.33, 48.6, 52.6]]) ground(x0, x1, z0, z1, mat.pavement, 0.004);
   {                                                // the dumpster, up against the side wall under the closet's chute: two plastic lids, forklift pockets, a bit of rust
     const d = new THREE.Group(); d.position.set(11.92, 0, 28.72); d.rotation.y = -Math.PI / 2; scene.add(d);
