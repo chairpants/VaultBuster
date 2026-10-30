@@ -192,6 +192,7 @@ const TVU = {
   uThBox: { value: new THREE.Vector4() },            // auditorium: x0, x1, z0, z1
   uThScreenP: { value: new THREE.Vector3(-2.87, 1.05, 47.8) }, // theater screen center for live bounce
   uThSconce: { value: 1 },                           // auditorium wall sconces 0..1: up between films, fading out once one plays
+  uDeadL: { value: Array.from({ length: 3 }, () => new THREE.Vector4()) },   // the sales floor's burnt-out troffers: x, z, how dark (see TROFFER_GRID)
   // light spilling through doorways into a darker room next door (see spillTick), live ones first (uSpillN): per spill,
   // the light it comes from (xyz, inside the lit room) + reach past the door (w), its color x strength, the box it
   // lands in (x0, x1, z0, z1), and the door opening (plane: 0 z = const, 1 x = const; that const; center along it; half width)
@@ -201,6 +202,14 @@ const TVU = {
   uSpillC: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
   uSpillB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
 };
+// the sales floor's ceiling lights, a regular grid (see the troffers, with the theater): the first one's x, z, the spacing,
+// how many across and along, their height. ROOM_FRAG lights the floor from them (the nearest 3 x 3), not as one even wash
+const TROFFER_GRID = { x: -6.3, z: 3.15, step: 3.6, nx: 5, nz: 7, y: STORE.h - 0.02 };
+const TROFFER_GLSL = `
+float trofferLight(vec3 F, vec3 P) {             // one panel facing down, on the floor at P: its light out of the diffuser falling
+  vec3 L = F - P; float d2 = dot(L, L); float c = (F.y - P.y) * inversesqrt(d2);   // off from straight under it (cos^6: a pool
+  float e = c * c * c; return e * e * c / (d2 + 0.6);                              // under each, dimmer between)
+}`;
 // Room lighting, per fragment, by where it is (world space): no light objects,
 // so it costs the same however many zones there are, and it stops dead at the
 // walls — a switched-off break room is dark even with the store lit next door.
@@ -217,7 +226,21 @@ const ROOM_FRAG = `
     float w1 = 1.0 - smoothstep(9.0, 11.0, P.z), w3 = smoothstep(18.0, 20.0, P.z), w2 = max(0.0, 1.0 - w1 - w3);
     float win = exp(-P.z / 9.0);
     float facing = 0.75 + 0.35 * max(-rN.z, 0.0) + 0.2 * max(rN.y, 0.0);
-    rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl
+    vec2 tg = floor((P.xz - vec2(${TROFFER_GRID.x.toFixed(2)}, ${TROFFER_GRID.z.toFixed(2)})) / ${TROFFER_GRID.step.toFixed(2)} + 0.5);
+    float pool = 0.0;
+    for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {   // the nearest fixtures (two away: under 1% of one overhead)
+      vec2 c = tg + vec2(float(i), float(j));
+      if (c.x < 0.0 || c.y < 0.0 || c.x > ${(TROFFER_GRID.nx - 1).toFixed(1)} || c.y > ${(TROFFER_GRID.nz - 1).toFixed(1)}) continue;
+      pool += trofferLight(vec3(${TROFFER_GRID.x.toFixed(2)} + c.x * ${TROFFER_GRID.step.toFixed(2)}, ${TROFFER_GRID.y.toFixed(2)}, ${TROFFER_GRID.z.toFixed(2)} + c.y * ${TROFFER_GRID.step.toFixed(2)}), vec3(P.x, 0.0, P.z));
+    }
+    for (int k = 0; k < 3; k++) if (uDeadL[k].z > 0.0) pool -= uDeadL[k].z * trofferLight(vec3(uDeadL[k].x, ${TROFFER_GRID.y.toFixed(2)}, uDeadL[k].y), vec3(P.x, 0.0, P.z));
+    pool = pow(max(pool, 0.0) * 14.0, 1.6);        // the light on the floor there: ~1.45 under a panel, ~0.55 between four
+    float up = max(rN.y, 0.0), down = max(-rN.y, 0.0);
+    float side = mix(0.62, 1.12, smoothstep(0.05, 2.9, P.y)) * (0.8 + 0.2 * pool);   // walls and shelf faces: brighter up toward the panels, dim at the foot
+    float lit = mix(mix(side, pool, up), 0.82, down);   // (the ceiling's tiles between the panels: a little dimmer)
+    float edge = min(min(P.x - uFloorBox.x, uFloorBox.y - P.x), uFloorBox.z - P.z);
+    lit *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 1.0, edge)) * up;                       // the floor along the walls, in their shade
+    rl = (uZone.x * w1 + uZone.y * w2 + uZone.z * w3) * fl * lit
        + (day * uDayC + (1.0 - day) * uNightC) * (0.42 + 0.9 * win) * facing;
   } else if (P.x > uBohBox.x && P.x < uBohBox.y && P.z >= uFloorBox.z && P.z < uBohBox.w && P.y < uBohSplit.y + 0.05) {
     bool closet = P.x > uBohSplit.z && P.z < uBohBox.z;   // the janitor's closet: one bare bulb (uBoh.w), warm
@@ -287,10 +310,11 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
     .replace("#include <common>", `#include <common>
       uniform float uTvGain, uTvCell; uniform vec3 uTvAmb, uTvVolMin, uTvVolSize; uniform vec4 uTvRoom;
       uniform vec3 uTvZoneP[9], uTvZoneC[9]; uniform highp sampler3D uTvVis; varying vec3 vTvPos;
-      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec3 uBohSplit; uniform vec4 uThLight, uTall; uniform vec2 uShaft; uniform vec3 uThScreenP; uniform float uThSconce;
+      uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec3 uBohSplit; uniform vec4 uThLight, uTall; uniform vec2 uShaft; uniform vec4 uDeadL[3]; uniform vec3 uThScreenP; uniform float uThSconce;
       uniform vec4 uSpillP[8], uSpillC[8], uSpillB[8], uSpillD[8]; uniform int uSpillN;
       uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC, uFogC; uniform float uFogD;`)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\nfloat tvOut = 0.0;\n" + ROOM_FRAG + TV_FRAG)
+    .replace("void main() {", TROFFER_GLSL + "\nvoid main() {")
     .replace("#include <fog_fragment>", `#include <fog_fragment>
       if (tvOut > 0.5 && uFogD > 0.0) gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogC, 1.0 - exp(-length(vTvPos - cameraPosition) * uFogD));   // outdoors only: the fog's out there`);
 };

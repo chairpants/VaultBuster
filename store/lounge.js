@@ -618,6 +618,10 @@ function lightingTick(dt) {                       // fluorescents restriking, zo
   }
   todTick();
   applyLighting();
+  for (let k = 0; k < 3; k++) {                    // the burnt-out troffers, dark in the shader's light too (flickering: half)
+    const d = typeof deadLights !== "undefined" && deadLights[k], t = d && TROFFERS[d.i];
+    TVU.uDeadL.value[k].set(t ? t.x : 0, t ? t.z : 0, t ? (d.t > 0 ? 0.5 : 1) : 0, 0);
+  }
 }
 function applyLighting() {
   const Z = TVU.uZone.value, B = TVU.uBoh.value;
