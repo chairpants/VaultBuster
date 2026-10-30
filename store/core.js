@@ -33,6 +33,7 @@ const DOOR_W = 1.1, DOOR_H = 2.13;          // opening; tops out just under the 
 const BOH_DOORS = { store: 4.6, restroom: 5.0, breakroom: 8.55, future: 28.9, closet: 28.9 };   // (future, closet: along z, in the hall's west wall and the closet's)
 const breakFx = { clock: null, punch: null, clock12: null, coffee: null, coffeeLed: null, tv: null, tvMesh: null, vcr: null, tvT: 0 };   // the break room's moving parts (see breakroomTick)
 const closetBulb = { mat: null };                 // the closet's bare bulb (its glass goes warm white when the "closet" zone is on)
+const fireExit = { leaf: null, out: null, to: null, busy: false };   // the theater's emergency exit: its leaves, inside and out, where it lets you out (see fireExitUse)
 const boothGlow = { lamps: null, stairs: null, red: null };   // the booth's wall lamps' lenses, the stairwell's bulbs, the booth's red working lights (on while its lights are off)
 const CLOSET = { x0: 9.4, x1: STORE.x, doorW: 0.8 };   // the hall's end, x0 its wall across the hall (the door's in it) to the building's side wall
 const SCUPPERS = [[-7.84, 12, 1, 0], [-7.84, 26, 1, 0], [11.1, 6, -1, 0], [11.1, 21, -1, 0], [-3.0, 48.6, 0, -1], [7.5, 35.1, 0, -1]];   // the overflow scuppers through the parapet: where on the outer face, and its inward normal

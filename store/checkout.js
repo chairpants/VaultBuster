@@ -327,7 +327,7 @@ window.VaultAim = {
 function pickHover() {
   if (arcade.on) { $("hoverTip").style.display = "none"; highlight.visible = false; return; }   // (playing Space Invaders: nothing else to aim at)
   aimPostit = null; aimNotepad = false;
-  hovered = null; aimStool = false; aimPickup = null; aimTony = null; aimBed = false; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
+  hovered = null; aimStool = false; aimPickup = null; aimTony = null; aimBed = false; aimFireExit = null; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
@@ -461,6 +461,7 @@ function pickHover() {
     else if (aim?.object.userData.combo && aim.distance < 1.6) cm.comboOf = aim.object.userData.combo;
     else if (aim?.object.userData.tony && aim.distance < 2.4) aimTony = aim.object.userData.tony;
     else if (aim?.object.userData.bed && aim.distance < 2.4 && CUSTOMER) aimBed = true;
+    else if (aim?.object.userData.fireExit && aim.distance < 2.2) aimFireExit = aim.object.userData.fireExit;
     else if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
@@ -535,6 +536,7 @@ function pickHover() {
     else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
       + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
     else if (aimStool) tip.innerHTML = stool.by ? `${stool.by.first}'s using the stool` : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
+    else if (aimFireExit) tip.innerHTML = aimFireExit === "in" ? "E — push the bar: out the emergency exit<div class=\"cat\">it won't open from outside</div>" : "Emergency exit<div class=\"cat\">no handle this side: it only opens from inside</div>";
     else if (aimLock) tip.innerHTML = `E — ${frontLock.locked ? "unlock the front doors" : "lock the front doors"}`;
     else if (aimExit) tip.innerHTML = !afterClose() ? "Open till midnight · clock out after close" : custs.length ? "Customers still inside" : "E — clock out and go home";
     else if (aimCustomer) tip.innerHTML = aimCustomer.kid ? `E — say hi<div class="cat">${memberName(aimCustomer.member)}'s kid</div>` : custTip(aimCustomer) + `<div class="cat">${memberName(aimCustomer.member)} · #${aimCustomer.member.num}</div>`;
