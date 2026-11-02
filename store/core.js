@@ -339,6 +339,24 @@ const $ = id => document.getElementById(id);
 const BLOOM_LAYER = 1;
 const bloomLayer = new THREE.Layers(); bloomLayer.set(BLOOM_LAYER);
 function glow(obj) { obj.layers.enable(BLOOM_LAYER); return obj; }   // mark a mesh as a real light source
+// The glow pass tests against the main pass's depth, and with smooth edges on that depth is multisampled and resolved,
+// so on a surface turned from the camera a second draw of the same thing passes in some pixels and fails in others:
+// hard blocks of glow. A material listed here is pulled forward a hair for that draw, so all of it passes; with
+// emitOnly, only its own light goes into the glow (times gain), not the whole lit surface again, which would blow it out
+const glowDraws = [];
+function glowDraw(mat, { emitOnly = false, gain = 1 } = {}) { glowDraws.push({ mat, emitOnly, gain, color: new THREE.Color(), emit: 0 }); return mat; }
+function glowDrawsBegin() {
+  for (const d of glowDraws) {
+    d.mat.polygonOffset = true; d.mat.polygonOffsetFactor = d.mat.polygonOffsetUnits = -1;
+    if (d.emitOnly) { d.color.copy(d.mat.color); d.mat.color.setRGB(0, 0, 0); d.emit = d.mat.emissiveIntensity; d.mat.emissiveIntensity *= d.gain; }
+  }
+}
+function glowDrawsEnd() {
+  for (const d of glowDraws) {
+    d.mat.polygonOffset = false;
+    if (d.emitOnly) { d.mat.color.copy(d.color); d.mat.emissiveIntensity = d.emit; }
+  }
+}
 
 const rtSize = () => [Math.round(innerWidth * renderer.getPixelRatio()), Math.round(innerHeight * renderer.getPixelRatio())];
 const mainRT = new THREE.WebGLRenderTarget(...rtSize(), { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(...rtSize()) });
@@ -388,7 +406,9 @@ function renderWithBloom() {
   const bg = scene.background, mask = camera.layers.mask, alpha = renderer.getClearAlpha(); renderer.getClearColor(clearWas);
   scene.background = null; camera.layers.set(BLOOM_LAYER); renderer.autoClear = false;
   renderer.setRenderTarget(glowRT); renderer.setClearColor(0x000000, 0); renderer.clear(true, false, false);
+  glowDrawsBegin();
   renderer.render(scene, camera);
+  glowDrawsEnd();
   renderer.autoClear = true; camera.layers.mask = mask; scene.background = bg; renderer.setClearColor(clearWas, alpha);
   bloomPass.render(renderer, null, glowRT, 0, false);   // blurred, and added back onto glowRT
   mixPass.render(renderer, mixRT, mainRT);               // the scene + the glow

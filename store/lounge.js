@@ -481,7 +481,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     const saddle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.008, 0.012), brass); saddle.position.y = 1.39; parts.push(saddle);
     parts.push(lathe([[0, 1.645], [0.012, 1.655], [0.02, 1.672], [0.012, 1.69], [0.004, 1.71], [0, 1.715]], brass, 12)); // finial
     // bell shade: flared skirt, soft shoulder, narrow top; double-sided so the lit inside shows
-    const shadeMat = new THREE.MeshLambertMaterial({ color: 0xf2dcae, emissive: 0xe8a458, emissiveIntensity: SHADE_GLOW, side: THREE.DoubleSide });
+    const shadeMat = glowDraw(new THREE.MeshLambertMaterial({ color: 0xf2dcae, emissive: 0xe8a458, emissiveIntensity: SHADE_GLOW, side: THREE.DoubleSide }), { emitOnly: true, gain: 2 });
     const shadePts = [[0.25, 0], [0.235, 0.03], [0.205, 0.12], [0.18, 0.22], [0.155, 0.3], [0.13, SHADE_H]]
       .map(([r, y]) => [r, SHADE_Y0 + y]);
     const shade = lathe(shadePts, shadeMat, 36); glow(shade);
@@ -489,7 +489,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     rimTop.rotation.x = Math.PI / 2; rimTop.position.y = SHADE_Y0 + SHADE_H;
     const rimBot = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.012, 6, 40), trimMat);
     rimBot.rotation.x = Math.PI / 2; rimBot.position.y = SHADE_Y0;
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff3d6 });
+    const bulbMat = glowDraw(new THREE.MeshBasicMaterial({ color: 0xfff3d6 }));
     bulbMat.userData.onColor = new THREE.Color(0xfff3d6); bulbMat.userData.offColor = new THREE.Color(0x5a554a);
     const bulb = glow(new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), bulbMat)); bulb.position.y = 1.45; bulb.scale.y = 1.25;
     const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, 0.16, 4), brass); chain.position.set(0.03, 1.3, 0);
