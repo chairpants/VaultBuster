@@ -76,7 +76,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
   const frontXs = [...spread(WALL_L + CORNER, -2.0, 2), ...spread(2.0, STORE.x - CORNER, 2)];
   const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(BOH_DOORS.store + BOH_OPENING_W / 2 + 0.3, STORE.x - CORNER, 2)];   // right half starts past the back-hall opening
   frontXs.forEach((x, i) => placePoster(picks[i], x, 2.1, 0.26, 0, i));
-  backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.1, STORE.z - 0.26, Math.PI, 4 + i));
+  backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.85, STORE.z - 0.26, Math.PI, 4 + i));   // (all one height, shelves under them or not)
   for (let s = 0; s < 16; s++) {           // regular run down both bare side walls, mounted on the beam
     const side = s < 8 ? -1 : 1, i = 8 + s;
     const wx = side < 0 ? WALL_L + 0.36 : STORE.x - 0.36;   // hug whichever wall (movie side pulled in)
