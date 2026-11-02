@@ -438,7 +438,7 @@ function hirePick(i) {
 }
 function hireClose() {
   hiring.open = false; $("hireScreen").style.display = "none";
-  if (started && !posTerm?.isOpen() && document.pointerLockElement !== canvas) canvas.requestPointerLock()?.catch?.(() => {});   // the register was closed underneath: back into the store
+  if (started && !posTerm?.isOpen() && document.pointerLockElement !== canvas) lockMouse()?.catch?.(() => {});   // the register was closed underneath: back into the store
 }
 function portraits(outfits) {                     // a head-and-shoulders render of each applicant (their own little renderer, then thrown away)
   const W = 180, H = 220, out = [];
