@@ -151,7 +151,9 @@ const clock = new THREE.Clock();
 // street, and the lobby and auditorium only while their push doors swing open.
 // Lights and anything that moves (you, Dana, customers, the stool, the
 // standee) are left alone
-const ROOMS = ["out", "store", "boh", "lobby", "theater"];
+const ROOMS = ["out", "store", "boh", "lobby", "theater", "hatch"];   // (hatch: the roof hatch, its shaft and ladder, seen from the closet and from up top)
+const HATCH_PEEK = 2.5;                        // on the roof, this close to the hatch you can see down past its shaft into the closet; any further and the shaft's all there is
+const hatchParts = new Set(roof.hatchParts);
 const roomGroups = Object.fromEntries(ROOMS.map(r => { const g = new THREE.Group(); scene.add(g); return [r, g]; }));
 function roomAt(x, z) {
   if (z < 0 || x < WALL_L || x > STORE.x || !inBuilding(x, z)) return "out";   // (round the back too)
@@ -172,6 +174,7 @@ function roomSort() {                          // file new top-level objects int
     if (roomSeen.has(o) || roomGroupSet.has(o)) continue;
     roomSeen.add(o);
     if (movers.has(o)) continue;
+    if (hatchParts.has(o)) { roomGroups.hatch.add(o); continue; }
     let skip = false; o.traverse(k => { if (k.isLight || k.isCamera) skip = true; });   // hiding a light would change everyone's lighting (and recompile shaders)
     if (skip) continue;
     const r = roomOf(o); if (r) roomGroups[r].add(o);   // the room groups sit at the origin: world transforms don't change
@@ -193,6 +196,8 @@ function regionTick() {
   const seen = new Set([player.onRoof ? "out" : roomAt(camera.position.x, camera.position.z)]);   // (on the roof: just the outdoors, and the closet down the hatch)
   roof.g.visible = player.onRoof || !!roof.climb;
   if (!player.onRoof) for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
+  else if (Math.hypot(camera.position.x - ROOF_LADDER.x, camera.position.z - ROOF_LADDER.z) < HATCH_PEEK) seen.add("boh");
+  if (player.onRoof || seen.has("boh")) seen.add("hatch");
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
   // the booth and its stairs (BOOTH.g): from in there, from the auditorium (through its window), or through the stairs' open door
   stairDoor ??= doors.find(d => !d.push && d.alongX && Math.abs(d.c - SHAFT.door) < 0.01);

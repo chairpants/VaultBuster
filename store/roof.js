@@ -6,7 +6,7 @@
 // level: its own colliders (the parapets and the kit), the inside of the store isn't drawn, the camera's on the deck.
 // And now that you can see it from up there, the world around the building: the stucco outside of its walls, a
 // paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
-const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
+const roof = { g: new THREE.Group(), cols: [], ladderParts: [], hatchParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
 scene.add(roof.g); roof.g.visible = false;
 const ROOF_LADDER = { x: 10.6, z: 28.28 };                 // the rungs' line: against the closet's north wall (the store's back wall), beside the chute
 const ROOF_HATCH = { x0: 10.28, x1: 10.88, z0: 28.12, z1: 28.87 };
@@ -149,17 +149,20 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     ext(hatch); col(x0 - 0.06, x1 + 0.06, z0 - 0.06, z1 + 0.06);
     // the shaft through the plenum, closet ceiling to deck (unlit: it's dark in there, and the room lighting would take it for outdoors)
     const shaftM = new THREE.MeshBasicMaterial({ color: 0x34322e }), sy0 = BOH.h, sh = Y - sy0;
-    for (const [w, d, x, z] of [[x1 - x0, 0.02, cx, z0 - 0.01], [x1 - x0, 0.02, cx, z1 + 0.01], [0.02, z1 - z0, x0 - 0.01, cz], [0.02, z1 - z0, x1 + 0.01, cz]]) box(w, sh, d, shaftM, x, sy0 + sh / 2, z);
-    for (const [w, d, x, z] of [[x1 - x0 + 0.1, 0.05, cx, z0 - 0.025], [x1 - x0 + 0.1, 0.05, cx, z1 + 0.025], [0.05, z1 - z0, x0 - 0.025, cz], [0.05, z1 - z0, x1 + 0.025, cz]]) box(w, 0.03, d, mat.frame, x, sy0 - 0.015, z);   // trim round it, under the ceiling
+    const keep = o => { roof.hatchParts.push(o); return o; };   // (seen from the roof as well as the closet: see roomSort)
+    keep(hatch);
+    for (const [w, d, x, z] of [[x1 - x0, 0.02, cx, z0 - 0.01], [x1 - x0, 0.02, cx, z1 + 0.01], [0.02, z1 - z0, x0 - 0.01, cz], [0.02, z1 - z0, x1 + 0.01, cz]]) keep(box(w, sh, d, shaftM, x, sy0 + sh / 2, z));
+    for (const [w, d, x, z] of [[x1 - x0 + 0.1, 0.05, cx, z0 - 0.025], [x1 - x0 + 0.1, 0.05, cx, z1 + 0.025], [0.05, z1 - z0, x0 - 0.025, cz], [0.05, z1 - z0, x1 + 0.025, cz]]) keep(box(w, 0.03, d, mat.frame, x, sy0 - 0.015, z));   // trim round it, under the ceiling
     // the ladder: galvanised rails standing off the wall on brackets, round rungs every 30 cm, the rails carried on up past
     // the hatch so there's something to hold stepping off
     const { x: lx, z: lz } = ROOF_LADDER, top = Y + 1.05;
     for (const sx of [-1, 1]) {
       roof.ladderParts.push(box(0.05, top, 0.016, galv, lx + sx * 0.22, top / 2, lz));
-      for (const y of [0.4, 1.6, 2.6]) box(0.04, 0.03, lz - CLOSET_Z0, galv, lx + sx * 0.22, y, (lz + CLOSET_Z0) / 2);   // wall brackets
+      for (const y of [0.4, 1.6, 2.6]) keep(box(0.04, 0.03, lz - CLOSET_Z0, galv, lx + sx * 0.22, y, (lz + CLOSET_Z0) / 2));   // wall brackets
       const g = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.016, 6, 12, Math.PI), galv); g.position.set(lx + sx * 0.22, top, lz - 0.12); g.rotation.y = Math.PI / 2; scene.add(g); roof.ladderParts.push(g);   // the rails curl over at the top
     }
     for (let y = 0.3; y < Y - 0.05; y += 0.3) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.44, 8), galv); r.rotation.z = Math.PI / 2; r.position.set(lx, y, lz); scene.add(r); roof.ladderParts.push(r); }
+    roof.hatchParts.push(...roof.ladderParts);
     for (const o of [...roof.ladderParts, ...hatch.children, ...lid.children]) if (o.isMesh) { o.userData.roofLadder = true; aimables.push(o); }
     colliders.push({ x0: lx - 0.26, x1: lx + 0.26, z0: CLOSET_Z0, z1: lz + 0.03, y1: Y });
     // a caged bulb on the parapet by the hatch, on at night (see roofTick)
