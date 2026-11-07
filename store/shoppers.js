@@ -402,11 +402,13 @@ function custChatTick(dt) {
 // in front of it. None of them are our customers: they're not in custs, just people on a path
 const PIZZA_DOOR = [15.6, -0.75], SIDEWALK_Z = -0.95;
 const TONY_IN = { x0: 13.15, x1: 20.85, z0: 0.15, z1: 13.85, counterZ: 7.3, wallZ: 9.6, gapX: 19.6, doorX: [19.9, 20.75], hole: [14.2, 18.2] };
-const tony = { clerk: null, scores: [0, 0] };
-const TONY_GAMES = [["SPACE INVADERS", "#39ff5a", "#121212"], ["ASTEROIDS", "#ffffff", "#15162a"]];   // [name, glow, cabinet]
+const tony = { clerk: null, scores: [0, 0, 0] };
+const TONY_GAMES = [["SPACE INVADERS", "#39ff5a", "#121212"], ["ASTEROIDS", "#ffffff", "#15162a"], ["MISSILE COMMAND", "#ffb02e", "#1a2748"]];   // [name, glow, cabinet]
 const tonyOpen = () => shift.h >= 11 && shift.h < 23;
 const tonyIn = (x, z) => x > TONY_IN.x0 + 0.3 && x < TONY_IN.x1 - 0.3 && z > TONY_IN.z0 + 0.3 && z < TONY_IN.z1 - 0.3;   // (inside Tony's: see tonyInside)
 const tonyDoorway = (x, z) => Math.abs(x - PIZZA_DOOR[0]) < 0.28 && z > -0.4 && z < 0.5;
+const TONY_BACK = { x: 18.2, w: 1.0 };                // the kitchen's steel door, out to the back
+const tonyBackWay = (x, z) => Math.abs(x - TONY_BACK.x) < 0.34 && z > 13.3 && z < 14.75;
 // The weather on anyone out there (customers in the lot, people going by): snow settles on their head and shoulders
 // (melting off once they're inside), the wind leans on them and they lean into it, a gust shoves them a step (or
 // turns an umbrella inside out), the cold and the wet hunch them up, and with no umbrella in the rain a hand goes up
@@ -667,7 +669,7 @@ function custGone(cust) {
   }   // walked out with them: gone for good (order a replacement on the POS)
   if (cust.car) { cust.car.riders?.delete(cust); if (!cust.car.riders?.size) driveOut(cust.car); }   // back in the car, and off once everyone's in (or, not parked yet: just gone)
   const c = cust.c;
-  scene.remove(c.group); c.dispose();
+  c.group.removeFromParent(); c.dispose();
   for (const m of c.parts) { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); }
   colliders.splice(colliders.indexOf(cust.box), 1);
   custs.splice(custs.indexOf(cust), 1);

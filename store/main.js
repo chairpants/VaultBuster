@@ -6,8 +6,7 @@
 // picture settings already persist on their own — see applyTv.) Saved every
 // couple of seconds and on the way out; a tape that was playing sits in the
 // VCR and starts its episode again on your first click into the store (a
-// browser won't autoplay sound before that, and archive.org streams can't
-// seek, so it's the episode — not the exact minute — that resumes).
+// browser won't autoplay sound before that), from where it was wound to.
 let resumePlay = null, saveOff = !!DEBUG_LVL;
 const snackUnits = () => [...new Set(aimables.map(o => o.userData.unit || (o.userData.snack ? o : null)).filter(Boolean))];
 // a lane: one product's column on a rack or cooler shelf, front to back (and each stack top to bottom). Shoppers
@@ -36,7 +35,7 @@ function saveState() {
     staff: staff.map(e => ({ id: e.id, first: e.first, last: e.last, female: e.female, outfit: e.outfit, skills: e.skills, jobs: e.jobs.map(j => ({ id: j.id, pri: j.pri })), sched: e.sched })),
     you: { skills: you.skills }, rep: rep.v, upg, drunk: { gut: +drunk.gut.toFixed(3), blood: +drunk.blood.toFixed(3), hang: drunk.hang, owe: drunk.owe },
     counterItems: Object.fromEntries(counterItemsList().map(it => { const f = cmove.item === it ? cmove.from : null; return [it.id, f ? [f.x, f.z, f.ry] : [+it.g.position.x.toFixed(3), +it.g.position.z.toFixed(3), +it.g.rotation.y.toFixed(3)]]; })), members: SIM ? posTerm.activeNums() : undefined, signups: growth.pending, prospects: growth.prospects, show: show.title && { title: copyKey(show.title), day: show.day, sold: show.sold, status: show.status, spawned: show.spawned },
-    lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats, goals: shift.goals }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
+    office: officeSave(), lights: zoneOn, shift: { day: shift.day, h: shift.h, date0: shift.date0, stats: shift.stats, goals: shift.goals }, gatesArmed: gateAlarm.armed, frontLocked: frontLock.locked, lamps: lamps.map(l => !!l.userData.on), doors: doors.map(d => d.open), flap: flapOpen, cooler: coolerOpen,
     desens: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.desens).map(copyKey),
     rented: rentedCopies.map(copyKey), rentals: Object.fromEntries(rentedCopies.map(c => [copyKey(c), posTerm.rentalOf(c)])),
     lost: catalog.flatMap(t => [t, ...(t.copies || [])]).filter(c => c.lost).map(copyKey), budget: posTerm.budget(), owed: posTerm.owedAll(), records: posTerm.recordsAll(), messages: posTerm.messagesAll(),
@@ -67,6 +66,7 @@ function loadState(S) {
     if (S.frontLocked) setFrontLock(true);
     S.lamps?.forEach((on, i) => lamps[i] && setLamp(lamps[i], on));
     S.doors?.forEach((open, i) => { if (doors[i] && open !== doors[i].open) toggleDoor(doors[i]); });
+    officeLoad(S.office);
     if (S.flap && !flapOpen) toggleFlap();
     coolerOpen = !!S.cooler;
     if (S.cutout) { Object.assign(cutout, S.cutout); cutoutFit(cutout.x, cutout.z, cutout.ry, cutout.box); cutout.g?.position.set(cutout.x, 0, cutout.z); cutout.g?.rotation.set(0, cutout.ry, 0); }
@@ -151,12 +151,14 @@ const clock = new THREE.Clock();
 // street, and the lobby and auditorium only while their push doors swing open.
 // Lights and anything that moves (you, Dana, customers, the stool, the
 // standee) are left alone
-const ROOMS = ["out", "store", "boh", "lobby", "theater"];
+const ROOMS = ["out", "store", "hall", "closet", "restroom", "breakroom", "office", "lobby", "theater", "hatch"];   // (hatch: the roof hatch, its shaft and ladder, seen from the closet and from up top)
+const HATCH_PEEK = 2.5;                        // on the roof, this close to the hatch you can see down past its shaft into the closet; any further and the shaft's all there is
+const hatchParts = new Set(roof.hatchParts);
 const roomGroups = Object.fromEntries(ROOMS.map(r => { const g = new THREE.Group(); scene.add(g); return [r, g]; }));
 function roomAt(x, z) {
   if (z < 0 || x < WALL_L || x > STORE.x || !inBuilding(x, z)) return "out";   // (round the back too)
   if (z < STORE.z) return "store";
-  if (z < BOH.z1) return x >= BOH.x0 ? "boh" : "lobby";
+  if (z < BOH.z1) return x < BOH.x0 ? "lobby" : z < BOH.hallZ ? (x > CLOSET.x0 ? "closet" : "hall") : x < BOH.splitX ? "restroom" : z > BOH.officeZ ? "office" : "breakroom";
   return "theater";
 }
 const roomBox = new THREE.Box3(), roomSeen = new WeakSet(), roomGroupSet = new Set(Object.values(roomGroups));
@@ -167,32 +169,43 @@ function roomOf(o) {
   return rs.size === 1 ? [...rs][0] : null;
 }
 function roomSort() {                          // file new top-level objects into their rooms (posters load late, so this runs a few times)
-  const movers = new Set([me.group, stool.g, cutout.g, BOOTH.g, fireExit.leaf, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
+  const movers = new Set([   // (a door's left out: it swings between two rooms, and filed in the one it stood open into at load, it vanished from its doorway once shut with that room culled)
+    ...officeFx.blinds.map(b => b.g), officeFx.shutter, ...doors.filter(d => !d.stall).map(d => d.pivot), me.group, stool.g, cutout.g, BOOTH.g, fireExit.leaf, storeExit.leaf, ...staff.map(e => e.c?.group), ...custs.map(k => k.c?.group)]);
   for (const o of [...scene.children]) {
     if (roomSeen.has(o) || roomGroupSet.has(o)) continue;
     roomSeen.add(o);
     if (movers.has(o)) continue;
-    let skip = false; o.traverse(k => { if (k.isLight || k.isCamera) skip = true; });   // hiding a light would change everyone's lighting (and recompile shaders)
-    if (skip) continue;
+    if (hatchParts.has(o)) { roomGroups.hatch.add(o); continue; }
+    if (o.isLight || o.isCamera) continue;       // (a light inside a fixture is fine: lightsTick goes by the light, hidden or not)
     const r = roomOf(o); if (r) roomGroups[r].add(o);   // the room groups sit at the origin: world transforms don't change
   }
 }
-const roomFrustum = new THREE.Frustum(), roomProj = new THREE.Matrix4(), roomPort = new THREE.Vector3();
+const roomFrustum = new THREE.Frustum(), roomProj = new THREE.Matrix4(), roomPort = new THREE.Vector3(), roomGate = new THREE.Box3(), roomGateA = new THREE.Vector3(), roomGateB = new THREE.Vector3();
 const roomSortAt = [0.5, 2, 5, 10, 20];       // seconds in
-let hallDoor, cinemaDoor, stairDoor;
+let hallDoor, cinemaDoor, stairDoor, restDoor, restFDoor, breakDoor, closetDoor;
 function regionTick() {
   if (roomSortAt.length && clockT >= roomSortAt[0]) { roomSortAt.shift(); roomSort(); }
   hallDoor ??= doors.find(d => d.push && !d.alongX); cinemaDoor ??= doors.find(d => d.push && d.alongX);
   const open = d => !d || Math.abs(d.a) > 0.01;
-  let nearPort = false;                          // the hall door's porthole is a window, shut or not: it counts as open while it's close and on screen
-  if (hallDoor && Math.hypot(camera.position.x - hallDoor.at, camera.position.z - hallDoor.c) < STORE.x - BOH.x0 + 1) {   // "close": anywhere down the hall
-    camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-    nearPort = roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c));
+  camera.updateMatrixWorld(); roomFrustum.setFromProjectionMatrix(roomProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const { x: camX, z: camZ } = camera.position;
+  // the store's two ways out, only when they're on screen: the storefront, and the opening to the hall
+  const behindFront = camZ > 0.6 && roomAt(camX, camZ) === "out";   // (out past the side or back walls, or in Tony's: solid walls between you and it)
+  const front = !behindFront && roomFrustum.intersectsBox(roomGate.set(roomGateA.set(WALL_L, 0, -0.5), roomGateB.set(STORE.x, 4, 0.5)));
+  const hallWay = roomFrustum.intersectsBox(roomGate.set(roomGateA.set(BOH_DOORS.store - BOH_OPENING_W / 2, 0, STORE.z - 0.4), roomGateB.set(BOH_DOORS.store + BOH_OPENING_W / 2, BOH.h, STORE.z + 0.4)));
+  let nearPort = false;                          // the hall door's porthole is a window, shut or not: it counts as open while it's on screen down the hall, or lined up through the opening from the store
+  if (hallDoor && Math.hypot(camX - hallDoor.at, camZ - hallDoor.c) < STORE.x - BOH.x0 + 1 && roomFrustum.containsPoint(roomPort.set(hallDoor.at, PORT.y, hallDoor.c))) {
+    if (camZ >= STORE.z) nearPort = true;
+    else { const atOpening = camX + (hallDoor.at - camX) * (STORE.z - camZ) / (hallDoor.c - camZ); nearPort = Math.abs(atOpening - BOH_DOORS.store) < BOH_OPENING_W / 2; }
   }
-  const links = [["store", "out", true], ["store", "boh", true], ["boh", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor) || player.inBooth], ["theater", "out", fireExit.a > 0]];   // (the emergency exit, open: out to its stairwell)   // (the booth's window looks out over the house)
+  restDoor ??= doors.find(d => d.alongX && Math.abs(d.c - BOH_DOORS.restroom) < 0.01); restFDoor ??= doors.find(d => d.alongX && Math.abs(d.c - BOH_DOORS.restroomF) < 0.01); breakDoor ??= doors.find(d => d.alongX && Math.abs(d.c - BOH_DOORS.breakroom) < 0.01); closetDoor ??= doors.find(d => !d.alongX && Math.abs(d.at - CLOSET.x0) < 0.01);
+  // (the office's window, its blinds shut: they and the panel behind them stand in for the room, so it isn't drawn for nothing. See officeFx.shutter)
+  const links = [["store", "out", front], ["store", "hall", hallWay], ["hall", "restroom", open(restDoor) || open(restFDoor)], ["hall", "breakroom", open(breakDoor)], ["hall", "closet", open(closetDoor)], ["breakroom", "office", Math.abs(officeFx.door.a) > 0.01 || officeFx.blinds.some(b => b.k > 0.03)], ["hall", "lobby", open(hallDoor) || nearPort], ["lobby", "theater", open(cinemaDoor) || player.inBooth], ["theater", "out", fireExit.a > 0], ["store", "out", storeExit.a > 0]];   // (the emergency exit, open: out to its stairwell)   // (the booth's window looks out over the house)
   const seen = new Set([player.onRoof ? "out" : roomAt(camera.position.x, camera.position.z)]);   // (on the roof: just the outdoors, and the closet down the hatch)
   roof.g.visible = player.onRoof || !!roof.climb;
   if (!player.onRoof) for (let grew = true; grew;) { grew = false; for (const [a, b, on] of links) if (on && seen.has(a) !== seen.has(b)) { seen.add(a); seen.add(b); grew = true; } }
+  else if (Math.hypot(camera.position.x - ROOF_LADDER.x, camera.position.z - ROOF_LADDER.z) < HATCH_PEEK) seen.add("closet");
+  if (player.onRoof || seen.has("closet")) seen.add("hatch");
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
   // the booth and its stairs (BOOTH.g): from in there, from the auditorium (through its window), or through the stairs' open door
   stairDoor ??= doors.find(d => !d.push && d.alongX && Math.abs(d.c - SHAFT.door) < 0.01);
@@ -202,7 +215,7 @@ function regionTick() {
 let clockT = 0;
 const ambFwd = new THREE.Vector3(), coolerSndAt = new THREE.Vector3();
 let coolerWas = false;
-const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 5.7, 2.6, 29], ["breakroom", 8.4, 2.6, 32.4],
+const AMB_ZONES = [["front", 0, 3.45, 3.5], ["aisles", -4, 3.45, 13], ["aisles", 5, 3.45, 16], ["lounge", 0, 3.45, 22.5], ["hall", 5.7, 2.6, 29], ["breakroom", 8.1, 2.6, 31.05], ["office", 8.4, 2.6, 33.7],
   ["restroom", 3.9, 2.6, 32.4], ["lobby", -2.5, 3, 31.5], ["theater", -3, 5, 40]].map(([zone, x, y, z]) => ({ zone, x, y, z, level: 0 }));   // a hum over each light zone
 let paused = false, pausedTape = false;          // the pause screen's up: nothing moves
 function ambTick(dt) {
@@ -222,8 +235,7 @@ function ambTalkers() {                         // who's talking right now, for 
 let pausedDrawAt = 0, onFeetT = 0;
 // ---- loading: nothing's drawn till the store's ready. The covers come in first, unseen (each lands in a shared
 // atlas, and an atlas goes to the GPU whole every time one does: drawn as they trickled in, that was a run of slow
-// frames). Then, once the lights have settled (a light that's off drops out of the scene after a second, and a change in
-// how many there are recompiles every lit material), every shader's compiled and every texture's sent up, with every
+// frames). Then every shader's compiled and every texture's sent up, with every
 // room shown for it and a couple of customers stood in, and one frame's drawn through the bloom. Then the menu.
 // (Before, all that happened in your first seconds in the store) ----
 let booted = false;
@@ -235,13 +247,14 @@ async function boot() {
   bar(0.8, "WARMING UP"); await frame();
   const showAll = () => { const s = [...Object.values(roomGroups), roof.g].filter(g => !g.visible); s.forEach(g => g.visible = true); scene.updateMatrixWorld(); return () => s.forEach(g => g.visible = false); };   // (regionTick puts it back each frame anyway)
   const stand = [true, false].map((f, i) => { const c = VaultCustomers.build(VaultCustomers.randomOutfit(seeded(7 + i), f)); c.group.position.set(player.x + i - 0.5, 0, player.z - 2); c.tick(0.016, 0); scene.add(c.group); return c; });
-  cullDarkLights(2);                            // (the lights that are off drop out now, not a second into the menu: the frames here are slow and short-stepped)
+  scene.updateMatrixWorld(); lightsTick(1);     // (the fixed set of lights, in place before anything's compiled against them)
   let hide = showAll(); const compiled = renderer.compileAsync(scene, camera); hide();   // (it picks its objects up straight away; the waiting's the GPU's)
   await compiled;
   const texs = new Set(); scene.traverse(o => { if (o.material) for (const m of [o.material].flat()) for (const v of Object.values(m)) if (v?.isTexture) texs.add(v); });
   let i = 0; for (const t of texs) { renderer.initTexture(t); if (++i % 16 === 0) { bar(0.85 + 0.13 * i / texs.size, "WARMING UP"); await frame(); } }
   hide = showAll(); renderWithBloom(); hide();
-  stand.forEach(c => { scene.remove(c.group); c.dispose(); });
+  for (const c of officeFx.sec.cams) { secFeedRender(c); await frame(); }   // (a first look from each security camera, so the monitors have a picture when you walk in)
+  stand.forEach(c => { c.group.removeFromParent(); c.dispose(); });   // (not scene.remove: roomSort may have filed them in a room by now, and they stood there for good)
   booted = true; hint.style.display = "none"; $("mainMenu").hidden = false;
 }
 boot();
@@ -274,12 +287,13 @@ renderer.setAnimationLoop(() => {
   }
   exteriorTick(dt); weatherTick(dt); walkerTick(dt); decorTick(dt);
   if (!playing) updateScreensaver(dt);
+  if (!playing && !video.paused) video.pause();   // (no tape in, nothing to hear: whatever got the video going after it came out, it stops here)
   if (playing || tvMenu) updateVideoFrame();
   rewinderTick(dt);
   VaultTrees.tick(dt, { date: shiftDate(), h: shift.h, wind: WX.wind || 0, gust: WX.gust || 0, cover: WX.cover, night: 1 - tod.level, grass: WX_GROUND.find(g => g.m === mat.grass) });   // the trees outside: sway, season, leaves
   tvPowerLed.material.color.set(tvLight.base ? 0x3dff6a : 0x551008);   // green while a tape plays, dim red standby
   {                                            // VCR clock: blinking 12:00 (nobody ever set it), PLAY while a tape runs
-    const txt = playing ? (video.paused ? "PAUSE" : "PLAY") : (Math.floor(clockT * 1.6) % 2 ? "12:00" : "");
+    const txt = playing ? (media.on ? (media.dir < 0 ? "REW" : "FF") : video.paused ? "PAUSE" : "PLAY") : (Math.floor(clockT * 1.6) % 2 ? "12:00" : "");
     if (txt !== vcrDisplay.shown) {
       const c = vcrDisplay.ctx; vcrDisplay.shown = txt;
       c.fillStyle = "#050807"; c.fillRect(0, 0, 128, 40);
@@ -317,6 +331,9 @@ renderer.setAnimationLoop(() => {
       r += zc[i]; g += zc[i + 1]; b += zc[i + 2];
     }
     tvLight.avg.setRGB(r / 9, g / 9, b / 9);
+    const tc = TVU.uThZoneC.value;                 // the theater screen's patches, eased the same way
+    for (let i = 0; i < tc.length; i++) tc[i] += (thZoneTarget[i] - tc[i]) * k;
+    TVU.uThGain.value = tvLight.base;
     const on = tvLight.base * (lightsOut ? 1 : 0.35);    // the fluorescents wash most of it out
     TVU.uTvGain.value = on * TV_GAIN;
     TVU.uTvAmb.value.copy(tvLight.avg).multiplyScalar(on * TV_AMB);
@@ -328,6 +345,7 @@ renderer.setAnimationLoop(() => {
       u.value += Math.sign(want - u.value) * Math.min(Math.abs(want - u.value), dt / (want ? 2 : 6));   // 2 s up, 6 s down
       if (thSconceMat) thSconceMat.emissiveIntensity = 0.85 * u.value;
     }
+    thDeck?.tick(dt);
     if (projBeamMat) {
       beamU.uBeamOn.value = tvLight.base ? 1 : 0;              // playing: the shader tints by picture section
       projBeamMat.color.setHex(tvLight.base ? 0xffffff : 0xd8e8ff);
@@ -352,12 +370,15 @@ renderer.setAnimationLoop(() => {
   }
   for (const d of doors) {                   // doors ease open/closed; a locked one rattles briefly when tried
     if (d.push) { pushDoorTick(d, dt); continue; }
-    d.a += ((d.open ? d.openA : 0) - d.a) * Math.min(1, dt * 5);
-    if (d.closing && Math.abs(d.a) < 0.04) { d.closing = false; doorSnd(d, "wood", "close"); }
+    if (d.closer) doorCloserTick(d, dt);
+    if (doorStep?.d === d && doorStep.t <= DOOR_DANCE.swing[1]) d.a = doorDanceA(doorStep, d.open ? d.openA : 0);   // (in step with you backing out of its way: see doorStepTick)
+    else d.a += ((d.open ? d.openA : 0) - d.a) * Math.min(1, dt * (d.selfShut ? 2.2 : 5));   // (the closer's swing is slower than a hand's)
+    if (d.closing && Math.abs(d.a) < 0.04) { d.closing = false; d.selfShut = false; doorSnd(d, "wood", "close"); }
+    if (d.open) d.selfShut = false;
     d.rattle = Math.max(0, d.rattle - dt);
     d.pivot.rotation.y = d.base + d.a + (d.rattle ? 0.012 * Math.sin(d.rattle * 70) : 0);
   }
-  move(dt); moveTick(); bathTick(dt); breakroomTick(dt);
+  move(dt); moveTick(); bathTick(dt); breakroomTick(dt); officeTick(dt);
   if (!player.onRoof && inv.some(e => e.kind === "tape" && !e.ref.desens) && Math.abs(player.x) < 2 && (gateLastZ - GATE_Z) * (player.z - GATE_Z) < 0) startGateAlarm();   // carried a tape through the gates
   gateLastZ = player.z;
   if (gateAlarm.on) { gateAlarm.t += dt; gateLed.color.set(Math.floor(gateAlarm.t * 5) % 2 ? 0x2a0000 : 0xff1a1a); }
@@ -376,8 +397,8 @@ renderer.setAnimationLoop(() => {
   }
   else if (seated) camera.position.copy(me.rig.head.getWorldPosition(meEye)).add(meEye.set(Math.sin(seatAt.ry || 0) * 0.06, 0.03, Math.cos(seatAt.ry || 0) * 0.06));   // eyes just above the collar, a touch forward
   else {
-    eyeY += ((keys.has("KeyC") ? 1.06 : 1.65) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
-    camera.position.set(player.x, eyeY + playerFloor(), player.z);
+    eyeY = fall ? fallEye() : eyeY + (Math.min(keys.has("KeyC") ? 1.06 : 1.65, eyeRoom()) - eyeY) * Math.min(1, dt * 10);   // crouched: just above the squatting body's collar
+    camera.position.set(player.x, eyeY - jump.dip + playerFloor(), player.z);
   }
   if (!seated) seatFov = 70;                     // walking resets the couch zoom
   const fovTarget = arcade.on ? 50 : seated ? seatFov : 70;   // (at the arcade machine: in close on its screen)
@@ -387,7 +408,7 @@ renderer.setAnimationLoop(() => {
   }
   const dk = dizzyTick(dt);
   camera.rotation.y = player.yaw; camera.rotation.x = player.pitch + dk * 0.04 * Math.sin(dizzy.t * 2.1);
-  camera.rotation.z = dk * 0.09 * Math.sin(dizzy.t * 1.3);   // the world tipping side to side
+  camera.rotation.z = dk * 0.09 * Math.sin(dizzy.t * 1.3) + (fall ? fall.roll * 0.3 * fall.tilt : 0);   // the world tipping side to side; down, your head on one side
   invSync();
   cutoutCarryTick();
   stoolCarryTick();
@@ -398,7 +419,9 @@ renderer.setAnimationLoop(() => {
   milestoneTick();
   spillTick();
   pickHover();
-  if (held) {                               // held-up view is a DOM overlay now, so it can't clip shelves
+  tapeBoxTick(dt);
+  nowPlayingTick(); mediaTick();
+  if (held) {
     handGroup.visible = !inspecting && !coHand.visible;   // 3D box only for the carried-at-your-side pose; hands full with a sale: your own tape waits
     handGroup.position.set(0.3, -0.28, -0.55); handGroup.rotation.set(0.05, -0.4, 0.06); handGroup.scale.setScalar(1);
   }
@@ -420,12 +443,12 @@ renderer.setAnimationLoop(() => {
         ? `Press E to insert “${held.title}” into the TV`
         : (playing ? "Press E to eject the tape · right-click for picture settings" : "Pick up a tape from the shelves to play it here · right-click for picture settings");
   regionTick();
-  cullDarkLights(dt);
+  lightsTick(dt);
   ambTick(dt);
-  if (booted) { const handBack = meHandFollow(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
+  if (booted) { const handBack = meHandFollow(); secFeedsTick(); renderWithBloom(); handBack?.(); }   // (the store ticks along from the start; it's drawn once boot's ready)
 });
-window.__t = { arcade, arcadeStart, arcadeStop, siKey, siTick, asTick, LOT, cmSleep, roomAt, lotCars: () => carsOut?.all(), tony, tonyE, TONY_IN, cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, backLadderE, backLadderDrop, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
-  catalog, pickup, onE, player,
+window.__t = { fallStart, fallNow: () => fall, fallTick, fallPlan, fallSurface, fallClear: () => { fall = null; me.setBend(); player.airH = 0; }, FALL, lowBlocker, spillTick, officeFx, officeSave, officeLoad, blindsToggle, secPress, arcade, arcadeStart, arcadeStop, mcFire, shift, bulb, tonyLightsTick, siKey, siTick, asTick, LOT, cmSleep, roomAt, lotCars: () => carsOut?.all(), tony, tonyE, TONY_IN, cm, CUSTOMER, invSync, cmTrail, SEARCHES, cmSearch, cmNoSale, invRemove, cmTakeFrom, cmSpentTick, INV_MAX, cmTrailSet, pickupMesh, TV, cmRecommend, onShelfCopy, cmTeeOff, cmHelped, cmMorning, putBack, strays, misshelve, cmTicket, cmShowTick, show, SHOW, cmComboKey, COMBOS, cmTermOpen, cmTermKey, cmSpill, cmSearchBin, cmSlip, cmMoneyDrop, pickupMeshes, redNights: () => redNights, setRedNights: n => { redNights = n; }, cmPay, cmCaught, cmSees, cmStaffOnly, cmPickUp, PICKUPS, KEYED, ITEMS, becomeCustomer, cmNextDay, outBlocked, blocked, carsOut: () => carsOut, golfLost, roof, roofClimb, backLadderE, backLadderDrop, decorDraw, decor, postersSwap, posterFor, WX, wxDrifts, weatherTick, wxPlan, walkers, walkerTick, walkerMake, pizzaRun, npcStyle, custTick: dt => custTick(dt), exteriorTick: dt => exteriorTick(dt), parkLot: (d, b) => parkLot(d, b), passCar: c => passCar(c), driveIn: (l, f) => driveIn(l, f), driveOut: c => driveOut(c), carNew: () => carNew(), sfxOut, shiftDate, season, calendarDraw, corkDraw,
+  catalog, pickup, onE, player, playEpisode, eject, boxState, tapeBox, media, mediaDown, mediaUp, togglePause, tvHear, hearRoomAt, fireExit, storeExit, fireExitUse, exitDoorTick, frontDoor, jump, jumpStart, jumpTick, WHEEL, wheelOpen, wheelMouse, wheelClick, WX,
   held: () => held, playing: () => playing, returnBin,
   setAim: v => { aimTV = v; },
   flapOpen: () => flapOpen, toggleFlap, flapOpenA: () => flapOpenA, aimFlap: () => !!aimFlap, pickHover,

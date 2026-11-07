@@ -76,7 +76,7 @@ const haloMat = new THREE.MeshBasicMaterial({ color: 0xffcf70, transparent: true
   const frontXs = [...spread(WALL_L + CORNER, -2.0, 2), ...spread(2.0, STORE.x - CORNER, 2)];
   const backXs = [...spread(WALL_L + CORNER, -3.2, 2), ...spread(BOH_DOORS.store + BOH_OPENING_W / 2 + 0.3, STORE.x - CORNER, 2)];   // right half starts past the back-hall opening
   frontXs.forEach((x, i) => placePoster(picks[i], x, 2.1, 0.26, 0, i));
-  backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.1, STORE.z - 0.26, Math.PI, 4 + i));
+  backXs.forEach((x, i) => placePoster(picks[4 + i], x, 2.85, STORE.z - 0.26, Math.PI, 4 + i));   // (all one height, shelves under them or not)
   for (let s = 0; s < 16; s++) {           // regular run down both bare side walls, mounted on the beam
     const side = s < 8 ? -1 : 1, i = 8 + s;
     const wx = side < 0 ? WALL_L + 0.36 : STORE.x - 0.36;   // hug whichever wall (movie side pulled in)
@@ -114,6 +114,20 @@ function atlasFor(n) {
   return atlases[n];
 }
 const artLoader = new THREE.TextureLoader();
+// covers land one by one (off the network, when they're not embedded): re-uploading a whole atlas for each would be a hitch each, so one atlas goes up at a time, a few times a second
+const atlasDirty = new Set();
+// ...and how far along they are, small in the corner till they're all in
+const coverCount = { done: 0, missing: 0 };
+const coverBar = document.createElement("div"); coverBar.id = "coverProgress";
+coverBar.style.cssText = "position:fixed;right:16px;bottom:38px;z-index:99999;pointer-events:none;color:#fff;opacity:.7;font:11px Verdana,sans-serif;text-shadow:0 1px 2px #000";
+document.body.appendChild(coverBar);
+const coverTick = setInterval(() => {
+  const a = atlasDirty.values().next().value; if (a) { atlasDirty.delete(a); a.texture.needsUpdate = true; }
+  const n = catalog.length, { done, missing } = coverCount, all = done + missing >= n;
+  coverBar.textContent = !all ? `Covers ${done + missing} / ${n}` : missing ? `${missing} cover${missing > 1 ? "s" : ""} missing` : "Covers in";
+  if (all && !atlasDirty.size) { clearInterval(coverTick); setTimeout(() => coverBar.remove(), missing ? 6000 : 1500); }
+}, 250);
+
 // full-res cover texture cache, keyed by art path — hand/table-box art gets
 // picked up and put back constantly, so avoid re-decoding the same image
 const coverTexCache = new Map();
@@ -196,16 +210,18 @@ function drawCover(tape, cell) {
   if (mv) drawMVSticker(ctx, x0 + CW - 30, y0 + 30, 25);
   tape.cell = cell;
   // real cover art from art/, painted over the placeholder once it loads
-  if (tape.art) artLoader.load(artUrl(tape.art), tex => {
+  if (!tape.art) { coverCount.missing++; return; }
+  artLoader.load(artUrl(tape.art), tex => {
     const img = tex.image;                    // TextureLoader hands back a Texture, not an <img>
     const s = Math.max((CW - 4) / img.width, (CH - 4) / img.height);
     const sw = (CW - 4) / s, sh = (CH - 4) / s;
     ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x0 + 2, y0 + 2, CW - 4, CH - 4);
     if (mv) drawMVSticker(ctx, x0 + CW - 30, y0 + 30, 25);
-    a.texture.needsUpdate = true;
+    atlasDirty.add(a);
     tape.sideMat = sideMatFor(img);
     for (const c of [tape, ...(tape.copies || [])]) paintBody(c);   // art usually lands after the shelves are built
-  }, undefined, () => {});
+    coverCount.done++;
+  }, undefined, () => { coverCount.missing++; });
 }
 catalog.forEach((tape, i) => drawCover(tape, i + 1));                          // cell 0 reserved
 atlases.forEach(a => a.texture.needsUpdate = true);
@@ -443,7 +459,7 @@ const WALL_RUNS = [
   { x: WALL_L + 0.1, z: 8.1, ry: 0, bays: 12 },                     // register (Movies) wall, front → back, just past the snack center
   { x: WALL_L + 0.1 + BAY.depth, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 2 },   // back wall, left of the lounge
   { x: BOH_DOORS.store + BOH_OPENING_W / 2 + 0.01, z: STORE.z - 0.1, ry: Math.PI / 2, bays: 2 },   // back wall, past the back-hall opening beside the lounge
-  { x: STORE.x - 0.1, z: 26.8, ry: Math.PI, bays: 11 },             // far wall, back → front, stopping short of the opening and the kids section
+  { x: STORE.x - 0.1, z: STORE_EXIT.z0 - 0.3, ry: Math.PI, bays: 11 },   // far wall, back → front, from just this side of the emergency exit, stopping short of the kids section
 ];
 const CENTER = { corridor: 1.5, westBays: 2, eastBays: 4, z0: 8.6, gap: 2.0, bands: 4 };   // corridor = half-width of the door→lounge walkway; z0 = front band's door-side face
 const KIDS = { bandX: [4.75, 8.15], z0: 1.1, bays: 4, x0: 1.95, x1: STORE.x - 0.1, z1: 8.3 };   // bandX = each band's center plane; x0..x1/z0..z1 = the carpet
@@ -471,6 +487,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   const isKids = t => ["Family & Kids", "Kids & Educational", "Holiday"].includes(t.category)
     || (t.category === "Animation" && !ADULT_TOON.test(t.title)) || (t.category === "Anime" && KID_ANIME.test(t.title));
   const isWall = t => isMovie(t) && WALL_GENRES.includes(t.category) && yearOf(t) >= NEW_FROM;
+  const isMV = t => t.category === "MonsterVision";
 
   // ---- shelving helpers ----
   const capOf = spec => spec.rows * spec.perRow;
@@ -486,6 +503,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     const cap = capOf(spec), byCat = new Map();
     for (const t of list) { if (!byCat.has(t.category)) byCat.set(t.category, []); byCat.get(t.category).push(t); }
     const cats = [...order.filter(c => byCat.has(c)), ...[...byCat.keys()].filter(c => !order.includes(c))];   // anything unlisted goes last
+    if (!cats.length) return {};                       // nothing for this block in this library: no shelves
     const rowsFor = n => Math.ceil(n / spec.perRow);
     const units = [], riding = new Set();
     for (const c of cats) {
@@ -542,7 +560,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     // then every run reads left→right, and consecutive runs join end-to-end:
     // a genre snakes down one side of a band and back up the other
     let at = 0;
-    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec); });
+    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec, f.cat); });
     const cats = [...new Set(chain.flatMap(f => f.tapes.filter(Boolean).map(t => t.category)))];
     const tag = tagPlane(cats, frontAt(1.1 + cats.length * 0.08, spec) - 0.04, 0.14);   // fits the wedge where its top edge is
     endTags.push({ mat: tag.material, cats, w: frontAt(1.1 + cats.length * 0.08, spec) - 0.04, lineH: 0.14 });   // (the clone at the far end shares this material)
@@ -557,12 +575,16 @@ const wallSpans = [];                        // what the wall runs cover, for li
   const wallBays = WALL_RUNS.reduce((a, r) => a + r.bays, 0);
   const weight = t => Math.pow(votesOf(t) + 1, 0.3);
   const byGenre = WALL_GENRES.map(g => catalog.filter(t => t.category === g && isWall(t)));   // catalog's already in shelf (alphabetical) order
-  // bays per genre by its share of the total pull (largest remainder), at least enough for one of each
-  const pull = byGenre.map(ts => ts.reduce((a, t) => a + weight(t), 0)), pullSum = pull.reduce((a, b) => a + b, 0);
+  // each genre gets enough bays for one of each, and the spare ones go by its share of
+  // the total pull. A genre with no titles gets none
+  const pull = byGenre.map(ts => ts.reduce((a, t) => a + weight(t), 0)), pullSum = pull.reduce((a, b) => a + b, 0) || 1;
   const ideal = pull.map(p => p / pullSum * wallBays);
-  const bays = ideal.map((v, i) => Math.max(Math.ceil(byGenre[i].length / CAP), Math.floor(v)));
-  for (const i of ideal.map((v, i) => i).sort((a, b) => (ideal[b] % 1) - (ideal[a] % 1)))
-    if (bays.reduce((a, b) => a + b, 0) < wallBays) bays[i]++;
+  const bays = byGenre.map(ts => Math.ceil(ts.length / CAP));
+  if (pull.some(p => p > 0)) for (let spare = wallBays - bays.reduce((a, b) => a + b, 0); spare > 0; spare--) {
+    let most = -1;
+    for (let i = 0; i < bays.length; i++) if (byGenre[i].length && (most < 0 || ideal[i] - bays[i] > ideal[most] - bays[most])) most = i;
+    bays[most]++;
+  }
   // copies per title fill its genre's bays exactly: ∝ weight, 1..MAX_COPIES
   const copiesFor = (ts, slots) => {
     const w = ts.map(weight), calc = s => w.map(x => Math.max(1, Math.min(MAX_COPIES, Math.round(s * x))));
@@ -604,7 +626,14 @@ const wallSpans = [];                        // what the wall runs cover, for li
   const kidsList = catalog.filter(isKids);
   // snake: each band's entrance-side (-x) face front→back, around the back endcap, its far (+x) face back→front, then the next band
   const kidsRuns = KIDS.bandX.flatMap(bx => [Math.PI, 0].map(ry => ({ x: bx, z: KIDS.z0, ry, dx: 0, dz: 1, bays: KIDS.bays })));
-  const kidsBays = layBlock(kidsList, ["Family & Kids", "Holiday", "Kids & Educational", "Animation", "Anime"], kidsRuns, SHORT);
+  // a thin section's stocked out with copies of its best, side by side, till it's most of the way full
+  const copiesToFill = (ts, slots) => {
+    const want = Math.min(Math.floor(slots * 0.7) - ts.length, ts.length * (MAX_COPIES - 1)), n = new Map(ts.map(t => [t, 1]));
+    const best = [...ts].sort((a, b) => votesOf(b) - votesOf(a));
+    for (let i = 0; i < want; i++) { const t = best[i % best.length]; n.set(t, n.get(t) + 1); }
+    return ts.flatMap(t => [t, ...Array.from({ length: n.get(t) - 1 }, () => { const c = newCopy(t); (t.copies ||= []).push(c); return c; })]);
+  };
+  const kidsBays = layBlock(kidsList, ["Family & Kids", "Holiday", "Kids & Educational", "Animation", "Anime"], kidsRuns, SHORT, {}, copiesToFill);
   {                                                  // the kids' own carpet: arcade-style confetti on deep purple
     const kidsTex = makeTexture((ctx, W, H) => {
       ctx.fillStyle = "#2a1660"; ctx.fillRect(0, 0, W, H);
@@ -638,7 +667,6 @@ const wallSpans = [];                        // what the wall runs cover, for li
   }
 
   // ---- center: older movies west of the corridor, TV east ----
-  const isMV = t => t.category === "MonsterVision";
   const centerList = catalog.filter(t => !isKids(t) && !isWall(t) && !isMV(t));
   const classics = centerList.filter(isMovie), tv = centerList.filter(t => !isMovie(t));
   const bandStep = 2 * SHORT.depth + CENTER.gap;
@@ -648,7 +676,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   // TV east of the corridor, all four bands; grown-up Animation right next to Anime
   const TV_ORDER = ["Sitcoms", "Classic Sitcoms", "Sketch Comedy & Late Night", "Broadcast Blocks", "Drama & Adventure",
     "Horror & Anthology", "Animation", "Anime", "Reality TV"];
-  const tvBays = layBlock(tv, TV_ORDER, blockRuns([0, 1, 2, 3], CENTER.corridor, 1, CENTER.eastBays), SHORT, { "Broadcast Blocks": "Music" });
+  const tvBays = layBlock(tv, TV_ORDER, blockRuns([0, 1, 2, 3], CENTER.corridor, 1, CENTER.eastBays), SHORT, { "Broadcast Blocks": "Music" }, copiesToFill);
   // classics west of the corridor, in its back two bands — the front band is
   // the candy aisle, and the one behind it stays open floor by the register
   const classicsFrom = 2;
@@ -709,7 +737,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   const MV_SPEC = { ...SHORT, rows: 4, boardY: [0.12, 0.45, 0.78, 1.11] };
   const mvBays = layBlock(catalog.filter(isMV), ["MonsterVision"],
     [{ x: -CENTER.corridor, z: bandZ(1), ry: -Math.PI / 2, dx: -1, dz: 0, bays: CENTER.westBays }], MV_SPEC);
-  {                                                        // topper: MONSTERVISION in green on black, facing into the store
+  if (catalog.some(isMV)) {                                // topper: MONSTERVISION in green on black, facing into the store
     const cx = -CENTER.corridor - CENTER.westBays * BAY.len / 2, z = bandZ(1);
     mvTopper = new THREE.Group(); scene.add(mvTopper);
     mvTopper.add(box(2.5, 0.5, 0.06, mat.dark, cx, SHORT.h + 0.25, z + 0.03));
@@ -782,6 +810,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
     ["CLASSICS", (westEnd - CENTER.corridor) / 2, CENTER.z0 + classicsFrom * bandStep - 0.5, 2.6],
     ["TV SHOWS", (eastEnd + CENTER.corridor) / 2, CENTER.z0 - 0.5, 2.6],
   ]) {
+    hangers.push({ x0: x - w / 2, x1: x + w / 2, z0: z - 0.08, z1: z + 0.08, y0: 2.65, y1: 3.25, name: txt });
     const tex = textPlane(txt, w, 0.6).material.map;
     const signMat = new THREE.MeshLambertMaterial({ map: tex });
     const front = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.6), signMat);

@@ -35,6 +35,24 @@ check("settings save (sensitivity)", (await ev(() => JSON.parse(localStorage.get
 console.log("\nsandbox: the counter");
 await freshStore("sandbox");
 check("in the store, no errors", errors.length === 0, errors[0]);
+const hop = await ev(() => { const J = __t.jump, P = __t.player, was = { x: P.x, z: P.z }; const run = (vx, vz) => { Object.assign(P, { x: 0, z: -3, airH: 0 }); J.vx = vx; J.vz = vz; J.recover = 0; const started = __t.jumpStart(), again = __t.jumpStart(); let peak = 0, t = 0; while (J.air && t < 3) { __t.jumpTick(1 / 60); t += 1 / 60; peak = Math.max(peak, P.airH); } return { started, again, peak: +peak.toFixed(2), air: +t.toFixed(2), dist: +Math.hypot(P.x, P.z + 3).toFixed(2), ground: P.airH }; };
+  const standing = run(0, 0), running = run(-5.2, 0), walking = run(-3.1, 0); J.recover = 0; J.vx = J.vz = 0; Object.assign(P, was, { airH: 0 }); return { standing, walking, running }; });
+check("a jump's a person's: about 48 cm up, 0.6 s in the air, no jumping off thin air, back down on the ground; a walk carries about 1.8 m, a run about 3", hop.standing.started && !hop.standing.again && hop.standing.peak > 0.44 && hop.standing.peak < 0.52 && hop.standing.air > 0.55 && hop.standing.air < 0.7 && hop.standing.dist < 0.01 && hop.standing.ground === 0 && hop.walking.dist > 1.5 && hop.walking.dist < 2.1 && hop.running.dist > 2.6 && hop.running.dist < 3.5, JSON.stringify(hop));
+const pit = await ev(() => { const P = __t.player, was = { x: P.x, z: P.z, airH: P.airH }; Object.assign(P, { x: -3, z: 42, airH: 0 }); const low = __t.colliders.filter(c => c.y1 < 0), walkThrough = low.filter(c => !blocked((c.x0 + c.x1) / 2, (c.z0 + c.z1) / 2)).length; Object.assign(P, was); return { low: low.length, walkThrough }; });
+check("the theater's front rows and stage, below ground level: still solid", pit.low >= 4 && pit.walkThrough === 0, JSON.stringify(pit));
+const wheel = await ev(() => { const W = __t.WHEEL, h0 = __t.shift.h, pick = (i, n = 11) => { __t.wheelOpen(); const a = -Math.PI / 2 + i * Math.PI * 2 / n; __t.wheelMouse(Math.cos(a) * 200, Math.sin(a) * 200); return __t.wheelClick(0); };
+  const noon = (pick(1), __t.shift.h), snow = (pick(8), { kind: __t.WX.kind, cover: __t.WX.cover }), clear = (pick(5), { k: __t.WX.k, cover: __t.WX.cover }); __t.wheelOpen(); __t.wheelMouse(0, -200); __t.wheelClick(2); const cancelled = __t.shift.h === noon && !W.open; __t.shift.h = h0; return { noon, snow, clear, cancelled, open: W.open }; });
+check("the time and weather wheel: pick an hour and it's that hour; pick snow and it's snowed; clear clears it; right-click changes nothing", wheel.noon === 12 && wheel.snow.kind === "snow" && wheel.snow.cover > 0.5 && wheel.clear.k === 0 && wheel.clear.cover === 0 && wheel.cancelled && !wheel.open, JSON.stringify(wheel));
+const storeExit = await ev(() => { const E = __t.storeExit, P = __t.player, zc = (E.shut.z0 + E.shut.z1) / 2, was = { x: P.x, z: P.z }, run = (t, near) => { for (let i = 0; i < t * 60; i++) __t.exitDoorTick(E, 1 / 60, near); };   // (stepped by hand: in software the frames are too slow to wait on)
+  P.x = 10.5; P.z = zc; const shut = blocked(10.75, zc); __t.fireExitUse("out", E); const outside = E.open; __t.fireExitUse("in", E); run(1, true); const open = E.a > 0.6, through = !blocked(10.75, zc);
+  run(5, false); const closed = E.a === 0 && !E.open && colliders.includes(E.shut); Object.assign(P, was); return { shut, outside, open, through, closed }; });
+check("the store's emergency exit: shut, it's a wall; no opening it from outside; the bar opens it; it pulls itself shut behind you", storeExit.shut && !storeExit.outside && storeExit.open && storeExit.through && storeExit.closed, JSON.stringify(storeExit));
+const heard = await ev(() => { const at = (x, z, room) => +__t.tvHear(x, z, room ?? __t.hearRoomAt(x, z)).k.toFixed(3), fx = __t.fireExit.a, C = roof.cine, on = C.on;
+  const r = { couch: at(0, 23), storeFront: at(-5, 2), hall: at(5, 29), lobbyShut: at(-3, 32), theater: at(-3, 40), lot: at(0, -8), road: at(0, -17), alley: at(15, 30), backRoad: at(0, 51), tony: at(17, 6), roofOff: at(5, 15, "roof") };
+  __t.fireExit.a = 1; r.byExitOpen = at(-10, 45.4); r.farFromExitOpen = at(-14, 20); __t.fireExit.a = fx;
+  C.on = true; const s = C.sound.getWorldPosition(new THREE.Vector3()); r.roofBySet = at(s.x + 1, s.z, "roof"); r.groundBelowRoof = at(s.x > 2 ? 12 : -9, s.z); r.lotRoofOn = at(0, -17); C.on = on; return r; });
+check("a tape's sound carries like sound: all through the store and the theater, up on the roof with the projector on, a little out the open exit, next to nothing anywhere else",
+  heard.couch > 0.7 && heard.storeFront > 0.1 && heard.hall > 0.08 && heard.theater > 0.7 && heard.lobbyShut < 0.15 && heard.lot < 0.01 && heard.road < 0.01 && heard.alley < 0.02 && heard.backRoad < 0.02 && heard.tony < 0.005 && heard.roofOff < 0.01 && heard.byExitOpen > 0.1 && heard.farFromExitOpen < 0.05 && heard.roofBySet > 0.5 && heard.groundBelowRoof < 0.3 && heard.lotRoofOn < 0.1, JSON.stringify(heard));
 check("the back ladder: out of reach from the ground till it's kicked down from the roof, then a way up", await ev(() => {
   const B = __t.roof.back, P = __t.player, was = { x: P.x, z: P.z };
   P.onRoof = false; __t.backLadderE(); const no = !__t.roof.climb && !B.down;
@@ -136,14 +154,32 @@ check("trash: a full bin spills, bag it, down the chute", await ev(() => { const
   return spilled && bagged && !__t.bagCarry.length && __t.shift.stats.score === s0 + 10; }));
 
 console.log("\nsandbox: the restroom");
-await ev(() => { const d = __t.doors.find(d => !d.push && Math.abs(d.c - 5.0) < 0.1); if (d && !d.open) __t.toggleDoor(d);
-  __t.player.x = 5.05; __t.player.z = 33.2; const dx = 0, dy = 0.41 - 1.65, dz = 34.3 - 33.2; __t.player.yaw = Math.atan2(-dx, -dz); __t.player.pitch = Math.atan2(dy, Math.hypot(dx, dz)); });
+await ev(() => { for (const c of [5.0, 5.25]) { const d = __t.doors.find(d => !d.push && Math.abs(d.c - c) < 0.1); if (d && !d.open) __t.toggleDoor(d); }
+  __t.player.x = 5.25; __t.player.z = 33.2; const dx = 0, dy = 0.41 - 1.65, dz = 34.3 - 33.2; __t.player.yaw = Math.atan2(-dx, -dz); __t.player.pitch = Math.atan2(dy, Math.hypot(dx, dz)); });
 await page.waitForFunction(() => document.getElementById("tvHint").textContent.includes("toilet"), null, { timeout: 120000 }).catch(() => {});
 await page.keyboard.press("KeyE"); await page.waitForTimeout(1500);
 check("sit on the toilet: seated, pants down", await ev(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return __t.seated() && !!__t.seatAt()?.toilet && hip.material !== hip.userData.pantsM; }));
 await page.keyboard.press("KeyE");
 await page.waitForFunction(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return !__t.seated() && hip.material === hip.userData.pantsM; }, null, { timeout: 10000 }).catch(() => {});   // (a frame or two: slow on the software renderer)
 check("stand back up: pants up", await ev(() => { const hip = __t.meBody().rig.legs[0].hip.children.find(m => m.isMesh); return !__t.seated() && hip.material === hip.userData.pantsM; }));
+console.log("\nsandbox: the manager's office");
+check("the break room's half its depth, the office behind it, on its own switch", await ev(() => __t.roomAt(8, 32) === "breakroom" && __t.roomAt(8, 33) === "office" && __t.zoneOn.office === true));
+check("everyone can get to the lunch chairs and both rooms' bins from the hall", await ev(() => { const g = __t.navGrid([]), from = [8.55, 29.3];
+  return [...__t.LUNCH_CHAIRS.map(c => c.stand), __t.trashBins.breakroom.stand, __t.trashBins.office.stand].every(s => __t.navPath(g, ...from, s.x, s.z)); }));
+check("the blinds tilt open and shut, a pane at a time, and a save keeps them", await ev(() => { const [a, b] = __t.officeFx.blinds; __t.blindsToggle(a); const s = __t.officeSave();
+  const kept = s.blinds[0] === true && s.blinds[1] === false; __t.officeLoad({ ...s, blinds: [false, true] }); const back = !a.open && a.k === 0 && b.open && b.k === 1; __t.officeLoad({ ...s, blinds: [false, false] }); return kept && back; }));
+check("the switcher: a camera to the spot monitor, the cycle, the power", await ev(() => { const S = __t.officeFx.sec, press = k => __t.secPress(S.btns.find(b => b.kind === k)); press(2); const spot = S.spot === 2 && !S.seq; press("seq"); const seq = S.seq; press(0); const off = S.spot === 0 && !S.seq; press("power"); const dark = !S.power; press(1); const stuck = S.spot === 0; press("power"); return spot && seq && off && dark && stuck && S.power; }));
+check("light through the office's window: as far as the blinds are open, none when they're shut", await ev(() => { const N = () => (__t.spillTick(), TVU.uSpillN.value), was = __t.zoneOn.breakroom; __t.officeLoad({ blinds: [false, false] }); __t.setZone("breakroom", false); const shut = N(); __t.officeLoad({ blinds: [true, true] }); const open = N(); __t.officeLoad({ blinds: [false, false] }); __t.setZone("breakroom", was); return open === shut + 1; }));
+check("what's low catches your legs; a wall doesn't", await ev(() => { const p = __t.player, B = __t.trashBins.breakroom, c = __t.colliders.find(k => k.y1 === 0.55 && Math.abs(k.x0 + 0.17 - B.x) < 0.01); return __t.lowBlocker(c.x0 + 0.04, c.z0 - p.r + 0.01) === c && __t.lowBlocker(B.x, 32.4) === null && __t.lowBlocker(8.1, 31.2) === null; }));
+check("a trip goes over headfirst, the way you were going; a knock goes over backwards; neither lands inside anything", await ev(() => { const p = __t.player, was = { x: p.x, z: p.z, yaw: p.yaw, pitch: p.pitch }, B = __t.trashBins.breakroom;
+  const run = (x, z, yaw, kx, kz, trip) => { Object.assign(p, { x, z, yaw }); __t.fallClear(); __t.fallStart("t", kx, kz, trip ? {} : null); for (let i = 0; i < 90; i++) __t.fallTick(0.016); const f = __t.fallNow(), out = { stage: f.stage, a: f.a, prone: f.prone, x: p.x, z: p.z, feet: [f.fX, f.fZ, f.fY], ux: f.ux, uz: f.uz }; __t.fallClear(); return out; };
+  const clear = r => { const L = __t.FALL.long; for (let d = 0.15; d < L * Math.sin(r.a); d += 0.1) { const s = __t.fallSurface(r.feet[0] + r.ux * d, r.feet[1] + r.uz * d, 0.1); if (s > r.feet[2] + d / Math.tan(r.a) + 0.12) return false; } return true; };
+  const open = run(8.1, 31.2, -Math.PI / 2, 1, 0, true), knock = run(8.1, 31.2, Math.PI / 2, 0, 0, false), bin = run(B.x, B.z - 0.5, Math.PI, 0, 1, true), wall = run(8.1, 30.3, Math.PI, 0, -1, true), table = run(10.0, 31.25, 0, 0, -1, true);
+  Object.assign(p, was); return open.stage === "down" && open.prone && open.ux > 0.5 && !knock.prone && knock.a > 1.2 && [open, knock, bin, wall, table].every(clear); }));
+check("a trip goes flying clean over what tripped you, and comes down past it", await ev(() => { const p = __t.player, was = { x: p.x, z: p.z, yaw: p.yaw, pitch: p.pitch }, box = { x0: 8.3, x1: 8.6, z0: 30.75, z1: 31.25, y1: 0.55 }; fallTops.push(box); Object.assign(p, { x: 8.1, z: 31, yaw: -Math.PI / 2 }); __t.fallClear(); __t.fallStart("t", 1, 0, {}); let top = 0; for (let i = 0; i < 90; i++) { __t.fallTick(0.016); const f = __t.fallNow(); if (f.fX > 8.25 && f.fX < 8.65) top = Math.max(top, f.fY); } const f = __t.fallNow(), r = { x: f.fX, y: f.fY, stage: f.stage }; __t.fallClear(); fallTops.pop(); Object.assign(p, was); return r.stage === "down" && r.x > 8.6 && r.y < 0.05 && top > 0.55; }));
+check("the office door's the last one made (a save keeps them by their order)", await ev(() => __t.doors.at(-1).c === 6.845));
+check("the monitors had their pictures from the loading screen, and go on drawing while they're on screen", await ev(async () => { const S = __t.officeFx.sec, p = __t.player, was = { x: p.x, z: p.z, yaw: p.yaw, pitch: p.pitch }, n0 = S.drawn; Object.assign(p, { x: 9.4, z: 33.55, yaw: -Math.PI / 2, pitch: 0 });
+  const t0 = performance.now(); while (S.drawn === n0 && performance.now() - t0 < 30000) await new Promise(r => setTimeout(r, 100)); const drew = S.drawn > n0; Object.assign(p, was); return n0 >= S.cams.length && drew; }));
 
 console.log("\nsimulation: starts bare");
 await freshStore("simulation");
@@ -350,7 +386,8 @@ check("the staff get to know you a day at a time: once a day each, your name by 
   __t.shift.day = day + 1; __t.cmStaffTalk(e); const named = __t.cmStaffOf(e).k === 2 && document.getElementById("toast").textContent.includes(me);
   __t.cmStaffTalk(e); const pick = __t.cm.rec.day === __t.shift.day; __t.cmStaffTalk(e); const chat = document.getElementById("toast").textContent.startsWith(`${e.first}: "`);
   __t.shift.day = day; return once && named && pick && chat && __t.cmStaffTip(e) === "knows your name"; }));
-await page.waitForFunction(() => __t.staff.filter(e => e.c && !e.leaving).length >= 2, null, { timeout: 300000 }).catch(() => {});
+await ev(() => { __t.shift.h = 15; for (let i = 0; i < 30; i++) __t.empTick(0.1); });   // (the overdue check above left it at the morning, with one on the clock and the clock not running: mid-afternoon, and the crew come in)
+await page.waitForFunction(() => __t.staff.filter(e => e.c && !e.leaving).length >= 2, null, { timeout: 60000 }).catch(() => {});
 check("a favor for one you're friendly with: a message passed on to the other, and a tip about the trail for it", await ev(() => {
   const day = __t.shift.day, [a] = __t.staff.filter(e => e.c && !e.leaving); __t.shift.day = day | 1;
   Object.assign(__t.cmStaffOf(a), { k: 3, named: true, day: __t.shift.day }); __t.cm.rec.day = __t.shift.day; __t.cm.fav = null; __t.cm.favDay = 0;

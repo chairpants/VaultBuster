@@ -46,7 +46,7 @@ const doorGold = new THREE.MeshPhongMaterial({ color: 0xc9a227, specular: 0xffe2
 const doorGlass = new THREE.MeshLambertMaterial({ color: 0x8a9aae, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
 const PORT = { y: 1.6, r: 0.17 };
 const theaterDoorMat = new THREE.MeshLambertMaterial({ color: 0x5a1020 });   // maroon
-function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [], push = false, porthole = false, w = DOOR_W }) {
+function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs = [], push = false, porthole = false, w = DOOR_W, h = DOOR_H, y0 = 0, stall = false, closer = false }) {   // closer: one on a closer, it swings itself shut once nobody's in its way (doorCloserTick)   // stall: a toilet stall's, off the floor, no frame, in a thin partition
   const W = w, base = alongX ? 0 : -Math.PI / 2;   // leaf is built along local x; local +z is world +z (alongX) or world -x
   const toLocal = side => alongX ? side : -side;
   const pivot = new THREE.Group();
@@ -63,8 +63,8 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const glass = new THREE.Mesh(new THREE.CircleGeometry(PORT.r, 32), doorGlass); glass.position.set(lx, PORT.y, 0); pivot.add(glass);
     if (push) aimBlockers.push(glass);          // you can see through it, not reach through it
   } else {
-    leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, DOOR_H - 0.02, 0.045), leafMat);
-    leaf.position.set(lx, DOOR_H / 2, 0); pivot.add(leaf);
+    leaf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.03, h - 0.02, stall ? 0.03 : 0.045), leafMat);
+    leaf.position.set(lx, y0 + h / 2, 0); pivot.add(leaf);
   }
   const hx = -hinge * (W - 0.12);               // hardware sits at the latch edge
   if (push) for (const f of [-1, 1]) {          // both faces: gold border inset from the edge, brass kick plate, a push plate where the lever would be
@@ -91,15 +91,15 @@ function makeDoor({ at, c, alongX, hinge, swing, locked = false, leafMat, signs 
     const f = toLocal(side);
     sg.position.set(lx, porthole ? 1.24 : 1.52, f * 0.028); if (f < 0) sg.rotation.y = Math.PI; pivot.add(sg);   // 5 mm proud of the leaf face (under the window, if it has one)
   }
-  casing(at, c, alongX, W);
-  const t = WALL_T / 2 + WALL_PAD, hp = c + hinge * W / 2, sw = swing * W;
+  if (!stall) casing(at, c, alongX, W);
+  const t = stall ? 0.03 : WALL_T / 2 + WALL_PAD, hp = c + hinge * W / 2, sw = swing * W;
   const shut = alongX ? { x0: c - W / 2, x1: c + W / 2, z0: at - t, z1: at + t } : { x0: at - t, x1: at + t, z0: c - W / 2, z1: c + W / 2 };
   const openBox = alongX ? { x0: hp - 0.03, x1: hp + 0.03, z0: Math.min(at, at + sw), z1: Math.max(at, at + sw) }
                          : { x0: Math.min(at, at + sw), x1: Math.max(at, at + sw), z0: hp - 0.03, z1: hp + 0.03 };
   // local z the leaf's free edge heads toward = toLocal(swing); rotating by a
   // moves it to local z = hinge * sin(a) * W/2, so the sign of a follows
   const d = { pivot, base, a: 0, openA: Math.PI / 2 * hinge * toLocal(swing), open: false, locked, rattle: 0, shut, openBox,
-    push, at, c, alongX, hinge, v: 0, side: 0 };
+    push, at, c, alongX, hinge, stall, closer, W, swing, v: 0, side: 0 };
   if (!push) { colliders.push(shut); leaf.userData.door = d; aimables.push(leaf); }   // a push door never blocks: it gets out of your way
   else aimBlockers.push(leaf);                  // ...but you can't reach through it (it goes wherever the leaf swings)
   doors.push(d);
@@ -130,7 +130,7 @@ storefront(1.8, XR, 0);                                                   // fro
 box(3.6, H - 2.6, T, mat.wall, 0, 2.6 + (H - 2.6) / 2, 0);                 // above doors
 wall(XL - T / 2, XR + T / 2, Z, true, H, mat.wall, [{ c: BOH_DOORS.store, w: BOH_OPENING_W }]);   // back, with the open way through to the back hall
 wall(0, Z, XL, false, H, mat.wall);                                       // left
-wall(0, Z, XR, false, H, mat.wall);                                       // right
+wall(0, Z, XR, false, H, mat.wall, [{ c: (STORE_EXIT.z0 + STORE_EXIT.z1) / 2, w: STORE_EXIT.z1 - STORE_EXIT.z0 }]);   // right, with the emergency exit in it (the door: store/theater.js)
 colliders.push(frontWallBox = { x0: XL, x1: XR, z0: -T / 2, z1: T / 2 + WALL_PAD });     // front: glass + closed doors, all solid (a customer goes through the right-hand door: see blocked)
 // blue stripe around the walls at eye height — back and sides only; the
 // front is glass now, and a stripe there ran straight across the windows
@@ -198,8 +198,17 @@ wall(HZ, BZ1 + T / 2, BX0, false, BH, mat.wall);                          // wes
 wall(BZ0, HZ, BX0, false, BH, mat.wall, [BOH_DOORS.future]);              // west, hall part: the future door
 wall(BZ0, BZ1 + T / 2, XR, false, BH, mat.wall);                          // east
 wall(BX0, XR, BZ1, true, BH, mat.wall);                                   // rear
-wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.restroom, BOH_DOORS.breakroom]);   // hall | rooms
-wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // restroom | break room
+wall(BX0, XR, HZ, true, BH, mat.wall, [BOH_DOORS.restroomF, BOH_DOORS.restroom, BOH_DOORS.breakroom]);   // hall | rooms
+wall(HZ, BZ1, SX, false, BH, mat.wall);                                   // restrooms | break room
+wall(HZ, BZ1, BOH.rrX, false, BH, mat.wall);                              // women's | men's
+// break room | manager's office: the door (made in store/office.js), then the window, its sill and head solid wall, the opening glazed there too
+wall(SX, OFFICE_WIN.x0, BOH.officeZ, true, BH, mat.wall, [{ c: BOH_DOORS.office, w: OFFICE_DOOR_W }]);
+wall(OFFICE_WIN.x1, XR, BOH.officeZ, true, BH, mat.wall);
+{
+  const w = OFFICE_WIN, c = (w.x0 + w.x1) / 2, len = w.x1 - w.x0, t = WALL_T / 2 + WALL_PAD;
+  aimBlockers.push(box(len, w.sill, WALL_T, mat.wall, c, w.sill / 2, BOH.officeZ), box(len, BH - w.head, WALL_T, mat.wall, c, (w.head + BH) / 2, BOH.officeZ));
+  colliders.push({ x0: w.x0, x1: w.x1, z0: BOH.officeZ - t, z1: BOH.officeZ + t, y1: BH });
+}
 wall(BZ0, HZ, CLOSET.x0, false, BH, mat.wall, [{ c: BOH_DOORS.closet, w: CLOSET.doorW }]);   // across the hall's end: the janitor's closet door
 const vctTex = makeTexture((ctx, W, H) => {   // speckled vinyl composition tile, 8 x 8 30 cm squares per repeat
   const n = 8, s = W / n, cols = ["#d8d2c3", "#cec7b5", "#e1dccf", "#c9c3b4"];
@@ -220,7 +229,7 @@ const floorPatch = (tex, tileM, x0, x1, z0, z1) => {
 };
 floorPatch(vctTex, 2.4, BX0, CLOSET.x0, BZ0, HZ);                         // hall — starts right where the store's carpet ends, mid-opening
 floorPatch(bathTex, 0.8, BX0, SX, HZ, BZ1);                               // restroom
-floorPatch(vctTex, 2.4, SX, XR, HZ, BZ1);                                 // break room
+floorPatch(vctTex, 2.4, SX, XR, HZ, BOH.officeZ);                         // break room (the office has its carpet: store/office.js)
 // ceilings: the hall gets its own, its grid shifted so a row of tiles runs down the middle between
 // the walls (the hall lights sit in it) with a sliver of tile either side; the rooms keep the store's grid
 const hallMid = (BZ0 + WALL_T / 2 + HZ - WALL_T / 2) / 2, rowStart = hallMid - CEIL_TILE.z / 2;
@@ -236,10 +245,12 @@ casing(Z, BOH_DOORS.store, true, BOH_OPENING_W);
 const painted = new THREE.MeshLambertMaterial({ color: 0xd9d4c7 });
 makeDoor({ at: HZ, c: BOH_DOORS.breakroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,   // (made in this order: a save keeps the doors by it)
   signs: [{ text: "BREAK ROOM", side: -1 }] });
-makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted,
-  signs: [{ text: "RESTROOM", side: -1 }] });
+makeDoor({ at: HZ, c: BOH_DOORS.restroom, alongX: true, hinge: 1, swing: 1, leafMat: painted, closer: true,
+  signs: [{ text: "MEN", side: -1 }] });
 makeDoor({ at: BX0, c: BOH_DOORS.future, alongX: false, hinge: 1, swing: -1, leafMat: theaterDoorMat, push: true, porthole: true,
   signs: [{ text: "THEATER", side: 1 }] });
-makeDoor({ at: CLOSET.x0, c: BOH_DOORS.closet, alongX: false, hinge: 1, swing: -1, w: CLOSET.doorW, leafMat: painted,   // narrow; hinged on the break room's side, swings out into the hall
+makeDoor({ at: CLOSET.x0, c: BOH_DOORS.closet, alongX: false, hinge: -1, swing: -1, w: CLOSET.doorW, leafMat: painted,   // narrow; hinged on the store's side, swings out into the hall
   signs: [{ text: "JANITOR", side: -1 }] });
+makeDoor({ at: HZ, c: BOH_DOORS.restroomF, alongX: true, hinge: 1, swing: 1, leafMat: painted, closer: true,
+  signs: [{ text: "WOMEN", side: -1 }] });
 

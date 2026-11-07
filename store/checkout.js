@@ -327,8 +327,14 @@ window.VaultAim = {
 function pickHover() {
   if (arcade.on) { $("hoverTip").style.display = "none"; highlight.visible = false; return; }   // (playing Space Invaders: nothing else to aim at)
   aimPostit = null; aimNotepad = false;
-  hovered = null; aimStool = false; aimPickup = null; aimTony = null; aimBed = false; aimFireExit = null; cm.comboOf = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
+  hovered = null; aimStool = false; aimPickup = null; aimTony = null; aimBed = false; aimFireExit = null; cm.comboOf = null; aimBlinds = null; aimSec = null; aimTV = false; aimLamp = null; aimCouch = false; aimReturns = false; aimSnack = null; aimFlap = null; aimCooler = false; aimPop = null; aimTrash = false; aimDoor = null; aimPOS = false; aimSlot = false; aimRewinder = null; aimBell = false; aimDesens = false; aimCutout = false; aimCustomer = false; aimLock = false; aimEmp = false; aimSwitch = null; aimDrawer = false; aimExit = false; aimPrinter = false; aimStockSlot = null; aimCupboard = null; aimBox = null; aimMess = null; aimStray = null; aimPhone = false; aimHolds = false; aimBoard = false; aimMove = null; aimToilet = false; aimSink = false; aimTowels = false; aimBin = null; aimBag = null; aimChute = false; aimTool = null; aimDead = null; aimLadder = false; aimLadderHome = false;
   if (document.pointerLockElement !== canvas) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
+  if (seated && seatAt?.office && !inspecting) {  // in the manager's chair: the switcher's in reach (see onE)
+    highlight.visible = false; raycaster.setFromCamera(aimNDC, camera);
+    aimSec = raycaster.intersectObjects(aimables, false).find(h => h.distance < 2.2 && h.object.userData.secBtn)?.object.userData.secBtn || null;
+    const tip = $("hoverTip"); tip.style.display = aimSec ? "block" : "none"; if (aimSec) tip.innerHTML = secTip(aimSec);
+    return;
+  }
   if (inspecting || seated || onStool) { highlight.visible = false; $("hoverTip").style.display = "none"; return; }
   if (cmove.item) {                           // carrying a counter thing: where it'd go
     highlight.visible = false; const tip = $("hoverTip"); tip.style.display = "block";
@@ -461,7 +467,7 @@ function pickHover() {
     else if (aim?.object.userData.combo && aim.distance < 1.6) cm.comboOf = aim.object.userData.combo;
     else if (aim?.object.userData.tony && aim.distance < 2.4) aimTony = aim.object.userData.tony;
     else if (aim?.object.userData.bed && aim.distance < 2.4 && CUSTOMER) aimBed = true;
-    else if (aim?.object.userData.fireExit && aim.distance < 2.2) aimFireExit = aim.object.userData.fireExit;
+    else if (aim?.object.userData.fireExit && aim.distance < 2.2) { aimFireExit = aim.object.userData.fireExit; aimExitDoor = aim.object.userData.exitDoor || fireExit; }
     else if ((aim?.object === screenMesh && aim.distance < 4.5) || (aim?.object === theaterScreenMesh && aim.distance < 9) || (aim?.object.userData.theaterDeck && aim.distance < 3.2)) aimTV = true;
     else if (aim?.object.userData.lamp && aim.distance < 2.6) aimLamp = aim.object.userData.lamp;
     else if (aim?.object.userData.sit && aim.distance < 3.2) { aimCouch = true; aimSeatX = aim.point.x; aimSeatObj = aim.object.userData.seatPos || null; }
@@ -481,9 +487,9 @@ function pickHover() {
     else if (aim?.object.userData.phone && aim.distance < 2.4) aimPhone = true;
     else if (aim?.object.userData.holds && aim.distance < 2.4) aimHolds = true;
     else if (aim?.object.userData.jobBoard && aim.distance < 2.4) aimBoard = true;
-    else if (aim?.object.userData.flush && aim.distance < 2.2) aimToilet = true;   // the lever flushes (the rest of it you sit on)
-    else if (aim?.object.userData.sink && aim.distance < 2.2) aimSink = true;
-    else if (aim?.object.userData.towels && aim.distance < 2.2) aimTowels = true;
+    else if (aim?.object.userData.flush && aim.distance < 2.2) aimToilet = aim.object.userData.flush;   // the lever flushes (the rest of it you sit on)
+    else if (aim?.object.userData.sink && aim.distance < 2.2) aimSink = aim.object.userData.sink;
+    else if (aim?.object.userData.towels && aim.distance < 2.2) aimTowels = aim.object.userData.towels;
     else if (aim?.object.userData.coolerDoor && aim.distance < 2.6) aimCooler = true;
     else if (aim?.object.userData.popcorn && aim.distance < 2.4 && owned("popcorn")) aimPop = aim.object.userData.popcorn;
     else if (aim?.object.userData.trashBin && aim.distance < 2.4 && (heldSnack || heldPopcorn || postitHeld) && !binFull(aim.object.userData.trashBin)) aimTrash = aim.object.userData.trashBin;
@@ -500,6 +506,8 @@ function pickHover() {
     else if (aim?.object.userData.cutout && aim.distance < 2.6) aimCutout = true;
     else if (aim?.object.userData.frontLock && aim.distance < 2.2) aimLock = true;
     else if (aim?.object.userData.exitDoor && aim.distance < 2.4 && shift.h >= 23) aimExit = true;   // near close: the way home
+    else if (aim?.object.userData.blinds && aim.distance < 2.2) aimBlinds = aim.object.userData.blinds;
+    else if (aim?.object.userData.secBtn && aim.distance < 2.2) aimSec = aim.object.userData.secBtn;
     else if (aim?.object.userData.lightZone && aim.distance < 2.2) aimSwitch = aim.object.userData.lightZone;
     else if (aim?.object.userData.stool && aim.distance < 2.2) aimStool = true;
     else if (aim?.object.userData.employee && aim.distance < 2.8) aimEmp = aim.object.userData.employee;   // (the employee themself)
@@ -533,6 +541,8 @@ function pickHover() {
     else if (aimEmp) tip.innerHTML = withEmp(aimEmp, () => emp.state === "stoolSit" ? `E — give ${emp.first} a spin<div class="cat">On the stool${emp.dizzy > 0.5 ? " · looking a bit green" : ""}</div>` : emp.state === "watching" ? `${emp.first}<div class="cat">Off the clock · watching with you</div>` : emp.task === "register"
       ? (returnBin.length ? `E — ask ${emp.first} to process returns<div class="cat">${returnBin.length} in the bin · on the register</div>` : `${emp.first}<div class="cat">On the register · returns bin is empty</div>`)
       : `E — send ${emp.first} back to the register<div class="cat">Processing returns · ${returnBin.length + emp.carry.length} to go</div>`) + `<div class="cat">${empSummary(aimEmp)}</div>`;
+    else if (aimBlinds) tip.innerHTML = `E — ${aimBlinds.open ? "close" : "open"} the blinds`;
+    else if (aimSec) tip.innerHTML = secTip(aimSec);
     else if (aimSwitch) tip.innerHTML = `E — turn the ${ZONE_NAMES[aimSwitch]} lights ${zoneOn[aimSwitch] ? "off" : "on"}`
       + (switchPlate[aimSwitch].length > 1 ? `<br>Hold E — turn them all ${zoneOn[switchPlate[aimSwitch][0]] ? "off" : "on"}` : "");
     else if (aimStool) tip.innerHTML = stool.by ? `${stool.by.first}'s using the stool` : eHoldTimer ? "Lifting…" : "E — sit on the stool<br>Hold E — pick it up";
@@ -545,8 +555,9 @@ function pickHover() {
       const mine = inv.filter(e => stockMine(e, aimCupboard)).length, inHand = heldSnack && stockMine({ kind: "snack", ref: heldSnack }, aimCupboard);
       tip.innerHTML = `${aimCupboard === "drinks" ? "Drink" : "Snack"} stock${n ? `<br>E — grab what the racks need (${n} empty spot${n > 1 ? "s" : ""})` : mine ? `<br>E — put back the ${mine} you're carrying` : " · the racks are full"}${inHand ? "<br>RIGHT-CLICK — put this one back" : ""}`; }
     else if (aimBox) tip.innerHTML = `E — pick up the box: ${aimBox.name} \u00d7${aimBox.qty}`;
-    else if (aimToilet) tip.innerHTML = bath.flushT > 0 ? "Flushing…" : "E — flush";
-    else if (aimSink) tip.innerHTML = `E — turn the tap ${bath.tap ? "off" : "on"}`;
+    else if (aimToilet) tip.innerHTML = aimToilet.flushT > 0 ? "Flushing…" : "E — flush";
+    else if (aimTony) tip.innerHTML = aimTony === "order" ? (tonyOpen() ? "E — a slice, neighbor<div class=\"cat\">Tony's</div>" : "Tony's counter<div class=\"cat\">closed · open 11 AM to 11 PM</div>") : tonyOpen() ? `E — play ${TONY_GAMES[+aimTony.slice(4)][0]}<div class="cat">on the house, you know the guy</div>` : `${TONY_GAMES[+aimTony.slice(4)][0]}<div class="cat">closed · open 11 AM to 11 PM</div>`;
+    else if (aimSink) tip.innerHTML = `E — turn the tap ${aimSink.tap ? "off" : "on"}`;
     else if (aimTowels) tip.innerHTML = "E — take a paper towel";
     else if (aimBoard) tip.innerHTML = `E — the staff job board<div class="cat">${staff.map(e => `${e.first}: ${withEmp(e, () => JOBS[danaJobNow()]?.name.toLowerCase() || "free")}`).join(" · ")}</div>`;
     else if (aimPhone) tip.innerHTML = phone.ring ? "E — answer the phone" : phone.call ? "On the phone: 1 or 2 to answer them" : phone.out ? "On the phone" : `The store phone${postits.length ? `<div class="cat">${postits.length} post-it${postits.length > 1 ? "s" : ""} beside it</div>` : ""}`;

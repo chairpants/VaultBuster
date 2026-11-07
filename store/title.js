@@ -1,8 +1,41 @@
 // ---------------- pointer lock / title screen ----------------
 let started = false;
+// Browsers (Chromium on Windows above all) now and then report a mouse move that never happened, sometimes a whole run
+// of them, and the camera slams to the top of its range until the lock's taken again. So: raw input where there is
+// any (it skips the OS's handling of the pointer), a move out of all proportion to the last one is dropped, and a run
+// of those retakes the lock, unseen. Real flicks build up over several moves, so they get through. In the console,
+// mouseGuard shows how often it's fired
+const mouseGuard = { raw: true, last: 0, t: 0, runN: 0, runT: 0, relocking: false, dropped: 0, relocks: 0 };
+const MOUSE_JUMP = { min: 250, ratio: 6, gap: 150, run: 3, runGap: 500 };   // px, x the last move, ms till that's forgotten, drops in a run, ms between them
+function lockMouse() {
+  if (!mouseGuard.raw) return canvas.requestPointerLock();
+  return canvas.requestPointerLock({ unadjustedMovement: true })?.catch?.(err => {
+    if (err?.name !== "NotSupportedError") throw err;
+    mouseGuard.raw = false; return canvas.requestPointerLock();   // no raw input here: the ordinary kind
+  });
+}
+function mouseRelockFailed() {                     // couldn't get it back without a click: an ordinary pause, then
+  if (!mouseGuard.relocking) return;
+  mouseGuard.relocking = false; document.dispatchEvent(new Event("pointerlockchange"));
+}
+addEventListener("pointerlockerror", mouseRelockFailed);
+function mouseJumped(dx, dy) {                     // is this move one to ignore?
+  const g = mouseGuard, now = performance.now(), m = Math.max(Math.abs(dx), Math.abs(dy));
+  if (g.relocking) return true;
+  if (now - g.t > MOUSE_JUMP.gap) g.last = 0;
+  g.t = now;
+  if (m <= Math.max(MOUSE_JUMP.min, MOUSE_JUMP.ratio * g.last)) { g.last = m; return false; }
+  g.dropped++; g.runN = now - g.runT < MOUSE_JUMP.runGap ? g.runN + 1 : 1; g.runT = now;
+  if (g.runN >= MOUSE_JUMP.run) {
+    g.runN = 0; g.relocks++; g.relocking = true;
+    console.warn("Mouse: a run of impossible moves, retaking the pointer lock", dx, dy);
+    document.exitPointerLock();
+  }
+  return true;
+}
 $("titleScreen").addEventListener("click", e => {
   if (e.target.closest("button, #mainMenu")) return;
-  if (started || ($("mainMenu").hidden === false && titleMenu.autoPlay?.())) canvas.requestPointerLock();   // paused (or just reloaded into a store): click anywhere to go in
+  if (started || ($("mainMenu").hidden === false && titleMenu.autoPlay?.())) lockMouse();   // paused (or just reloaded into a store): click anywhere to go in
 });
 function slotInfo(n) {                           // what's in a save slot, for the menu
   try {
@@ -39,7 +72,7 @@ function titleMenu() {
   const raw = n => { try { return localStorage.getItem(slotKey(n)); } catch { return null; } };
   let autoPlay = false; try { autoPlay = sessionStorage.getItem("vaultbuster-play") === "1"; sessionStorage.removeItem("vaultbuster-play"); } catch {}
   let sel = autoPlay || SAVE || started ? SLOT : 0, step = null, target = 0;   // step: null | "copy" (pick where) | "copyOk" | "del"
-  const play = () => { autoPlay = false; canvas.requestPointerLock(); };
+  const play = () => { autoPlay = false; lockMouse(); };
   const reloadInto = (n, go) => {                  // the page into file n (and on into the store, if go)
     try { localStorage.setItem("vaultbuster-slot", String(n)); if (go) sessionStorage.setItem("vaultbuster-play", "1"); } catch {}
     location.reload();
@@ -126,10 +159,14 @@ function escClose() {                          // Escape closes whatever's open 
   if (sheet.open) { sheetToggle(); return true; }
   return false;
 }
-canvas.addEventListener("click", () => { relockOnInput = false; if (started && document.pointerLockElement !== canvas && !posTerm?.isOpen() && !shift.report && !hiring.open) canvas.requestPointerLock(); });
+canvas.addEventListener("click", () => { relockOnInput = false; if (started && document.pointerLockElement !== canvas && !posTerm?.isOpen() && !shift.report && !hiring.open) lockMouse(); });
 document.addEventListener("fullscreenchange", () => document.fullscreenElement ? navigator.keyboard?.lock?.(["Escape"]).catch(() => {}) : navigator.keyboard?.unlock?.());   // fullscreen: Escape comes to us as a key (hold it to leave fullscreen)
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
+  if (mouseGuard.relocking) {                      // (see mouseJumped: not a pause, nobody asked for this)
+    if (locked) mouseGuard.relocking = false; else lockMouse()?.catch?.(mouseRelockFailed);
+    return;
+  }
   if (!locked && (posTerm?.isOpen() || shift.report || hiring.open)) { keys.clear(); $("crosshair").hidden = true; return; }   // the mouse was freed for the terminal / the shift slip, not a pause
   if (!locked && started && escClose()) return backToStore();   // Escape backed out of a sub-screen, not a pause
   $("titleScreen").style.display = locked ? "none" : "flex";
@@ -223,7 +260,7 @@ const posTerm = window.createPOS({
   onClose() {                                      // straight back into the store: F10 / Enter count as the gesture, Escape doesn't
     if (hiring.open) return;                     // the applicants are still up: keep the mouse for them
     if (posEsc) return backToStore();
-    canvas.requestPointerLock()?.catch?.(() => backToStore());
+    lockMouse()?.catch?.(() => backToStore());
   },
 });
 posTerm.idle(); corkDraw(); parkLot(shift.day, [5, 6].includes(shiftDate().getDay()));
@@ -326,7 +363,7 @@ function nextShift() {
     return becomeCustomer("The owner let you go: three nights in the red.");
   }
   shift.day++; beginShift(); saveState();
-  const p = canvas.requestPointerLock();
+  const p = lockMouse();
   p?.catch?.(() => { $("titleScreen").style.display = "flex"; });
 }
 $("shiftNext").addEventListener("click", nextShift);

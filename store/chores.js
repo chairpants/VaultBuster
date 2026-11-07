@@ -16,13 +16,15 @@ function breakroomTick(dt) {                     // the clocks keep the shift's 
     B.vcr.color.setHex(on ? 0x39ff6a : 0x0c2a12);
   }
 }
-function bathTick(dt) {                          // the bowl drains and refills after a flush; the tap's stream shimmers
-  if (bath.flushT > 0 && bath.water) {
-    bath.flushT = Math.max(0, bath.flushT - dt); const t = 6 - bath.flushT;
-    bath.water.position.y = bath.waterY - 0.07 * (t < 1.3 ? t / 1.3 : Math.max(0, 1 - (t - 1.3) / 3.8));
-    bath.water.rotation.z += dt * (t < 2.5 ? 5 : 0);   // swirl
+function bathTick(dt) {                          // a bowl drains and refills after a flush; a running tap's stream shimmers
+  for (const f of bath.flushers) if (f.flushT > 0) {
+    f.flushT = Math.max(0, f.flushT - dt); const t = 6 - f.flushT;
+    if (f.water) {
+      f.water.position.y = f.waterY - 0.07 * (t < 1.3 ? t / 1.3 : Math.max(0, 1 - (t - 1.3) / 3.8));
+      f.water.rotation.z += dt * (t < 2.5 ? 5 : 0);   // swirl
+    }
   }
-  if (bath.tap && bath.stream) bath.stream.scale.set(1 + Math.sin(clockT * 40) * 0.08, 1, 1 + Math.cos(clockT * 37) * 0.08);
+  for (const s of bath.sinks) if (s.tap) s.stream.scale.set(1 + Math.sin(clockT * 40) * 0.08, 1, 1 + Math.cos(clockT * 37) * 0.08);
 }
 
 // ---------------- moving things around the counter ----------------
@@ -340,9 +342,9 @@ function messClean(m, by = "you") {
 }
 
 // ---------------- trash: bins fill up, the bags go down the chute ----------------
-// Three bins: the lobby receptacle (it fills with the customers: the busier the
-// store, the faster), the break room can (the staff's lunches) and the restroom
-// wastebasket (paper towels). A full one spills onto the floor. E on a bin ties
+// The bins: the lobby receptacle and the theater lobby's (they fill with the customers: the busier the
+// store, the faster), the break room can (the staff's lunches), the counter's and the restrooms'
+// wastebaskets (paper towels). A full one spills onto the floor. E on a bin ties
 // off the bag and puts in a fresh liner; carry up to two to the chute in the
 // break room (right-click sets them down). Bins over 3/4 full and bags left
 // lying about count against the closing check, and customers notice an
@@ -353,7 +355,7 @@ const bagsDown = [];                              // set down somewhere: { bin, 
 const bagHand = new THREE.Group();
 const binList = () => Object.values(trashBins);
 const binFull = b => b.n >= b.cap;
-const binNear = (x, z) => z < STORE.z ? trashBins.lobby : x < BOH.splitX ? trashBins.restroom : trashBins.breakroom;
+const binNear = (x, z) => z < STORE.z ? trashBins.lobby : x < BOH.x0 || z > BOH.z1 ? trashBins.theater : x < BOH.rrX ? trashBins.restroomF : x < BOH.splitX ? trashBins.restroom : z > BOH.officeZ ? trashBins.office : trashBins.breakroom;
 const unaim = o => o.traverse(m => { const i = aimables.indexOf(m); if (i >= 0) aimables.splice(i, 1); });
 for (const b of binList()) {
   b.n = Math.min(b.cap, SAVE?.trash?.bins?.[b.id] ?? Math.floor(b.cap * 0.3 * Math.random())); b.acc = 0;
@@ -390,7 +392,7 @@ function trashAdd(b, k = 1, spill = true) {       // something into a bin; a ful
 function makeBag(b, n) {                          // a tied-off liner (black from the lobby, white from the others): the knot at the origin, the bag hanging below it
   // V2: a pear of thin plastic, sagging wide at the bottom, lumpy with what's in it, pleated where it's gathered up
   // into the neck, the corners tied in a knot (black) or the drawstring pulled into two loops (white kitchen bags)
-  const g = new THREE.Group(), f = Math.min(1, n / b.cap), r = (b.id === "lobby" ? 0.2 : b.id === "breakroom" ? 0.17 : 0.12) * (0.75 + 0.25 * f);
+  const g = new THREE.Group(), f = Math.min(1, n / b.cap), r = (b.id === "lobby" ? 0.2 : b.id === "breakroom" || b.id === "theater" ? 0.17 : 0.12) * (0.75 + 0.25 * f);
   const m = new THREE.MeshPhongMaterial({ color: b.liner, specular: b.id === "lobby" ? 0x8a8a8a : 0x555555, shininess: b.id === "lobby" ? 70 : 35 });
   const prof = [[0.02, 0], [0.55, 0.02], [0.86, 0.1], [1, 0.34], [1.03, 0.62], [0.96, 0.92], [0.78, 1.22], [0.5, 1.52], [0.24, 1.76], [0.09, 1.94], [0.06, 2.04]];   // (radius, height) in r
   const geo = new THREE.LatheGeometry(prof.map(([x, y]) => new THREE.Vector2(x * r, (y - 2.04) * r - 0.03)), 22);
@@ -493,7 +495,7 @@ function empToChute() {
 function trashTick(dt) {
   if (shift.h < SHIFT.close && !paused) {          // the day's trash: the customers' through the lobby bin, the staff's lunches, paper towels
     const hrs = dt / SHIFT.hour, inStore = custs.length;
-    const rate = { lobby: 0.9 * inStore, breakroom: 0.15 + 0.25 * staff.length, restroom: 0.08 * inStore, counter: 0.06 + 0.04 * staff.length };
+    const rate = { lobby: 0.9 * inStore, breakroom: 0.15 + 0.25 * staff.length, restroom: 0.04 * inStore, restroomF: 0.04 * inStore, theater: owned("theater") ? 0.2 * inStore : 0, counter: 0.06 + 0.04 * staff.length, office: 0.04 };
     for (const b of binList()) if ((b.acc += hrs * (rate[b.id] || 0)) >= 1) {
       b.acc -= 1; trashAdd(b);
       if (b.id === "lobby" && custs.some(k => k.c && Math.hypot(k.c.group.position.x - b.x, k.c.group.position.z - b.z) < 2)) trashFlapT = 0.5;   // somebody right there: the flap swings

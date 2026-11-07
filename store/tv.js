@@ -13,18 +13,7 @@ function showTape(tape) {                    // the tape in your hand (fresh pic
   held = tape; inspecting = false;
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tapeName(tape);
   $("inspectTitle").textContent = tapeName(tape); $("inspectSec").textContent = tape.newRelease ? `New Releases · ${tape.category}` : tape.category;   // where it goes back
-  // embedded shelf art shows instantly; the full-res TMDB version swaps in once
-  // it loads (a plain <img> can load cross-origin even from file://). Offline
-  // it just stays on the embedded one.
-  const art = $("inspectArt"), hiPath = window.VAULT_ART_HI?.[tape.art];
-  const mv = tape.category === "MonsterVision";
-  const show = src => mv ? stickerize(src, s => { if (held === tape) art.src = s; }) : art.src = src;
-  art.src = artUrl(tape.art); show(artUrl(tape.art)); coverZoom = 1; art.style.transform = "";
-  if (hiPath) {
-    const hi = new Image(); hi.crossOrigin = "anonymous";
-    hi.onload = () => { if (held === tape) show(hi.src); };
-    hi.src = "https://image.tmdb.org/t/p/w780" + hiPath;
-  }
+  coverZoom = 1;
   handBody.material = tape.sideMat || mat.tapeBody;
   loadCoverTexture(tape, t => { handArt.material.map = t; handArt.material.needsUpdate = true; });
   handGroup.visible = true;
@@ -52,6 +41,21 @@ function pickFile(meta, hint) {
   return hint
     ? (needsDerivative && files.find(f => f.name === derivative)) || files.find(f => f.name === hint)
     : files.find(f => /\.mp4$/i.test(f.name)) ?? files.find(f => /\.(ogv|webm)$/i.test(f.name));
+}
+// archive.org/cors mostly ignores Range, so most of its streams can't be wound at all: only what the browser says it can seek to
+const canSeek = () => { const r = video.seekable; return r.length > 0 && r.end(r.length - 1) - r.start(0) > 1; };
+let streamAsk = 0;                               // which ask for a stream is the latest (a tape swapped in while archive.org was answering wins)
+async function attachStream(iaId, hint, at) {    // -> false if another tape went in meanwhile
+  const ask = ++streamAsk;
+  if (!metaCache[iaId]) metaCache[iaId] = await (await fetch(`https://archive.org/metadata/${iaId}`)).json();
+  if (ask !== streamAsk) return false;
+  const file = pickFile(metaCache[iaId], hint);
+  if (!file) throw new Error("no playable file on archive.org");
+  video.crossOrigin = "anonymous";
+  video.src = `https://archive.org/cors/${iaId}/${encodePath(typeof file === "string" ? file : file.name)}`;
+  if (at > 0) video.addEventListener("loadedmetadata", () => { if (ask === streamAsk && canSeek()) video.currentTime = at; }, { once: true });   // wound on: from there, if the stream can seek
+  video.load();
+  return true;
 }
 // tape case that lands on the coffee table once something's in the TV —
 // automatic: it just shows whatever's currently playing, no pickup/putBack
@@ -81,34 +85,38 @@ function fullVidAim() {                         // a tape's playing, and you're 
   const on = [...miniScreens, ...(roof.cine?.on && roof.cine.sheet ? [roof.cine.sheet] : [])];
   return on.some(m => m.getWorldPosition(fullVidTo).sub(camera.position).angleTo(fullVidCam) < FULL_AIM);
 }
-function fullVidSet(on) { fullVid.on = on; document.body.classList.toggle("fullvid", on); }
+function fullVidSet(on) {
+  if (fullVid.on === on) return;
+  fullVid.on = on; document.body.classList.toggle("fullvid", on);
+  tvAudioRoute(); VaultAudio.silence(on);       // the plain sound of the tape: no store round it
+}
 function fullVidTick() { if (fullVid.on && (!seated || !playing || screenMesh.material !== videoMat)) fullVidSet(false); }
 async function playEpisode(idx, tape = playing?.tape) {
   if (!tape) return;
   const eps = tape.seasons[0].episodes;
   idx = Math.max(0, Math.min(eps.length - 1, idx));
+  const woundTo = tape.tapePos?.ep === idx ? tape.tapePos.t : 0;   // it plays from wherever it's wound to
   playing = { tape, idx, eps };
   tape.tapePos = { ep: idx, t: 0 };          // the tape winds forward as it plays (see the main loop)
   inspecting = false;                        // into the TV — box drops to your side
-  const [iaId, epTitle] = eps[idx];
+  const [iaId, epTitle, hint] = eps[idx];
   const bits = epTitle.split(" - ");
   const code = /S\d+E\d+/i.test(bits[1] || "") ? bits[1] + " · " : "";
   const name = code ? bits.slice(2).join(" - ") : bits.slice(1).join(" - ") || epTitle;
   $("nowPlaying").style.display = "block";
   $("nowPlaying").textContent = `Loading: ${tape.title}…`;
   try {
-    if (!metaCache[iaId]) metaCache[iaId] = await (await fetch(`https://archive.org/metadata/${iaId}`)).json();
-    const fileName = pickFile(metaCache[iaId], eps[idx][2]);
-    if (!fileName) throw new Error("no playable file on archive.org");
-    const fileStr = typeof fileName === 'string' ? fileName : fileName.name;
-    video.crossOrigin = "anonymous";
-    video.src = `https://archive.org/cors/${iaId}/${encodePath(fileStr)}`;
-    video.load();
-    await video.play();
-
-    miniScreens.forEach(m => m.material = videoMat); // every screen shows the tape
+    if (!await attachStream(iaId, hint, woundTo)) return;   // (another tape went in while this one was being asked for)
+    // every screen shows the tape once it's in, not once it's rolling: a tape left in the VCR is put back in as the page loads,
+    // before any click, and the browser won't start a video till there's been one
+    miniScreens.forEach(m => m.material = videoMat);
     tvLight.base = 1;
     $("nowPlaying").textContent = `Now Playing: ${tape.title} — ${code}${name}`;
+    try { await video.play(); }
+    catch (err) {
+      if (err.name === "NotAllowedError" || err.name === "AbortError") return;   // (no click yet, or paused as it started: it's in, just not rolling)
+      throw err;
+    }
     tvOsd(`PLAY ▶ ${code.replace(" · ", "")}`.trim(), 4);
   } catch (err) {
     $("nowPlaying").textContent = `⚠ ${err.message}`;
@@ -116,7 +124,7 @@ async function playEpisode(idx, tape = playing?.tape) {
 }
 function eject() {
   const tape = playing?.tape;
-  video.pause(); video.removeAttribute("src"); video.load();
+  streamAsk++; video.pause(); video.removeAttribute("src"); video.load();
   playing = null; tvLight.base = 0;
   miniScreens.forEach(m => m.material = screensaverMat);   // back to the bouncing-logo screensaver
   $("nowPlaying").style.display = "none";
@@ -133,6 +141,122 @@ function togglePause() {
 }
 function stepEpisode(d) { if (playing) playEpisode(playing.idx + d, playing.tape); }
 video.addEventListener("ended", () => stepEpisode(1));
+// ---- V and N: a double tap's the episode before / after (V on the first, back to its start: one tap alone just asks, so a slip of the finger doesn't change the tape); held, they wind through this one, the picture
+// held still and jumping along behind, faster the longer you hold, with a bar in the corner to say where you've got to. B: play / pause ----
+const SCRUB_AFTER = 300, DOUBLE_TAP = 450;      // ms: longer than a tap; how soon the second tap has to come
+const media = { key: null, dir: 0, down: 0, on: false, t: 0, was: false, seekAt: 0, last: 0, barTill: 0, shown: "", tapKey: null, tapAt: 0 };
+const scrubClock = s => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, c = String(s % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${c}` : `${m}:${c}`; };
+function mediaDown(code) {
+  if (!playing || !video.src) return;
+  const dir = code === "KeyV" ? -1 : 1;
+  Object.assign(media, media.on ? { key: code, dir, down: performance.now() } : { key: code, dir, down: performance.now(), last: performance.now() });   // (already winding, the other key just turns it round)
+}
+function mediaUp(code) {
+  if (code !== media.key) return;
+  const { dir, on } = media; media.key = null;
+  if (on) { mediaScrubEnd(); return; }
+  if (!playing) return;
+  const now = performance.now(), second = media.tapKey === code && now - media.tapAt < DOUBLE_TAP;
+  media.tapKey = second ? null : code; media.tapAt = now;
+  if (!second) { tvOsd(dir < 0 ? "V AGAIN: PREVIOUS" : "N AGAIN: NEXT", DOUBLE_TAP / 1000 + 0.3); return; }
+  const eps = playing.eps.length, to = playing.idx + dir;
+  if (to >= eps) tvOsd("LAST ON THIS TAPE", 2);
+  else if (to < 0) { if (canSeek()) { video.currentTime = 0; tvOsd("◀◀ START", 2); } else tvOsd("CAN'T REWIND THIS ONE", 2); }
+  else stepEpisode(dir);
+}
+function mediaScrubEnd() {                       // let go: from here, playing if it was
+  if (!media.on) return;
+  media.on = false; media.key = null; media.barTill = performance.now() + 1400;
+  if (!playing) return;
+  video.currentTime = media.t;
+  playing.tape.tapePos = { ep: playing.idx, t: media.t, d: video.duration };   // (the tape's wound to there, even if it stays paused)
+  if (media.was) { video.play().catch(() => {}); tvOsd("PLAY ▶", 2); }
+}
+function mediaTick() {
+  const now = performance.now(), dur = video.duration;
+  if (media.key && !playing) { media.key = null; media.on = false; }
+  if (media.key && !media.on && now - media.down > SCRUB_AFTER) {
+    if (isFinite(dur) && dur > 0 && canSeek()) { media.on = true; media.t = video.currentTime; media.was = !video.paused; media.seekAt = 0; media.last = now; media.barTill = Infinity; video.pause(); }
+    else { media.key = null; tvOsd("CAN'T WIND THIS ONE", 2); }   // (a stream that can't seek: nothing to wind along)
+  }
+  if (media.on) {
+    const dt = Math.min(0.1, (now - media.last) / 1000), held = (now - media.down) / 1000; media.last = now;
+    const rate = Math.min(Math.max(30, dur / 12), 20 * (1 + held * held * 0.9));   // (20 s a second to start; a whole film in about 12 seconds, at most)
+    media.t = Math.max(0, Math.min(dur - 2, media.t + media.dir * rate * dt));
+    if (!video.seeking && now - media.seekAt > 250) { video.currentTime = media.t; media.seekAt = now; }   // (a picture as often as the stream can find one)
+    tvOsd(media.dir < 0 ? "◀◀ REW" : "FF ▶▶", 1);
+  }
+  const show = playing && now < media.barTill, bar = $("scrubBar");
+  if (!show) { if (media.shown !== "") { bar.style.display = "none"; media.shown = ""; } return; }
+  const at = media.on ? media.t : video.currentTime, key = `${Math.floor(at)}|${media.on ? media.dir : 0}`;
+  if (key === media.shown) return;
+  media.shown = key; bar.style.display = "block";
+  bar.children[0].textContent = media.on ? (media.dir < 0 ? "◀◀" : "▶▶") : "▶";
+  bar.children[1].textContent = scrubClock(at); bar.children[3].textContent = isFinite(dur) ? scrubClock(dur) : "--:--";
+  bar.children[2].firstChild.style.width = `${isFinite(dur) && dur > 0 ? Math.min(100, at / dur * 100) : 0}%`;
+}
+addEventListener("blur", mediaScrubEnd); document.addEventListener("pointerlockchange", () => { if (document.pointerLockElement !== canvas) mediaScrubEnd(); });   // (keyups don't reach us once it's gone)
+// ---- what you hear of a tape from where you're standing. It comes out of three places: the lounge's TV (the store's ceiling sets carry it through the store,
+// quieter), the theater's speakers, and the VCR by the roof's chairs while the projector's on. From each it falls off with distance, down to whatever level that
+// room's own echo holds, and it only leaves a room by a way out of it: a doorway passes on what reaches it, and it spreads out again from there. A shut door or a
+// wall lets through a little of it, the bottom end only ----
+const HEAR_SOURCES = [{ room: "store", r: 4.5, p: 1.1, floor: 0.16 }, { room: "theater", r: 16, p: 1, floor: 0.5 }, { room: "roof", r: 3, p: 1.5, floor: 0.03 }];
+const hearDoorOpen = (test) => { const d = doors.find(test); return !!d && Math.abs(d.a) > 0.01; };
+function hearLinks() {                           // [room, room, x, z (the way through), how much passes, how bright it stays]
+  const door = (open, pass, low) => open ? [pass, 7000] : [low, 420];
+  const inner = test => door(hearDoorOpen(test), 0.5, 0.05);
+  return [["store", "hall", BOH_DOORS.store, STORE.z, 0.55, 7000],
+    ["hall", "restroom", BOH_DOORS.restroom, BOH.hallZ, ...inner(d => d.alongX && Math.abs(d.c - BOH_DOORS.restroom) < 0.01)],
+    ["hall", "breakroom", BOH_DOORS.breakroom, BOH.hallZ, ...inner(d => d.alongX && Math.abs(d.c - BOH_DOORS.breakroom) < 0.01)],
+    ["breakroom", "office", BOH_DOORS.office, BOH.officeZ, ...inner(d => d.alongX && Math.abs(d.c - BOH_DOORS.office) < 0.01)],
+    ["hall", "closet", CLOSET.x0, BOH_DOORS.closet, ...inner(d => !d.alongX && Math.abs(d.at - CLOSET.x0) < 0.01)],
+    ["hall", "lobby", BOH.x0, BOH_DOORS.future, ...inner(d => d.push && !d.alongX)],
+    ["lobby", "theater", CINEMA_DOOR, TALL.z1, ...inner(d => d.push && d.alongX)],
+    ["theater", "booth", -3, TALL.z1, 0.35, 5000],
+    ["theater", "out", WALL_L - 0.1, (FIRE_EXIT.z0 + FIRE_EXIT.z1) / 2, ...door(fireExit.a > 0, 0.6, 0.012)],
+    ["store", "out", 0.9, -0.1, ...door(frontDoor.k > 0.05, 0.3, 0.03)],   // (the storefront's glass, or its door standing open)
+    ["store", "out", STORE.x + 0.1, (STORE_EXIT.z0 + STORE_EXIT.z1) / 2, ...door(storeExit.a > 0, 0.6, 0.012)],
+    ["store", "roof", 2, 14, 0.006, 260],
+    ["roof", "out", ...(roof.cine ? [roof.cine.sound.getWorldPosition(tvHearV).x, tvHearV.z] : [0, 0]), 0.3, 2600],   // (open air, but a parapet in the way)
+    ["out", "tony", 17, 0, 0.08, 600]];
+}
+const tvHearV = new THREE.Vector3();
+const hearRoomAt = (x, z) => tonyIn(x, z) ? "tony" : roomAt(x, z);
+function tvHear(x, z, room) {                    // -> { k: how loud, lp: how bright (Hz), at: [x, z] where the loudest of it's coming from }
+  const links = hearLinks(); let sum = 0, lp = 0, best = 0, at = null;
+  for (const s of HEAR_SOURCES) {
+    if (s.room === "roof" && !roof.cine?.on) continue;
+    const m = s.room === "store" ? tvHearV.set(TV.x, 1, TV_SCREEN_Z) : s.room === "theater" ? theaterScreenMesh?.getWorldPosition(tvHearV) : roof.cine.sound.getWorldPosition(tvHearV);
+    if (!m) continue;
+    const ems = new Map([[s.room, { x: m.x, z: m.z, L: 1, r: s.r, p: s.p, floor: s.floor, lp: 20000 }]]), queue = [s.room];
+    const levelAt = (e, px, pz) => e.L * Math.max(e.floor, Math.min(1, (e.r / Math.max(Math.hypot(px - e.x, pz - e.z), 0.01)) ** e.p));
+    while (queue.length) {                       // out through the building, keeping the strongest way into each room
+      const here = queue.shift(), e = ems.get(here);
+      for (const [a, b, px, pz, pass, bright] of links) {
+        const to = a === here ? b : b === here ? a : null; if (!to) continue;
+        const L = levelAt(e, px, pz) * pass, was = ems.get(to);
+        if (!was || L > was.L) { ems.set(to, { x: px, z: pz, L, r: 1.5, p: 1.15, floor: 0, lp: Math.min(e.lp, bright) }); queue.push(to); }
+      }
+    }
+    const e = ems.get(room); if (!e) continue;
+    const k = levelAt(e, x, z); sum += k * k; lp += e.lp * k * k;
+    if (k > best) { best = k; at = [e.x, e.z]; }
+  }
+  return { k: Math.min(1, Math.sqrt(sum)), lp: sum > 0 ? lp / sum : 20000, at };
+}
+const hearF = new THREE.Vector3();
+function tvHearTick() {
+  if (!playing) { if (tvAudio?.gain) tvAudio.gain.gain.setTargetAtTime(0, tvAudio.ac.currentTime, 0.05); return; }
+  const P = camera.position, room = player.onRoof || roof.climb ? "roof" : player.inBooth ? "booth" : hearRoomAt(P.x, P.z);
+  const h = fullVid.on ? { k: 1, lp: 20000, at: null } : tvHear(P.x, P.z, room);
+  if (!tvAudioBuild()) { video.volume = tvSet.volume / 100 * h.k; return; }   // (no way to filter it here: just the level)
+  if (video.volume !== tvSet.volume / 100) video.volume = tvSet.volume / 100;
+  const { ac, gain, lp, pan } = tvAudio, t = ac.currentTime;
+  gain.gain.setTargetAtTime(h.k < 0.002 ? 0 : h.k, t, 0.1); lp.frequency.setTargetAtTime(h.lp, t, 0.15);
+  let side = 0;                                  // which ear it's on: not hard over, it's a room
+  if (h.at) { camera.getWorldDirection(hearF); const dx = h.at[0] - P.x, dz = h.at[1] - P.z, d = Math.hypot(dx, dz) || 1; side = (dx * -hearF.z + dz * hearF.x) / d * 0.5; }
+  pan.pan.setTargetAtTime(side, t, 0.12);
+}
 function setLamp(l, on) {
   l.userData.on = on ? LAMP_ON : 0;
   l.intensity = l.userData.on;
@@ -141,7 +265,7 @@ function setLamp(l, on) {
   l.userData.pool.visible = on;
 }
 function onE() {
-  if (scrub || ladder.fix || roof.climb) return;   // busy mopping / sweeping / up at a light / on the roof ladder
+  if (fall || scrub || ladder.fix || roof.climb) return;   // (flat on your back) busy mopping / sweeping / up at a light / on the roof ladder
   if (CUSTOMER && !seated && !player.onRoof && cmE()) return;   // as a customer: the staff, the locked doors, the register (see cmE)
   if (golf.on) { if (golf.st === "idle") golfEnd(); return; }
   if (aimRoofLadder) { roofClimb(player.onRoof ? -1 : 1); return; }
@@ -153,6 +277,7 @@ function onE() {
   if (ladder.on) { if (aimDead) ladder.fix = { d: aimDead, t: 0 }; else ladderDown(); return; }
   if (onStool) { stoolPush(); return; }
   if (aimStool && !stool.by) { stoolSit(); return; }
+  if (seated && aimSec) { secPress(aimSec); return; }   // (the manager's chair: within reach of the switcher)
   if (seated) {                             // E always stands you up
     player.x = stoodAt.x; player.z = stoodAt.z; player.yaw = stoodAt.yaw; seated = false; return;
   }
@@ -190,14 +315,16 @@ function onE() {
   if (aimNotepad) { toast("Look up an overdue member on the register (messages) and it goes on a post-it by the phone", true); return; }
   if (aimPhone) { phoneAnswer(); return; }
   if (aimBoard) { boardOpen(); return; }
-  if (aimToilet) { if (bath.flushT <= 0) { bath.flushT = 6; window.VaultAmbience?.flush(...bath.toiletAt); } return; }
-  if (aimSink) { bath.tap = !bath.tap; bath.stream.visible = bath.tap; window.VaultAmbience?.water("tap", ...bath.sinkAt, bath.tap); return; }
-  if (aimTowels) { toast(bath.tap ? "Turn the tap off first" : "You dry your hands", !bath.tap); if (!bath.tap) trashAdd(trashBins.restroom); return; }
+  if (aimToilet) { if (aimToilet.flushT <= 0) { aimToilet.flushT = 6; window.VaultAmbience?.flush(...aimToilet.at); } return; }
+  if (aimSink) { const s = aimSink; s.tap = !s.tap; s.stream.visible = s.tap; window.VaultAmbience?.water(s.key, ...s.at, s.tap); return; }
+  if (aimTowels) { const s = aimTowels; toast(s.tap ? "Turn the tap off first" : "You dry your hands", !s.tap); if (!s.tap) trashAdd(s.bin); return; }
   if (aimHolds && held && !inspecting) { holdPlace(held); return; }
   if (aimHolds && !held) { holdPull(); return; }
   if (aimCustomer) { custInteract(aimCustomer); return; }
+  if (aimBlinds) { blindsToggle(aimBlinds); return; }
+  if (aimSec) { secPress(aimSec); return; }
   if (aimSwitch) { flipSwitch(aimSwitch); return; }
-  if (aimFireExit) { fireExitUse(aimFireExit); return; }
+  if (aimFireExit) { fireExitUse(aimFireExit, aimExitDoor); return; }
   if (aimEmp && afterClose() && !aimEmp.leaving && aimEmp.state !== "toExit") { sendHome(aimEmp); return; }   // closed: off you go
   if (aimEmp && aimEmp.state === "stoolSit") {   // they're on the stool: a shove, same as your own spins (keep it up and they get dizzy)
     stoolPush(); aimEmp.bored = 0; aimEmp.c.lookAt(null); aimEmp.c.setMood(aimEmp.dizzy > 0.5 ? "meh" : "love"); return;
@@ -214,6 +341,7 @@ function onE() {
   if (aimLamp) { setLamp(aimLamp, !aimLamp.userData.on); return; }   // E on an aimed lamp flips just that one
   if (aimFlap) { toggleFlap(); return; }
   if (aimDoor) { toggleDoor(aimDoor); return; }
+  if (aimTony) { tonyE(aimTony); return; }
   if (aimCooler) { coolerOpen = !coolerOpen; return; }
   if (aimTrash) {
     if (postitHeld) { postitToss(aimTrash); return; }
@@ -233,7 +361,7 @@ function onE() {
 function vcrUse() {                          // E on the TV or a VCR (the store's, the theater's, the roof's: one tape, every screen)
   if (held) {
     const tape = held, old = playing?.tape;
-    playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to (the episode — archive.org can't seek)
+    playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to
     releaseFromHand();                     // the tape leaves your hand...
     showTableBox(tape);                    // ...and its case lands on the coffee table
     if (old) {                             // swap: the tape that was in the VCR comes out into your inventory
@@ -243,24 +371,32 @@ function vcrUse() {                          // E on the TV or a VCR (the store'
   else if (playing) eject();
 }
 // TV light colors: every 150ms the screen canvas (already cropped,
-// letterboxed and filtered — exactly what's on the glass) is shrunk to 24x18
-// and averaged into the 3x3 zones the shader lights with; the main loop eases
-// toward each sample so the room doesn't visibly step between them
+// letterboxed and filtered — exactly what's on the glass) is shrunk to 24x24
+// and averaged into the 3x3 zones the TV lights with and the 6x4 patches the
+// theater screen does; the main loop eases toward each sample so the room
+// doesn't visibly step between them
 const glowCtx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
-glowCtx.canvas.width = 24; glowCtx.canvas.height = 18;
+glowCtx.canvas.width = 24; glowCtx.canvas.height = 24;
 const tvTmp = new THREE.Color();
+const thCW = 24 / TH_COLS, thCH = 24 / TH_ROWS;   // (a theater patch, in pixels)
 setInterval(() => {
   if (!tvLight.base) return;
   try {
-    glowCtx.drawImage(videoCanvas, 0, 0, 24, 18);
-    const d = glowCtx.getImageData(0, 0, 24, 18).data, sum = new Float32Array(27);
-    for (let y = 0; y < 18; y++) for (let x = 0; x < 24; x++) {
-      const z = ((y / 6 | 0) * 3 + (x / 8 | 0)) * 3, p = (y * 24 + x) * 4;
+    glowCtx.drawImage(videoCanvas, 0, 0, 24, 24);
+    const d = glowCtx.getImageData(0, 0, 24, 24).data, sum = new Float32Array(27), th = new Float32Array(thZoneTarget.length);
+    for (let y = 0; y < 24; y++) for (let x = 0; x < 24; x++) {
+      const z = ((y / 8 | 0) * 3 + (x / 8 | 0)) * 3, t = ((y / thCH | 0) * TH_COLS + (x / thCW | 0)) * 3, p = (y * 24 + x) * 4;
       sum[z] += d[p]; sum[z + 1] += d[p + 1]; sum[z + 2] += d[p + 2];
+      th[t] += d[p]; th[t + 1] += d[p + 1]; th[t + 2] += d[p + 2];
     }
     for (let z = 0; z < 27; z += 3) {           // pixels are sRGB; the shader works in linear
-      tvTmp.setRGB(sum[z] / 12240, sum[z + 1] / 12240, sum[z + 2] / 12240, THREE.SRGBColorSpace);   // 48 px x 255
+      tvTmp.setRGB(sum[z] / 16320, sum[z + 1] / 16320, sum[z + 2] / 16320, THREE.SRGBColorSpace);   // 64 px x 255
       tvZoneTarget[z] = tvTmp.r; tvZoneTarget[z + 1] = tvTmp.g; tvZoneTarget[z + 2] = tvTmp.b;
+    }
+    const thN = thCW * thCH * 255;
+    for (let t = 0; t < th.length; t += 3) {
+      tvTmp.setRGB(th[t] / thN, th[t + 1] / thN, th[t + 2] / thN, THREE.SRGBColorSpace);
+      thZoneTarget[t] = tvTmp.r; thZoneTarget[t + 1] = tvTmp.g; thZoneTarget[t + 2] = tvTmp.b;
     }
   } catch { /* tainted frame: keep the last colors */ }
 }, 150);

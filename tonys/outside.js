@@ -1,25 +1,21 @@
 // ---- Tony's from outside: the building next door, and its roof as seen from ours. Both are called from the roof's
 // block (store/roof.js), with the helpers of its they use ----
-function tonyWallMats(ph) {                       // the inside faces of Tony's walls: cream over a red wainscot (1 m), a white rail between
-  const t = makeTexture((ctx, w, h) => { const k = h / ph; ctx.fillStyle = "#eadfc4"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#9e1b22"; ctx.fillRect(0, h - k, w, k); ctx.fillStyle = "#f2f0ea"; ctx.fillRect(0, h - k - 6, w, 8); }, 16, 430);
-  return { wains: new THREE.MeshBasicMaterial({ map: t }), cream: new THREE.MeshBasicMaterial({ color: 0xeadfc4 }), red: new THREE.MeshBasicMaterial({ color: 0x9e1b22 }) };
-}
 function tonyOutside({ lam, put, ext, beige, cement, coping }) {                                                // Tony's, next door: brick, a striped awning, a glass front you can see in through, its own little AC unit
-  const px0 = 13, px1 = 21, pz1 = 14, ph = 4.3, brick = lam(0x9a4a3a), p = new THREE.Group(); scene.add(p);
+  const px0 = 13, px1 = 21, pz1 = 14, ph = 4.3, brick = wallSurface(lam(0xb0553f), "brick"), p = new THREE.Group(); scene.add(p);
   roof.pizzaWin = new THREE.MeshBasicMaterial({ color: 0x2a2f36 });   // (roofTick still sets it: nothing wears it now the windows are glass)
   const W = 0.15, dl = PIZZA_DOOR[0] - 0.6, dr = PIZZA_DOOR[0] + 0.6, DH = 2.3, WY = [0.5, 2.4], WIN = [[13.4, 15.0], [16.3, 20.6]];
-  // hollow (see tonyInside): the walls' inside faces are painted (cream over a red wainscot), so nothing's laid over them to flicker
-  const inner = tonyWallMats(ph), face = (m, i) => { const ms = Array(6).fill(brick); ms[i] = m; return ms; };
+  // hollow (see tonyInside): the walls' inside faces are painted in the shader (tonys/light.js), so nothing's laid over them to flicker
+  const inner = tonyLit({ kind: "WALL" }), face = (m, i) => { const ms = Array(6).fill(brick); ms[i] = m; return ms; };
   const wallBox = (x0, x1, y0, y1, z0, z1, mats) => put(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mats, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, p);
-  const fIn = (y0, y1) => y1 - y0 > 2 ? inner.wains : y1 <= 1 ? inner.red : inner.cream;
   for (const [x0, x1, y0, y1] of [[px0, WIN[0][0], 0, ph], [WIN[0][0], WIN[0][1], 0, WY[0]], [WIN[0][0], WIN[0][1], WY[1], ph], [dl, dr, DH, ph],
-    [dr, WIN[1][0], 0, ph], [WIN[1][0], WIN[1][1], 0, WY[0]], [WIN[1][0], WIN[1][1], WY[1], ph], [WIN[1][1], px1, 0, ph]]) wallBox(x0, x1, y0, y1, 0, W, face(fIn(y0, y1), 4));
-  wallBox(px0, px0 + W, 0, ph, W, pz1 - W, face(inner.wains, 0)); wallBox(px1 - W, px1, 0, ph, W, pz1 - W, face(inner.wains, 1));   // (the sides stop short of the front and back: no doubled faces at the corners)
-  wallBox(px0, px1, 0, ph, pz1 - W, pz1, face(inner.wains, 5));
+    [dr, WIN[1][0], 0, ph], [WIN[1][0], WIN[1][1], 0, WY[0]], [WIN[1][0], WIN[1][1], WY[1], ph], [WIN[1][1], px1, 0, ph]]) wallBox(x0, x1, y0, y1, 0, W, face(inner, 4));
+  wallBox(px0, px0 + W, 0, ph, W, pz1 - W, face(inner, 0)); wallBox(px1 - W, px1, 0, ph, W, pz1 - W, face(inner, 1));   // (the sides stop short of the front and back: no doubled faces at the corners)
+  { const a = TONY_BACK.x - TONY_BACK.w / 2, b = TONY_BACK.x + TONY_BACK.w / 2;   // the back wall, with the door to the yard in it
+    wallBox(px0, a, 0, ph, pz1 - W, pz1, face(inner, 5)); wallBox(b, px1, 0, ph, pz1 - W, pz1, face(inner, 5)); wallBox(a, b, DOOR_H, ph, pz1 - W, pz1, face(inner, 5)); }
   put(new THREE.BoxGeometry(px1 - px0 - 2 * W, 0.05, pz1 - 2 * W), brick, (px0 + px1) / 2, ph - 0.025, pz1 / 2, p);
   put(new THREE.BoxGeometry(px1 - px0 + 0.1, 0.08, pz1 + 0.1), coping, (px0 + px1) / 2, ph + 0.04, pz1 / 2, p);
   // the glass, in aluminum frames (a mullion or two), and a sill outside
-  const glass = new THREE.MeshBasicMaterial({ color: 0xbcd6e6, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }), alu = lam(0xb8bdc2);
+  const glass = new THREE.MeshBasicMaterial({ color: 0xbcd6e6, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }), alu = lam(0xb8bdc2); tony.glass = glass;
   for (const [x0, x1] of WIN) {
     const gl = put(new THREE.PlaneGeometry(x1 - x0, WY[1] - WY[0]), glass, (x0 + x1) / 2, (WY[0] + WY[1]) / 2, 0.075, p); gl.renderOrder = 2;
     const n = Math.round((x1 - x0) / 1.4);
@@ -27,9 +23,10 @@ function tonyOutside({ lam, put, ext, beige, cement, coping }) {                
     for (const y of WY) put(new THREE.BoxGeometry(x1 - x0, 0.05, 0.07), alu, (x0 + x1) / 2, y + (y === WY[0] ? 0.025 : -0.025), 0.075, p);
     put(new THREE.BoxGeometry(x1 - x0 + 0.1, 0.05, 0.12), cement, (x0 + x1) / 2, WY[0] - 0.025, -0.06, p);
   }
-  { const hinge = new THREE.Group(); hinge.position.set(dl, 0, 0.17); hinge.rotation.y = -1.35; p.add(hinge);   // the door: glass in an aluminum frame, propped open
+  { const hinge = new THREE.Group(); hinge.position.set(dl, 0, 0.17); hinge.rotation.y = -1.35; p.add(hinge);   // the door: glass in an aluminum frame, propped open while they're open (see tonyDayTick)
     for (const [w2, h2, x, y] of [[0.07, 2.25, 0.035, 1.125], [0.07, 2.25, 1.115, 1.125], [1.15, 0.07, 0.575, 2.215], [1.15, 0.22, 0.575, 0.11], [1.0, 0.04, 0.575, 1.05]]) put(new THREE.BoxGeometry(w2, h2, 0.04), alu, x, y, 0, hinge);
-    const dg = put(new THREE.PlaneGeometry(1.01, 1.93), glass, 0.575, 1.185, 0, hinge); dg.renderOrder = 2; }
+    const dg = put(new THREE.PlaneGeometry(1.01, 1.93), glass, 0.575, 1.185, 0, hinge); dg.renderOrder = 2;
+    const shut = textPlane("CLOSED", 0.5, 0.2, "#ffffff", "#a01818", "Arial Black", 220); shut.position.set(0.575, 1.42, -0.025); shut.rotation.y = Math.PI; shut.visible = false; hinge.add(shut); tony.door = hinge; tony.closedSign = shut; }
   // the awning: red and white stripes, sloping out over the walk, a scalloped edge hanging off the front
   const stripes = makeTexture((ctx, w2, h2) => { for (let i = 0; i < 16; i++) { ctx.fillStyle = i % 2 ? "#f4f1e6" : "#b3202a"; ctx.fillRect(i * w2 / 16, 0, w2 / 16, h2); } }, 256, 32);
   const awnM = new THREE.MeshLambertMaterial({ map: stripes, side: THREE.DoubleSide });
@@ -41,6 +38,8 @@ function tonyOutside({ lam, put, ext, beige, cement, coping }) {                
   put(new THREE.BoxGeometry(1.6, 0.9, 1.1), beige, 18, ph + 0.45, 8, p);
   ext(p);
   tonyInside(px0 + W, px1 - W, W, pz1 - W);
+  tony.backDoor = makeDoor({ at: pz1 - W / 2, c: TONY_BACK.x, alongX: true, hinge: 1, swing: 1, leafMat: tonyLit({ kind: "LEAF", color: 0x37322d }), w: TONY_BACK.w, signs: [{ text: "DELIVERIES", side: 1 }, { text: "KEEP SHUT", side: -1 }] });
+  tonyYard(ext);
 }
 // ---- Tony's roof, seen from ours: gravel inside a low parapet, the pizza oven's flue (smoking while they're open: see
 // roofTick) and the kitchen hood's exhaust fan ----

@@ -9,6 +9,7 @@ const TV_GAIN = 6.5, TV_AMB = 0.875;                           // direct throw /
 const TV_SCREEN_Z = TV.z - 0.558 - 0.01;                       // just in front of the glass
 for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) TVU.uTvZoneP.value.set([0.6 - 0.6 * c, 1.35 - 0.4 * r, TV_SCREEN_Z], (r * 3 + c) * 3);
 TVU.uTvRoom.value.set(WALL_L, STORE.x, STORE.h + 0.05, TV_SCREEN_Z);   // +5cm: the ceiling sits exactly at STORE.h, and a hard cutoff there flickers in and out
+const thZoneTarget = new Float32Array(TH_COLS * TH_ROWS * 3).fill(0.3);   // the same for the theater screen's patches
 const tvZoneTarget = new Float32Array(27).fill(0.3);           // latest screen sample (linear); uTvZoneC eases toward it every frame
 // a real TV throws light behind itself too — the screen patches above only
 // light what's in front of the glass, so a short point light covers the
@@ -210,6 +211,38 @@ function tvMenuWheel(dir) {                  // wheel over a slider row nudges i
   if (!r || r.min == null) return false;
   tvSet[r.k] = Math.max(r.min, Math.min(r.max, tvSet[r.k] + dir * r.step)); applyTv(); return true;
 }
+const osdText = () => playing && tvSet.overlay && !tvMenu && (video.paused || performance.now() < osd.until) ? (video.paused && !media.on ? "PAUSE ❚❚" : osd.text) : "";
+function drawOsd(ctx, t) {                     // VCR-style OSD, top left
+  if (!t) return;
+  ctx.font = "bold 20px 'Courier New', monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillText(t, 26, 22);
+  ctx.fillStyle = "#e8ffe8"; ctx.fillText(t, 24, 20);
+}
+// The theater's screen is film, not a TV, and 480x320 stretched over 6.84 m showed its pixel grid. So while a tape's on, a plane
+// just in front of it shows the video itself as a texture: full resolution, no scanlines, sent up only when there's a new frame
+// (a big canvas sent up every frame cost more than everything else in the room). What's written on the picture goes on a
+// layer of its own, redrawn only when it changes. The screen under it keeps the shared canvas, for the TV's menu
+let filmPlane = null, filmText = null, filmKey = "";
+const filmBackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+const filmTextCtx = (() => { const c = document.createElement("canvas"); c.width = 960; c.height = 640; const g = c.getContext("2d", { willReadFrequently: true }); g.scale(2, 2); return g; })();
+const filmPic = { value: new THREE.Vector4(1, 1, 1, 0) };   // the TV's picture settings: brightness, contrast, color, tint
+function filmTick() {
+  const on = !!filmPlane && !!playing && !tvMenu && video.videoWidth > 0;
+  if (!filmPlane) return;
+  filmPlane.visible = on;
+  // the screen behind: plain black while the film's on it. Its own picture (the TV's canvas, scanlines and all) a hair behind the
+  // film fought it for the glow pass's depth test and came through as moire that changed with every step
+  if (on) theaterScreenMesh.material = filmBackMat; else if (playing) theaterScreenMesh.material = videoMat;   // (no tape: the main loop's)
+  if (!on) { filmText.visible = false; return; }
+  const { width: SW, height: SH } = theaterScreenMesh.geometry.parameters, a = video.videoWidth / video.videoHeight;
+  filmPlane.scale.set(a > SW / SH ? SW : SH * a, a > SW / SH ? SW / a : SH, 1);
+  filmPic.value.set(tvSet.brightness / 100, tvSet.contrast / 100, tvSet.bw || BW_SHOWS.has(playing.tape.id) ? 0 : tvSet.saturate / 100, tvSet.hue * Math.PI / 180);
+  const t = osdText();
+  if (t !== filmKey) {
+    filmKey = t; filmTextCtx.clearRect(0, 0, 480, 320); drawOsd(filmTextCtx, t);
+    filmText.material.map.needsUpdate = true; filmText.visible = !!t;
+  }
+}
 function updateVideoFrame() {
   const W = videoCanvas.width, H = videoCanvas.height;
   videoCtx.fillStyle = "#000"; videoCtx.fillRect(0, 0, W, H);
@@ -223,15 +256,11 @@ function updateVideoFrame() {
     videoCtx.drawImage(video, sx, sy, sw, sh, (W - dw) / 2, (H - dh) / 2, dw, dh);
     videoCtx.filter = "none";
   }
-  if (playing && tvSet.overlay && !tvMenu && (video.paused || performance.now() < osd.until)) {   // VCR-style OSD, top left
-    videoCtx.font = "bold 20px 'Courier New', monospace"; videoCtx.textAlign = "left"; videoCtx.textBaseline = "top";
-    const t = video.paused ? "PAUSE ❚❚" : osd.text;
-    videoCtx.fillStyle = "rgba(0,0,0,.6)"; videoCtx.fillText(t, 26, 22);
-    videoCtx.fillStyle = "#e8ffe8"; videoCtx.fillText(t, 24, 20);
-  }
+  drawOsd(videoCtx, osdText());
   if (tvMenu) drawTvMenu(videoCtx);
   if (tvSet.scanlines) videoCtx.drawImage(scanFx, 0, 0, W, H);
   videoTex.needsUpdate = true;
+  filmTick();
 }
 
 // ---------------- idle screensaver: bouncing "VaultBuster" logo ----------------
@@ -352,7 +381,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
       const tb = add(new THREE.BoxGeometry(TAPE.d, TAPE.w, TAPE.h), new THREE.MeshLambertMaterial({ color: c }), x, 0.084 + TAPE.w / 2 + k * TAPE.w, 0.01);
       tb.rotation.y = r;
     });
-    colliders.push({ x0: -W / 2 - 0.03, x1: W / 2 + 0.03, z0: zc - D / 2 - 0.03, z1: zc + D / 2, shadow: false });   // TV_PROXIES shape its shadow instead
+    colliders.push({ x0: -W / 2 - 0.03, x1: W / 2 + 0.03, z0: zc - D / 2 - 0.03, z1: zc + D / 2, y1: H, shadow: false });   // TV_PROXIES shape its shadow instead
   }
   const couch = buildCouch();                                             // ornate orange sofa facing the TV (couch.js)
   const cs = 1.12;                                                        // model is built life-size; scaled up a touch (SEATS below match)
@@ -360,7 +389,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   couch.position.set(0, 0, TV.z - 3.89 - couch.userData.zRange[0] * cs); scene.add(couch);   // back edge stays at TV.z - 3.89
   const couchMeshes = couch.children.filter(c => c.isMesh);              // every mesh carries userData.sit
   { const [z0, z1] = couch.userData.zRange, w = couch.userData.footprint.w * cs;
-    colliders.push({ x0: -w / 2, x1: w / 2, z0: couch.position.z + z0 * cs, z1: couch.position.z + z1 * cs, shadow: false }); }
+    colliders.push({ x0: -w / 2, x1: w / 2, z0: couch.position.z + z0 * cs, z1: couch.position.z + z1 * cs, y1: 0.905 * cs, vaultOnly: true, shadow: false }); }   // (over it, not onto it: this box's top is the crest of its back, and there's no standing on that)
   const ps = textPlane("PREVIEW STATION", 1.2 * cs, 0.25 * cs);          // on the back of the couch
   const sg = couch.userData.sign;
   ps.position.set(0, sg.y * cs, couch.position.z + sg.z * cs); ps.rotation.set(sg.tilt, Math.PI, 0);
@@ -481,7 +510,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     const saddle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.008, 0.012), brass); saddle.position.y = 1.39; parts.push(saddle);
     parts.push(lathe([[0, 1.645], [0.012, 1.655], [0.02, 1.672], [0.012, 1.69], [0.004, 1.71], [0, 1.715]], brass, 12)); // finial
     // bell shade: flared skirt, soft shoulder, narrow top; double-sided so the lit inside shows
-    const shadeMat = new THREE.MeshLambertMaterial({ color: 0xf2dcae, emissive: 0xe8a458, emissiveIntensity: SHADE_GLOW, side: THREE.DoubleSide });
+    const shadeMat = glowDraw(new THREE.MeshLambertMaterial({ color: 0xf2dcae, emissive: 0xe8a458, emissiveIntensity: SHADE_GLOW, side: THREE.DoubleSide }), { emitOnly: true, gain: 2 });
     const shadePts = [[0.25, 0], [0.235, 0.03], [0.205, 0.12], [0.18, 0.22], [0.155, 0.3], [0.13, SHADE_H]]
       .map(([r, y]) => [r, SHADE_Y0 + y]);
     const shade = lathe(shadePts, shadeMat, 36); glow(shade);
@@ -489,7 +518,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     rimTop.rotation.x = Math.PI / 2; rimTop.position.y = SHADE_Y0 + SHADE_H;
     const rimBot = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.012, 6, 40), trimMat);
     rimBot.rotation.x = Math.PI / 2; rimBot.position.y = SHADE_Y0;
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff3d6 });
+    const bulbMat = glowDraw(new THREE.MeshBasicMaterial({ color: 0xfff3d6 }));
     bulbMat.userData.onColor = new THREE.Color(0xfff3d6); bulbMat.userData.offColor = new THREE.Color(0x5a554a);
     const bulb = glow(new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), bulbMat)); bulb.position.y = 1.45; bulb.scale.y = 1.25;
     const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, 0.16, 4), brass); chain.position.set(0.03, 1.3, 0);
@@ -519,6 +548,23 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   videoTex = new THREE.CanvasTexture(videoCanvas);
   videoTex.colorSpace = THREE.SRGBColorSpace;
   videoMat = new THREE.MeshBasicMaterial({ map: videoTex, color: 0xd9d9d9 }); // -15%, blown-out whites were blinding
+  if (theaterScreenMesh) {
+    const tex = new THREE.VideoTexture(document.getElementById("vid"));
+    tex.colorSpace = THREE.SRGBColorSpace; tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter;   // (mipmaps: no shimmer from the back rows)
+    const m = new THREE.MeshBasicMaterial({ map: tex, color: 0xd9d9d9 });   // (-15%, as the TV's: blown-out whites were blinding)
+    m.onBeforeCompile = sh => {
+      sh.uniforms.uPic = filmPic;
+      sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform vec4 uPic;").replace("#include <map_fragment>", `#include <map_fragment>
+        { vec3 c = (diffuseColor.rgb * uPic.x - 0.5) * uPic.y + 0.5;
+          c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, uPic.z);
+          const vec3 k = vec3(0.57735); float cs = cos(uPic.w), sn = sin(uPic.w);
+          diffuseColor.rgb = clamp(c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs), 0.0, 1.0); }`);
+    };
+    glowDraw(m);                                   // (the glow pass redraws it against the main pass's depth: pulled forward so it all passes, not in a shifting pattern)
+    filmPlane = glow(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m)); filmPlane.position.z = 0.01; filmPlane.visible = false; theaterScreenMesh.add(filmPlane);
+    const { width: SW, height: SH } = theaterScreenMesh.geometry.parameters, words = new THREE.CanvasTexture(filmTextCtx.canvas); words.colorSpace = THREE.SRGBColorSpace;
+    filmText = new THREE.Mesh(new THREE.PlaneGeometry(SW, SH), new THREE.MeshBasicMaterial({ map: words, transparent: true, depthWrite: false })); filmText.position.z = 0.02; filmText.visible = false; theaterScreenMesh.add(filmText);
+  }
   miniScreens = [screenMesh];
   if (theaterScreenMesh) {
     theaterScreenMesh.material = screensaverMat;
@@ -527,6 +573,7 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   // ceiling CRT clusters at the outer ends of the center aisles, pairs side by side
   // (along z), fanned ~45° apart, screens facing the center of the store
   const crtBody = new THREE.MeshLambertMaterial({ color: 0x2a2d33 });
+  const crtMountMat = new THREE.MeshPhongMaterial({ color: 0x4a4e54, specular: 0x777777, shininess: 40 });
   const crt = base => {                    // front box + tube bulge + screen
     const g = new THREE.Group();
     g.rotation.order = "YXZ"; g.rotation.y = base; g.rotation.x = 0.32;   // aimed down — they hang high
@@ -536,18 +583,58 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
     bulge.position.z = -0.24; g.add(bulge);
     const m = glow(new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.38), screensaverMat));
     m.position.z = 0.154; g.add(m); miniScreens.push(m);
+    // its cradle, tilting with it: a tray under the set, a plate up each side to the pivot
+    const tray = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.014, 0.34), crtMountMat); tray.position.y = -0.257; g.add(tray);
+    for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.27, 0.16), crtMountMat); p.position.set(sx * 0.316, -0.125, 0); g.add(p); }
     return g;
+  };
+  // What holds them up, in steel, merged into one mesh a cluster: a plate bolted to the ceiling, a column down from it; for a pair a
+  // braced crossbar; to each set a swivel stem into a U-shaped yoke, a tilt knob either side where it meets the set's cradle
+  const crtMount = (g, sets) => {                // sets: [{ z, yaw }], in g's frame (y 0: the sets' pivot height)
+    const H = STORE.h - g.position.y, geos = [], o = new THREE.Object3D();
+    const part = (geo, x, y, z, ry = 0, parent = null) => {
+      o.position.set(x, y, z); o.rotation.set(0, 0, 0); o.updateMatrix();
+      if (parent) o.matrix.premultiply(parent);
+      geo.applyMatrix4(o.matrix); geos.push(geo.index ? geo : geo); return geo;
+    };
+    const cyl = (r, h) => new THREE.CylinderGeometry(r, r, h, 12);
+    const rod = (a, b, r) => {                   // from one point to another
+      const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A), geo = cyl(r, d.length());
+      o.position.copy(A).addScaledVector(d, 0.5); o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); o.scale.setScalar(1); o.updateMatrix();
+      geo.applyMatrix4(o.matrix); geos.push(geo); o.quaternion.identity();
+    };
+    const TOP = 0.46, ARM_X = 0.375, BAR_Y = sets.length > 1 ? 0.6 : TOP;   // the yoke's top; its arms, out past the cradle; where the column ends
+    part(cyl(0.12, 0.014), 0, H - 0.007, 0);     // the ceiling plate, its bolts
+    for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + Math.PI / 4; part(cyl(0.012, 0.01), Math.cos(a) * 0.09, H - 0.019, Math.sin(a) * 0.09); }
+    part(cyl(0.034, 0.06), 0, H - 0.044, 0);     // the collar under it
+    part(cyl(0.024, H - BAR_Y), 0, (H + BAR_Y) / 2, 0);   // the column
+    if (sets.length > 1) {
+      const zs = sets.map(q => q.z), L = Math.max(...zs) - Math.min(...zs) + 0.1;
+      part(new THREE.BoxGeometry(0.05, 0.04, L), 0, BAR_Y, 0);   // the crossbar
+      for (const q of sets) rod([0, BAR_Y + 0.19, 0], [0, BAR_Y + 0.015, q.z * 0.72], 0.009);   // its braces, back up to the column
+      part(cyl(0.032, 0.05), 0, BAR_Y + 0.03, 0);   // where the column meets it
+    }
+    for (const { z, yaw } of sets) {
+      const m = new THREE.Matrix4().makeRotationY(yaw).setPosition(0, 0, z), Y = (geo, x, y, zz) => part(geo, x, y, zz, 0, m);
+      if (sets.length > 1) { Y(cyl(0.018, BAR_Y - TOP), 0, (BAR_Y + TOP) / 2, 0); Y(cyl(0.03, 0.03), 0, BAR_Y - 0.03, 0); }   // the stem, its swivel under the crossbar
+      Y(new THREE.BoxGeometry(ARM_X * 2 + 0.014, 0.022, 0.05), 0, TOP, 0);   // the yoke: its top...
+      for (const sx of [-1, 1]) {
+        Y(new THREE.BoxGeometry(0.012, TOP + 0.04, 0.05), sx * ARM_X, (TOP - 0.04) / 2, 0);   // ...an arm down each side...
+        const knob = cyl(0.028, 0.026); knob.rotateZ(Math.PI / 2); Y(knob, sx * (ARM_X + 0.018), 0, 0);   // ...the tilt knob at its foot
+      }
+    }
+    g.add(new THREE.Mesh(mergeGeometries(geos), crtMountMat));
   };
   for (const [x, z] of crtSpots) {          // one cluster over each outer end of the center aisles (see the store layout)
     {
       const g = new THREE.Group(); g.position.set(x, 2.75, z);
       const base = x < 0 ? Math.PI / 2 : -Math.PI / 2;   // face the store center
+      const sets = [];
       for (const o of [-0.45, 0.45]) {      // side by side along the aisle, fanned to its ends
         const fan = (x < 0 ? 1 : -1) * (o < 0 ? 1 : -1) * Math.PI / 8;
-        const c = crt(base + fan); c.position.z = o; g.add(c);
+        const c = crt(base + fan); c.position.z = o; g.add(c); sets.push({ z: o, yaw: base + fan });
       }
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, STORE.h - 2.75), mat.dark);
-      pole.position.y = (STORE.h - 2.75) / 2; g.add(pole);
+      crtMount(g, sets);
       const cg = new THREE.PointLight(0x8899bb, 0, 6, 1.5); g.add(cg); crtGlows.push(cg);
       scene.add(g);
     }
@@ -556,9 +643,8 @@ const crtGlows = [];                       // one real light per ceiling CRT clu
   // front glass, aimed back at the register bullpen
   {
     const x = WALL_L + 0.55, z = 0.55, g = new THREE.Group(); g.position.set(x, 2.75, z);
-    g.add(crt(Math.atan2(-4.5 - x, 2.4 - z)));             // toward the middle of the space behind the counter
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, STORE.h - 2.75), mat.dark);
-    pole.position.y = (STORE.h - 2.75) / 2; g.add(pole);
+    const yaw = Math.atan2(-4.5 - x, 2.4 - z);             // toward the middle of the space behind the counter
+    g.add(crt(yaw)); crtMount(g, [{ z: 0, yaw }]);
     const cg = new THREE.PointLight(0x8899bb, 0, 4, 1.5); g.add(cg); crtGlows.push(cg);
     scene.add(g);
   }
@@ -587,6 +673,9 @@ function buildFlickerSchedule(duration) {
   return pulses;
 }
 function flickerLit(schedule, t) { return schedule.some(([on, off]) => t >= on && t < off); }
+
+// ---- the fig in the corner beside the TV (from VaultBusterGodot: store/plants.js) ----
+buildFig(-2.8, 27.4);
 
 // ---- lights: six switch zones (see LIGHT_ZONES), each with its own flicker warm-up ----
 // lightsOut = "the store's dark": every sales-floor zone off and no daylight
@@ -626,7 +715,7 @@ function lightingTick(dt) {                       // fluorescents restriking, zo
 function applyLighting() {
   const Z = TVU.uZone.value, B = TVU.uBoh.value;
   Z.set(zoneLvl.front, zoneLvl.aisles, zoneLvl.lounge, tod.level);
-  B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, zoneLvl.closet);
+  B.set(zoneLvl.hall, zoneLvl.breakroom, zoneLvl.restroom, zoneLvl.closet); TVU.uOffice.value = zoneLvl.office;
   closetBulb.mat?.color.set(zoneOn.closet ? 0xfff2c4 : 0x3a3833);
   boothGlow.lamps?.color.set(zoneOn.booth ? 0xffd890 : 0x3a3833); boothGlow.stairs?.color.set(zoneOn.stairwell ? 0xffd890 : 0x3a3833); boothGlow.red?.color.set(zoneOn.booth ? 0x2a0806 : 0xff2a1a);
   TVU.uThLight.value.set(zoneLvl.lobby, zoneLvl.theater, zoneLvl.booth, zoneLvl.stairwell);

@@ -386,6 +386,7 @@ const GATE_Z = 4.0;                           // security gate line across the e
   // hanging CHECKOUT sign over the checkout run, two panels back to back on cables
   {
     const sx = -4.2, sy = 2.75, tex = textPlane("CHECKOUT", 1.6, 0.4).material.map, m = new THREE.MeshLambertMaterial({ map: tex });
+    hangers.push({ x0: sx - 0.8, x1: sx + 0.8, z0: 3.92, z1: 4.08, y0: sy - 0.2, y1: sy + 0.2, name: "CHECKOUT" });
     const f = put(new THREE.PlaneGeometry(1.6, 0.4), m, sx, sy, 4.005); const b = put(new THREE.PlaneGeometry(1.6, 0.4), m, sx, sy, 3.995); b.rotation.y = Math.PI;
     for (const cx of [sx - 0.6, sx + 0.6]) put(new THREE.CylinderGeometry(0.006, 0.006, STORE.h - sy - 0.2), mat.dark, cx, (STORE.h + sy + 0.2) / 2, 4);
   }
@@ -630,12 +631,12 @@ let trashFlap = null, trashFlapT = 0, trashFlapRest = 0;   // rest: held ajar wh
     b.rotation.x = -Math.PI / 2; b.position.set(x, 0.008, z); scene.add(b);   // 5 mm over the tile — 1 mm flickered at a distance
   }
 }
-// ---------------- snack center: drink cooler, popcorn machine ----------------
-// Two fixtures against the movie-side wall, just past the register's
+// ---------------- snack center: drink cooler; the popcorn machine (out in the theater's lobby) ----------------
+// The cooler's against the movie-side wall, just past the register's
 // customer edge (z 4.35), all facing the store. Each is modeled in its own local
 // frame — front faces +z, width along x, origin at floor center — then turned
 // to face +x. Local +x ends up pointing north (toward the register).
-const SNACK_ZONE = [4.5, 7.4];               // wall z-span the fixtures cover — side-wall posters skip it
+const SNACK_ZONE = [4.5, 6.1];               // wall z-span the cooler covers — side-wall posters skip it
 // Branding slots: set window.VAULT_BRANDING = { "cooler-marquee": "data:image/…", … }
 // (data URIs — file:// can't feed local image files to WebGL) to swap in real
 // art; each slot otherwise draws a placeholder. Slot sizes (w x h, meters):
@@ -809,9 +810,10 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     place(g, D, W, CZ);
   }
 
-  // ---- popcorn machine: red kettle machine on its cart, condiment shelf on the side ----
+  // ---- popcorn machine: red kettle machine on its cart, condiment shelf on the side. In the theater's lobby, against its
+  // north wall just past the concession stand (store/theaterlobby.js), facing the room, a way behind the counter left between them ----
   {
-    const PZ = 6.75, CW = 0.62, CD = 0.46, SHELF = 0.3;
+    const PX = -3.05, PWZ = STORE.z + WALL_T / 2, CW = 0.62, CD = 0.46, SHELF = 0.3;
     const g = new THREE.Group();
     const pop = (m, what) => { m.userData.popcorn = what; aimables.push(m); return m; };   // popcorn-sequence targets
     const red = new THREE.MeshLambertMaterial({ color: 0xc8102e });
@@ -899,8 +901,9 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     pop(addTo(g, new THREE.CylinderGeometry(0.045, 0.045, 0.16, 20), new THREE.MeshLambertMaterial({ map: butterTex }), SX - 0.07, ST + 0.08, -0.07), "butter");
     pop(addTo(g, new THREE.CylinderGeometry(0.012, 0.012, 0.05, 10), black, SX - 0.07, ST + 0.185, -0.07), "butter");
     pop(addTo(g, new THREE.BoxGeometry(0.03, 0.018, 0.06), black, SX - 0.07, ST + 0.215, -0.05), "butter");   // pump head + nozzle
-    place(g, CD, CW, PZ);
-    colliders.push({ x0: WX, x1: WX + 0.01 + CD, z0: PZ + CW / 2, z1: PZ + CW / 2 + SHELF });   // the side shelf (local -x = world +z)
+    g.position.set(PX, 0, PWZ + 0.05 + CD / 2); scene.add(g);
+    colliders.push({ x0: PX - CW / 2, x1: PX + CW / 2, z0: PWZ, z1: PWZ + 0.05 + CD });
+    colliders.push({ x0: PX - CW / 2 - SHELF, x1: PX - CW / 2, z0: PWZ, z1: PWZ + 0.05 + CD });   // the side shelf (local -x = world -x)
     popcornMachine = { g, cols: colliders.slice(-2) };   // (simulation: bought later — see amenities)
   }
 
@@ -920,7 +923,8 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
       ctx.fillStyle = "#00349c"; ctx.fillRect(0, 0, w, h);
       ctx.strokeStyle = "#ffd400"; ctx.lineWidth = h * 0.06; ctx.strokeRect(h * 0.05, h * 0.05, w - h * 0.1, h - h * 0.1);
       ctx.fillStyle = "#ffd400"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = `italic 900 ${h * 0.55}px Arial Black, Arial`; ctx.fillText(header, w / 2, h * 0.53);
+      let px = h * 0.55; ctx.font = `italic 900 ${px}px Arial Black, Arial`; while (ctx.measureText(header).width > w * 0.68 && px > 10) { px -= 2; ctx.font = `italic 900 ${px}px Arial Black, Arial`; }   // (a long word shrinks to fit between its stars)
+      ctx.fillText(header, w / 2, h * 0.53);
       ctx.fillStyle = "#fff"; ctx.font = `${h * 0.3}px Arial`; ctx.fillText("★", w * 0.13, h * 0.53); ctx.fillText("★", w * 0.87, h * 0.53);
     });
     addTo(g, new THREE.BoxGeometry(RW, 0.3, 0.05), frame, 0, RH - 0.15, -RD / 2 + 0.06);
@@ -992,10 +996,5 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
     return g;                                  // local +z faces the shopper; the pegboard back is at z = -RD/2
   };
   buildSnackRack.depth = RD;
-  {
-    const lobRack = buildSnackRack(1.2, "CONCESSIONS");
-    lobRack.position.set(-3.4, 0, 28.1 + RD / 2); scene.add(lobRack);
-    colliders.push({ x0: -4.0, x1: -2.8, z0: 28.0, z1: 28.1 + RD });
-  }
 }
 

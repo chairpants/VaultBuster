@@ -29,7 +29,7 @@ window.createPOS = function createPOS(api) {
   const COLS = 80, ROWS = 30;
   // DOS-app palette: blue screen, light grey text, bright white values, cyan
   // labels and frames, yellow headings, green money, red warnings; a grey bar
-  // for the selection. VT323 (Google Fonts, loaded in index.html) with a
+  // for the selection. VT323 (vendor/, loaded in index.html) with a
   // monospace fallback offline
   const P = { bg: "#0000aa", fg: "#c8c8d8", hi: "#ffffff", yel: "#ffff55", cyan: "#55ffff", dcyan: "#00aaaa", grn: "#55ff55", red: "#ff5555",
     gray: "#8a8ad0", blk: "#000000", deep: "#000077", shadow: "#000044", sel: "#c8c8d8" };
@@ -59,7 +59,7 @@ window.createPOS = function createPOS(api) {
   const titleOf = c => Object.hasOwn(c, "copies") || Object.getPrototypeOf(c) === Object.prototype ? c : Object.getPrototypeOf(c);
   const isTV = t => t.seasons.length > 1 || t.seasons[0].episodes.length > 1;
   const priceOf = t => t.newRelease ? { cls: "NEW RELEASE", nights: 2, rate: 3.99, late: 2.00 } : { cls: "CATALOG", nights: 5, rate: 1.99, late: 1.00 };
-  const FIRST = ["JOHN", "MARY", "DAVID", "LISA", "MIKE", "KAREN", "STEVE", "SUSAN", "CHRIS", "AMY", "BRIAN", "DONNA", "KEVIN", "TINA", "JASON",
+  const FIRST = ["JOHN", "MARY", "DAVID", "LISA", "NICK", "KAREN", "STEVE", "SUSAN", "CHRIS", "AMY", "BRIAN", "DONNA", "KEVIN", "TINA", "JASON",
     "HEATHER", "SCOTT", "WENDY", "TODD", "DAWN", "GREG", "SHANNON", "RAY", "TRACY", "DOUG", "ANGELA", "PHIL", "KIM", "ERIC", "MELISSA", "RON", "JILL",
     "DANNY", "STACY", "TROY", "APRIL", "GARY", "NICOLE", "DEREK", "JENNY", "MARCUS", "BECKY", "LUIS", "ROSA", "ANDRE", "KEISHA", "DALE", "PAM"];
   const LAST = ["SMITH", "JOHNSON", "MILLER", "DAVIS", "GARCIA", "WILSON", "ANDERSON", "TAYLOR", "THOMAS", "MOORE", "MARTIN", "JACKSON", "THOMPSON",

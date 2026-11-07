@@ -64,6 +64,8 @@ window.VaultTrees = (() => {
       if (z > road[0] - 1 && z < road[1]) return false;                // the road (cars come and go along it, well past the lot)
       if (z > road[0] - 1 && z < 1 && x > lot[0] && x < lot[1]) return false;   // the lot and the walk
       if (x > 12 && x < 24 && z > -2 && z < 16) return false;           // next door
+      if (SERVICE_ROAD.inside(x, z) || SERVICE_ROAD.inside(x - 1.4, z) || SERVICE_ROAD.inside(x + 1.4, z) || SERVICE_ROAD.inside(x, z - 1.4)) return false;   // inside the service road's fence (and none growing through it)
+      if (Math.abs(z - SERVICE_ROAD.FRONT) < 1.4) return false;       // the fence's two runs along the back of the walk
       return !trees.some(t => Math.abs(t.x - x) < 1.3 && Math.abs(t.z - z) < 1.3);
     };
     const try1 = (x, z, s, pine) => { if (x > -60 && x < 70 && z > -24 && z < 88 && clear(x, z)) add(x, z, s, pine); };
@@ -74,10 +76,13 @@ window.VaultTrees = (() => {
       for (let i = 0; i < n; i++) { const a = R() * 6.28, d = Math.sqrt(R()) * r; try1(cx + Math.cos(a) * d, cz + Math.sin(a) * d, 0.9 + R() * 0.8, R() < (pine ? 0.8 : 0.2)); }
     }
     for (let i = 0; i < 40; i++) try1(-55 + R() * 120, -22 + R() * 105, 1 + R() * 0.7, R() < 0.4);   // on their own
+    for (const [x, z, s, pine] of SERVICE_ROAD.trees) { add(x, z, s, !!pine); trees[trees.length - 1].big = true; }   // the big ones just past the service road's fence, their tops over it
 
     // the parts, counted up front
     const pines = trees.filter(t => t.pine), rounds = trees.filter(t => !t.pine);
     const PUFFS = [[0, 1.4, 0.62], [0.34, 1.2, 0.5], [-0.32, 1.25, 0.48], [0.04, 1.68, 0.46]];   // (sat down onto the trunk: the low-poly puffs read smaller than their radius)
+    const BIG_PUFFS = [[0, 1.5, 0.62, 0], [0.62, 1.32, 0.46, 0.1], [-0.6, 1.36, 0.48, -0.12], [0.1, 1.34, 0.46, 0.62], [-0.12, 1.3, 0.46, -0.62], [0.42, 1.72, 0.42, 0.36], [-0.4, 1.76, 0.42, 0.3], [0.34, 1.7, 0.4, -0.4], [-0.3, 1.74, 0.4, -0.38], [0, 2.02, 0.42, 0]];   // (a big tree's a fuller crown: x, up, radius, z)
+    const puffsOf = t => t.big ? BIG_PUFFS : PUFFS, nPuffs = rounds.reduce((n, t) => n + puffsOf(t).length, 0);
     const inst = (geo, m, n) => {
       geo.setAttribute("aTree", new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4));
       const o = new THREE.InstancedMesh(geo, m, n); o.layers.set(layer); o.frustumCulled = false; scene.add(o); return o;
@@ -87,7 +92,7 @@ window.VaultTrees = (() => {
     trunkGeo.translate(0, 0.5, 0);
     const branchGeo = new THREE.CylinderGeometry(0.6, 1, 1, 4, 1, true); branchGeo.translate(0, 0.5, 0);
     const trunks = inst(trunkGeo, trunkM, trees.length), branches = inst(branchGeo, trunkM, rounds.length * 8);
-    const cones = inst(new THREE.ConeGeometry(1, 1, 8), pineM, pines.length * 3), puffs = inst(new THREE.IcosahedronGeometry(1, 0), puffM, rounds.length * PUFFS.length);
+    const cones = inst(new THREE.ConeGeometry(1, 1, 8), pineM, pines.length * 3), puffs = inst(new THREE.IcosahedronGeometry(1, 0), puffM, nPuffs);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3(), c = new THREE.Color();
     const put = (mesh, i, t, x, y, z, sx, sy, sz, quat = q.identity()) => {
       mesh.setMatrixAt(i, m4.compose(p.set(x, y, z), quat, sc.set(sx, sy, sz)));
@@ -100,6 +105,7 @@ window.VaultTrees = (() => {
     });
     const FALL = [0xd8401a, 0xf08a1e, 0xc8702a, 0xf0c832];   // maple red, sugar-maple orange, oak, aspen yellow
     const SPRING = new THREE.Color(0x9acd5a), BROWN = new THREE.Color(0x7a5230), puffData = [];
+    let puffI = 0;
     rounds.forEach((t, i) => {
       for (let j = 0; j < 4; j++) {                 // bare branches up out of the trunk, and a twig off each
         const a = t.phase + j * 1.57 + (R() - 0.5) * 0.5, bx = Math.cos(a) * 0.55, bz = Math.sin(a) * 0.55;
@@ -110,11 +116,12 @@ window.VaultTrees = (() => {
         put(branches, i * 8 + j * 2 + 1, t, mx, my, mz, 0.018 * t.s, 0.42 * t.s, 0.018 * t.s, new THREE.Quaternion().setFromUnitVectors(up, dir));
       }
       const green = new THREE.Color([0x2e6b34, 0x3a7d3f, 0x356f2e, 0x447a35][i % 4]), fall = new THREE.Color(FALL[t.type]), alt = new THREE.Color(FALL[(t.type + 1 + (i % 2)) % 4]);
-      PUFFS.forEach(([ox, y, r], j) => {
-        puffData.push({ i: i * 4 + j, t, x: t.x + ox * t.s, y: y * t.s, z: t.z + (R() - 0.5) * 0.3 * t.s, r: r * t.s,
+      puffsOf(t).forEach(([ox, y, r, oz], j) => {
+        const pi = puffI++;
+        puffData.push({ i: pi, t, x: t.x + ox * t.s, y: y * t.s, z: t.z + (oz ?? (R() - 0.5) * 0.3) * t.s, r: r * t.s,
           th: 0.15 + R() * 0.85, early: j === 0 || j === 3 ? 0 : 0.12 + R() * 0.1,   // the outer puffs turn first
           green: green.clone().offsetHSL((R() - 0.5) * 0.02, 0, (R() - 0.5) * 0.05), fall: fall.clone().lerp(alt, R() * 0.35) });
-        puffs.geometry.attributes.aTree.setXYZW(i * 4 + j, t.x, t.z, t.phase, 2.45 * t.s);
+        puffs.geometry.attributes.aTree.setXYZW(pi, t.x, t.z, t.phase, 2.45 * t.s);
       });
     });
     for (const o of [trunks, branches, cones]) o.instanceMatrix.needsUpdate = true;
@@ -158,11 +165,11 @@ window.VaultTrees = (() => {
     const lcols = [0xb5651d, 0xc8902a, 0x8a4b22, 0xa83a1e, 0xd9a83a, 0x6e4a2a].map(h => new THREE.Color(h)), e = new THREE.Euler();
     for (let i = 0; i < NG; i++) {
       const r = R(); let x, z;
-      if (r < 0.6 && rounds.length) { const t = rounds[Math.floor(R() * rounds.length)], a = R() * 6.28, d = Math.sqrt(R()) * 2.6 * t.s; x = t.x + Math.cos(a) * d + 0.6; z = t.z + Math.sin(a) * d; }
+      if (r < 0.6 && rounds.length) { const t = rounds[Math.floor(R() * rounds.length)], a = R() * 6.28, d = Math.sqrt(R()) * 2.6 * Math.min(t.s, 2.6); x = t.x + Math.cos(a) * d + 0.6; z = t.z + Math.sin(a) * d; if (avoid.some(([a0, b0, c0, d0]) => x > a0 && x < b0 && z > c0 && z < d0)) x = t.x + 0.6, z = t.z; }   // (not indoors)
       else if (r < 0.75) { x = lot[0] + 8 + R() * (lot[1] - lot[0] - 13); z = lot[2] + 0.12 + R() * 0.15; }   // against the lot side of the curb
       else if (r < 0.9) { x = (R() < 0.5 ? -7.6 + R() * 5.6 : 2 + R() * 8.8); z = -0.06 - R() * R() * 0.5; }   // up along the storefront
       else { x = lot[0] + 8 + R() * (lot[1] - lot[0] - 13); z = lot[2] + 0.2 + R() * (-1.8 - lot[2]); }   // loose on the lot and the walk
-      litter.setMatrixAt(i, m4.compose(p.set(x, (z < -1.8 && z > lot[2] ? lotY : 0) + 0.004 + R() * 0.004, z), q.setFromEuler(e.set((R() - 0.5) * 0.3, R() * 6.28, (R() - 0.5) * 0.3)), sc.set(0.7 + R() * 0.6, 1, 0.7 + R() * 0.6)));
+      litter.setMatrixAt(i, m4.compose(p.set(x, (z < -1.8 && z > lot[2] ? lotY : 0) + 0.006 + R() * 0.004, z), q.setFromEuler(e.set((R() - 0.5) * 0.3, R() * 6.28, (R() - 0.5) * 0.3)), sc.set(0.7 + R() * 0.6, 1, 0.7 + R() * 0.6)));
       litter.setColorAt(i, c.copy(lcols[Math.floor(R() * lcols.length)]).multiplyScalar(0.8 + R() * 0.3));
     }
     litter.count = 0;

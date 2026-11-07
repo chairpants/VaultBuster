@@ -22,11 +22,11 @@ function siBunkers(g) {                           // four bunkers, each a grid o
 function arcadeStart(i) {                        // a quarter in, and you're at the machine: its screen in front of you
   if (CUSTOMER) { if (cm.wallet < 0.25) return toast("It takes a quarter. You don't have one"); cm.wallet -= 0.25; cm.day.spent += 0.25; }
   const name = TONY_GAMES[i][0];
-  arcade.i = i; arcade.g = name === "ASTEROIDS" ? asNew() : siNew();
+  arcade.i = i; arcade.g = name === "ASTEROIDS" ? asNew() : name === "MISSILE COMMAND" ? mcNew() : siNew();
   arcade.on = true; arcade.from = { x: player.x, z: player.z, yaw: player.yaw, pitch: player.pitch };
-  const z = 3.2 + i * 0.95; Object.assign(player, { x: TONY_IN.x0 + 1.4, z, yaw: Math.PI / 2, pitch: Math.atan2(1.42 - 1.65, 0.64) - 0.02 }); keys.clear();
+  Object.assign(player, { x: TONY_IN.x0 + 1.02, z: TONY_CAB_Z(i), yaw: Math.PI / 2, pitch: Math.atan2(1.35 - 1.65, 0.5) }); keys.clear();
   siBeep(880, 0.15, "square", 0.04, 440);
-  toast(name === "ASTEROIDS" ? "A / D turn · W thrust · SPACE fire · E to walk away" : "A / D or ← → move · SPACE fire · E to walk away", true);
+  toast(name === "ASTEROIDS" ? "A / D turn · W thrust · SPACE fire · E to walk away" : name === "MISSILE COMMAND" ? "Mouse (the trackball) or WASD aims · SPACE or click fires · E to walk away" : "A / D or ← → move · SPACE fire · E to walk away", true);
 }
 function arcadeStop() {
   if (!arcade.on) return;
@@ -43,8 +43,8 @@ function siKey(e) {                               // -> true if the machine took
   if (!arcade.on) return false;
   if (["KeyE", "Escape", "KeyQ"].includes(e.code)) { if (!e.repeat) arcadeStop(); return true; }
   const g = arcade.g, as = TONY_GAMES[arcade.i][0] === "ASTEROIDS";
-  if (e.code === "Space") { e.preventDefault(); if (!e.repeat) as ? asFire(g) : (!g.shot && !g.dead && !g.over && (g.shot = { x: g.px, y: SI.playerY - 4 }, siBeep(1200, 0.08, "square", 0.03, -800))); return true; }
-  if (["KeyA", "KeyD", "KeyW", "ArrowLeft", "ArrowRight", "ArrowUp"].includes(e.code)) { keys.add(e.code); return true; }
+  if (e.code === "Space") { e.preventDefault(); if (!e.repeat) g.cities ? mcFire(g) : as ? asFire(g) : (!g.shot && !g.dead && !g.over && (g.shot = { x: g.px, y: SI.playerY - 4 }, siBeep(1200, 0.08, "square", 0.03, -800))); return true; }
+  if (["KeyA", "KeyD", "KeyW", "KeyS", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.code)) { keys.add(e.code); return true; }
   return true;                                    // (everything else waits while you play)
 }
 function siTick(dt) {
@@ -201,9 +201,71 @@ function invadersFrame(ctx, s, W, H) {
   ctx.fillRect(0, H - 12, W, 1);
   if (Math.floor(tony.t * 2) % 2) { ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.fillText("INSERT  COIN", W / 2, H - 2); }
 }
+// ---- Tony's day: in on foot a little before eleven, behind the counter till eleven at night, then the lights, the door, the key and off home.
+// Nobody gets in after that (you can always let yourself out: he waits at the door till you do, and it locks behind you) ----
+const TONY_HOME = [62, -1.1], TONY_PACE = 1.5;
+const tonyPost = () => [16.2, TONY_IN.counterZ + 1.0];
+function tonyRoute(leaving) {                     // counter to home, or the same the other way
+  const [px, pz] = tonyPost(), a = PIZZA_DOOR[0], r = [[20.25, pz], [20.25, 6.4], [a, 6.4], [a, 0.9], [a, -0.95], TONY_HOME];
+  return leaving ? r : [...r.slice(0, -1).reverse(), [px, pz]];
+}
+function tonyPark(day) {                          // where he is when nobody's watching him get there (a fresh load, hours skipped)
+  const c = tony.clerk, [px, pz] = tonyPost(), inn = day === "in"; tony.day = day; tony.path = []; tony.pause = 0; tony.lit = inn; tony.locked = !inn;
+  c.group.visible = inn; c.group.position.set(px, inn ? 0 : -50, pz); c.group.rotation.y = Math.PI;   // (-50: invisible things still catch the aiming ray)
+}
+function tonyDayTick(dt) {
+  const c = tony.clerk; if (!c) return;
+  const h = shift.h, open = tonyOpen(), p = c.group.position;
+  const routeLen = tony.routeLen ||= tonyRoute(true).reduce((s, q, i, a) => s + (i ? Math.hypot(q[0] - a[i - 1][0], q[1] - a[i - 1][1]) : 0), 0), due = 11 - routeLen / TONY_PACE / SHIFT.hour;
+  if (!tony.day) tonyPark(open ? "in" : "gone");
+  const you = tonyInsideAt(player.x, player.z);
+  if (open) {
+    if (tony.day === "gone" || tony.day === "closing") tonyPark("in");
+    tony.locked = false;
+    if (h >= 22.75 && you && tony.warned !== shift.day) { tony.warned = shift.day; toast("Tony: \"Fifteen minutes, neighbor. Then I lock up.\"", true); }
+  } else if (h >= due && h < 11) {
+    if (tony.day === "gone") { tony.day = "arriving"; tony.path = tonyRoute(false); c.group.visible = true; p.set(TONY_HOME[0], 0, TONY_HOME[1]); }
+  } else if (tony.day === "arriving" || (tony.day === "in" && h < 11)) tonyPark("gone");   // (the clock thrown back to morning)
+  else if (tony.day === "in" && (!tonyTaken.size || h > 23.25)) {
+    tony.day = "closing"; tony.path = tonyRoute(true); tony.nag = 0; c.setMood("neutral");
+    if (you) toast("Tony: \"That's it, we're closed. Out you go, neighbor.\"", true);
+  }
+  // on his way
+  let speed = 0;
+  if (tony.day === "closing" || tony.day === "arriving") {
+    const closing = tony.day === "closing", next = tony.path[0];
+    if ((tony.pause -= dt) > 0) { /* the key in the lock */ }
+    else if (closing && next && next[1] === -0.95 && (you || arcade.on)) {   // at the door, holding it, till you've gone
+      c.group.rotation.y = 0; if ((tony.nag -= dt) <= 0) { tony.nag = 25; toast(arcade.on ? "Tony, at the door: \"Finish your game. Then home.\"" : "Tony, at the door: \"C'mon, neighbor. I got a bed too.\"", true); }
+    } else if (next) {
+      const dx = next[0] - p.x, dz = next[1] - p.z, d = Math.hypot(dx, dz);
+      if (closing && next[1] === -0.95) tony.lit = false;       // past the switch by the door
+      if (!closing && next[1] === 0.9) tony.lit = true;
+      if (d < 0.05) {
+        tony.path.shift();
+        if (closing && next[1] === -0.95) { tony.locked = true; tony.pause = 1.2; c.group.rotation.y = 0; }
+      } else { const st = Math.min(d, TONY_PACE * dt); p.x += dx / d * st; p.z += dz / d * st; c.group.rotation.y = Math.atan2(dx, dz); speed = TONY_PACE; }
+    } else if (closing) tonyPark("gone");
+    else { tony.day = "in"; c.group.rotation.y = Math.PI; }
+  }
+  if (c.group.visible) c.tick(dt, speed);
+  // the front door: propped open while they're open, else shut, but for him going through it and you letting yourself out
+  const atDoor = Math.hypot(p.x - PIZZA_DOOR[0], p.z) < 1.4 && (tony.day === "closing" || tony.day === "arriving"), inDoor = you && player.z < 1.3;
+  const shut = tony.locked && !atDoor && !inDoor, a = shut ? 0 : -1.35;
+  if (tony.door) { tony.door.rotation.y += (a - tony.door.rotation.y) * Math.min(1, dt * 5); tony.closedSign.visible = !open; }
+  if (shut && Math.abs(player.x - PIZZA_DOOR[0]) < 0.7 && player.z < -0.3 && player.z > -1.2) { if (!tony.told) { tony.told = true; toast("Locked. Tony's is closed: 11 to 11, says the door"); } } else tony.told = false;
+  // the back door: shut and locked for the night (once you're out of its way)
+  const d = tony.backDoor; if (d) {
+    if (open || (h >= due && h < 11)) d.locked = false;
+    else if (!d.locked && !playerIn(d.shut)) {
+      if (d.open) { colliders.splice(colliders.indexOf(d.openBox), 1); colliders.push(d.shut); d.open = false; d.closing = true; }
+      else if (Math.abs(d.a) < 0.03) d.locked = true;
+    }
+  }
+}
 function tonyTick(dt) {
-  if (arcade.on) (TONY_GAMES[arcade.i][0] === "ASTEROIDS" ? asTick : siTick)(Math.min(dt, 0.05));                           // Tony, the fans, the neon, the oven's glow, and (anyone near) the games' attract screens
-  tony.clerk?.tick(dt, 0);
+  tonyDayTick(dt); tonyLightsTick(dt); tonyYardTick(dt);
+  if (arcade.on) (arcade.g.cities ? mcTick : TONY_GAMES[arcade.i][0] === "ASTEROIDS" ? asTick : siTick)(Math.min(dt, 0.05));                           // Tony, the fans, the neon, the oven's glow, and (anyone near) the games' attract screens
   const near = Math.hypot(player.x - 17, player.z - 4) < 16; if (!near) return;
   tony.t = (tony.t || 0) + dt;
   for (const f of tony.fans || []) f.rotation.y += dt * 4;
@@ -212,6 +274,7 @@ function tonyTick(dt) {
   for (const s of tony.screens || []) {
     if ((s.t -= dt) > 0) continue; s.t = 0.1;
     if (arcade.on && tony.screens.indexOf(s) === arcade.i) continue;   // (being played: the game draws it)
+    if (s.name === "MISSILE COMMAND") { s.att ||= mcNew(true); tony.t = tony.t || 0; mcAttract(s.att, 0.1); continue; }
     if (s.name === "ASTEROIDS") { s.att ||= { rocks: [3, 3, 2, 2, 1, 1].map(z => asRock(Math.random() * AS.W, Math.random() * AS.H, z)), score: 0 }; for (const r of s.att.rocks) { r.x += r.vx * 0.1; r.y += r.vy * 0.1; r.a += r.rot * 0.1; asWrap(r); } asDraw(s.att, true); continue; }
     const ctx = s.cv.getContext("2d"), W2 = 256, H2 = 192; ctx.fillStyle = "#05050c"; ctx.fillRect(0, 0, W2, H2);
     if (s.name === "SPACE INVADERS") { invadersFrame(ctx, s, W2, H2); s.tex.needsUpdate = true; continue; }
@@ -225,10 +288,13 @@ function tonyTick(dt) {
 function tonyE(what) {                            // E at Tony's: a slice at the counter, a game at a cabinet
   if (what === "order") {
     if (!tonyOpen()) return toast("Tony's is closed. 11 to 11, says the door");
+    if (tony.day !== "in") return toast("Tony's not behind the counter yet. He's on his way in");
+    if (!CUSTOMER) { tony.clerk?.setMood("happy"); return toast("Tony: \"From next door? On the house. Send me a movie.\" Hot, greasy, perfect", true); }
     if (cm.wallet < 1.5) return toast(`A slice is $1.50. You've got ${cmMoney(cm.wallet)}`);
     cm.wallet -= 1.5; cm.day.spent += 1.5; tony.clerk?.setMood("happy");
     toast("Tony: \"Pepperoni, comin' up.\" Hot, greasy, perfect. You eat it standing at the counter", true); cmLog("A slice at Tony's", "", -1.5); return;
   }
   const i = +what.slice(4);
-  return arcadeStart(i);                          // (both machines play: see arcadeStart)
+  if (!tonyOpen()) return toast("Tony: \"We're closed. The machines'll be here tomorrow.\"");
+  return arcadeStart(i);                          // (they all play: see arcadeStart)
 }

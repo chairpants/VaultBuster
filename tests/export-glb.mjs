@@ -32,11 +32,23 @@ await page.evaluate(() => { localStorage.clear(); localStorage.setItem("vaultbus
 await page.reload({ timeout: 300000 }); await ready();
 await page.click("#mmFiles .acts .go"); await page.waitForTimeout(4000);
 await page.evaluate(() => __t.stopSaving());
+// three's GLTFExporter, onto the page: the game's three.js is one plain script (vendor/three.js) with no import map, so the
+// exporter's own `import ... from "three"` couldn't be loaded as a module. Bundled here from node_modules, with "three" the page's THREE
+{
+  const { build } = await import("esbuild");
+  const r = await build({ stdin: { contents: `import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js"; window.GLTFExporter = GLTFExporter;`, resolveDir: resolve(import.meta.dirname, "..") },
+    bundle: true, write: false, format: "iife", logLevel: "silent",
+    plugins: [{ name: "page-three", setup(b) {
+      b.onResolve({ filter: /^three$/ }, () => ({ path: "three", namespace: "page-three" }));
+      b.onLoad({ filter: /.*/, namespace: "page-three" }, () => ({ contents: "module.exports = window.THREE", loader: "js" }));
+    } }] });
+  await page.addScriptTag({ content: r.outputFiles[0].text });
+}
 
 if (people) {
   const download = page.waitForEvent("download", { timeout: 600000 });
   const cast = await page.evaluate(async only => {
-    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const { GLTFExporter } = window;   // (put on the page below: see gltfExporter)
     const MOODS = ["neutral", "browse", "happy", "love", "meh", "wait", "impatient", "angry", "alarm", "thanks", "shifty", "ask", "off", "on", "shock", "watch"];
     const holder = new THREE.Scene(), who = [], random = Math.random;
     for (let i = only ?? 0; i < (only != null ? only + 1 : 35); i++) {   // (only: just the one, by its number. 35: Tony, from next door, as tonys/inside.js dresses him)                 // two dozen customers, Dana (in her uniform), you (in the uniform, and in your own clothes: player.js's me), and eight more in the uniform for whoever's hired (staff.js's rollApplicant: his khakis and polo, hers)
@@ -88,7 +100,7 @@ if (cars) {                                      // the cars (one of each style,
   const download = page.waitForEvent("download", { timeout: 600000 });
   const { mkdirSync } = await import("fs");
   const got = await page.evaluate(async () => {
-    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const { GLTFExporter } = window;   // (put on the page below: see gltfExporter)
     const holder = new THREE.Scene(); let s = 0;
     for (; s < 6; s++) {
       const c = driveIn({ s, c: 0xff00ff }, null), g = c.g; driveOut(c);   // (not parked yet: just gone, and the car's ours)
@@ -120,7 +132,7 @@ if (extras) {                                    // what a fresh store hasn't go
   const download = page.waitForEvent("download", { timeout: 600000 });
   const { existsSync, readFileSync } = await import("fs"), bareAt = resolve(out, "..", "bare.json");
   const got = await page.evaluate(async bare => {
-    const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+    const { GLTFExporter } = window;   // (put on the page below: see gltfExporter)
     const holder = new THREE.Scene();
     // the library's locked tiers: every copy that isn't on the shelves yet, put out, and just those lifted out of the
     // shelves' merged meshes (a cover's 4 corners, a body's 24), each mesh under its own material
@@ -264,7 +276,7 @@ if (dataOnly) {
 
 const download = page.waitForEvent("download", { timeout: 600000 });
 const stats = await page.evaluate(async () => {
-  const { GLTFExporter } = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/GLTFExporter.js");
+  const { GLTFExporter } = window;   // (put on the page below: see gltfExporter)
   roomSort(); window.regionTick = () => {};      // everything filed into its room, and no room hidden for being out of sight
   for (const [r, g] of Object.entries(roomGroups)) { g.visible = true; g.name = r; }
   roof.g.visible = true; roof.g.name = "roof";

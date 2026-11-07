@@ -4,9 +4,8 @@
 <meta charset="utf8">
 <title>VaultBuster</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">  <!-- the register terminal's font (pos.js) -->
 <style>
+  @font-face { font-family: "VT323"; src: url(vendor/VT323.woff2) format("woff2"); font-display: swap; }   /* the register terminal's font (pos.js) */
   :root { --bb-blue: #00349c; --bb-blue-dark: #001f5c; --bb-yellow: #ffd400; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; background: #000;
@@ -234,14 +233,12 @@
 
   /* ---------- held-up tape overlay ---------- */
   #inspect { position: fixed; z-index: 12; inset: 0; display: none; align-items: center;
-    justify-content: center; flex-direction: column; gap: 14px; background: #0007; pointer-events: none; }
+    justify-content: flex-end; flex-direction: column; padding-bottom: 12px; box-sizing: border-box; pointer-events: none; }
   #inspectCap { text-align: center; text-shadow: 0 1px 2px #000, 0 0 8px #000c; max-width: 80vw; }
-  #inspectCap .t { color: #fff; font-size: 22px; font-weight: bold; }
-  #inspectCap .s { color: var(--bb-yellow); font-size: 13px; letter-spacing: 3px; text-transform: uppercase; margin-top: 4px; }
-  /* fixed 2:3 box, image fitted inside: the small embedded cover and the full-res
-     one that swaps in after it render at the same size (zoom is a transform on top) */
-  #inspect img { height: 36vh; width: 24vh; max-width: 92vw; object-fit: contain; background: #000; border: 4px solid #14181f;
-    box-shadow: 0 24px 70px #000e; border-radius: 3px; transition: transform .12s ease-out; }
+  #inspectCap .t { color: #fff; font-size: 16px; font-weight: bold; }
+  #inspectCap .s { color: var(--bb-yellow); font-size: 11px; letter-spacing: 3px; text-transform: uppercase; margin-top: 2px; }
+  #inspectCap .k { color: #cfe0ff; font-size: 11px; margin-top: 3px; opacity: .75; }
+  body.boxup #crosshair, body.boxup #hoverTip { display: none !important; }
 
   /* ---------- one-line notices (e.g. shelving an unrewound tape) ---------- */
   #toast { position: fixed; z-index: 12; left: 50%; top: 18%; transform: translateX(-50%); display: none;
@@ -284,6 +281,13 @@
   #nowPlaying { position: fixed; z-index: 10; right: 16px; bottom: 12px; display: none;
     color: rgba(255, 255, 255, .72); font-size: 12px; max-width: 46vw; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 3px #000; pointer-events: none; }
+  /* winding through a tape (V / N held): where you've got to, just over the caption, and shown even with the HUD hidden or the picture full screen */
+  #scrubBar { position: fixed; z-index: 11; right: 16px; bottom: 32px; width: min(340px, 46vw); display: none; pointer-events: none;
+    padding: 6px 9px; white-space: nowrap; background: rgba(0, 0, 0, .55); border-radius: 4px; color: #fff; font: bold 12px "Courier New", monospace; text-shadow: 0 1px 2px #000; }
+  #scrubBar > * { display: inline-block; vertical-align: middle; }
+  #scrubDir { width: 20px; color: #ffd400; }
+  #scrubTrack { width: calc(100% - 146px); height: 6px; margin: 0 8px; background: rgba(255, 255, 255, .22); border-radius: 3px; overflow: hidden; }
+  #scrubFill { height: 100%; width: 0; background: #ffd400; }
 </style>
 </head>
 <body>
@@ -320,6 +324,7 @@
       <b>SHIFT</b><span>hustle</span>       <b>L</b><span>skip an hour</span>
       <b>J</b><span>the log</span>           <b>H</b><span>hide the HUD</span>
       <b>M</b><span>store sounds</span>       <b>K</b><span>skills</span>
+      <b>R</b><span>turn a tape over</span>
     </div>
     <div class="keys tc">
       <b>LEFT THUMB</b><span>move</span>       <b>DRAG</b><span>look</span>
@@ -351,11 +356,12 @@
 <div id="invBar"></div>
 <div id="toast"></div>
 <div id="tvHint"></div>
-<div id="inspect"><img id="inspectArt" alt=""><div id="inspectCap"><div class="t" id="inspectTitle"></div><div class="s" id="inspectSec"></div></div></div>
+<div id="inspect"><div id="inspectCap"><div class="t" id="inspectTitle"></div><div class="s" id="inspectSec"></div><div class="k">R turn over · wheel zoom · mouse tilt</div></div></div>
 
 <div id="nowPlaying"></div>
+<div id="scrubBar"><span id="scrubDir"></span><span></span><span id="scrubTrack"><div id="scrubFill"></div></span><span></span></div>
 <!-- TV picture menu's SHARPEN: unsharp-mask convolution the screen canvas filters
-     through (kernel set by applyTv(), same as VaultVision's) -->
+     through (kernel set by applyTv()) -->
 <svg width="0" height="0" style="position:absolute">
   <filter id="tvSharpen" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
     <feConvolveMatrix id="tvSharpenMatrix" order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" preserveAlpha="true"/>
@@ -366,18 +372,13 @@
   <video id="vid" crossorigin="anonymous" playsinline></video>
 
 
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-} }
-</script>
+<script src="vendor/three.js"></script>   <!-- three.js and its add-ons, as one plain script (see vendor/three-entry.js) -->
 <script src="catalog.js"></script>
 <script src="covers.js"></script>  <!-- built by fetch-covers.mjs -->
-<script src="meta.js"></script>
+<script src="meta.js"></script>    <!-- built by fetch-covers.mjs: [year, TMDB votes] per title -->
 <script src="monstervision.js"></script>  <!-- window.VAULT_MV: splits the MonsterVision tape into a tape per film -->
 <script src="mv-covers.js"></script>    <!-- built by fetch-mv-covers.mjs: those films' TMDB posters -->
-<script src="cutout.js"></script>       <!-- cutout.png, embedded: the Dracula standee -->    <!-- built by fetch-covers.mjs: [year, TMDB votes] per title -->
+<script src="cutout.js"></script>       <!-- embedded: the Dracula standee -->
 <script src="customers.js"></script>  <!-- window.VaultCustomers: TV-head customers, built from store/ -->
 <script src="couch.js"></script>   <!-- window.buildCouch(); uses THREE lazily, called from store/ -->
 <script src="pos.js"></script>     <!-- window.createPOS(); the register's terminal, created from store/ -->
@@ -385,23 +386,13 @@
 <script src="ambience.js"></script>  <!-- window.VaultAmbience: the store's sound (hum, room tone, traffic, chime, footsteps), modelled not recorded -->
 <script src="touch.js"></script>     <!-- touchscreen controls on phones / tablets (?touch=1 to force) -->
 <script type="module">
-  // file:// can't load local files as ES modules, so: import three from the CDN
-  // here (https CORS is fine), expose the globals, then load the game (store/, tonys/, exterior/:
-  // one shared scope, in this order) as classic scripts — which file:// happily allows.
-  import * as THREE from "three";
-  import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-  import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-  import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-  import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-  window.THREE = THREE; window.mergeGeometries = mergeGeometries;
-  window.UnrealBloomPass = UnrealBloomPass; window.ShaderPass = ShaderPass;
-  window.OutputPass = OutputPass;
+  // load the game (store/, tonys/, exterior/: one shared scope, in this order) as classic scripts, which file:// allows.
   // Keys and the mouse wait for the last file: a handler from one file can't run before the files after it are in.
   const INPUT = ["keydown", "keyup", "mousemove", "mousedown", "mouseup", "click", "wheel", "contextmenu"], hold = e => e.stopImmediatePropagation();
   for (const t of INPUT) addEventListener(t, hold, true);
-  for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/lot", "exterior/grounds", "store/lobby", "store/shelves", "store/lounge",
-    "store/shift", "exterior/sky", "store/clock", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/inside", "tonys/arcade",
-    "tonys/outside", "store/roof", "store/chores", "store/tv", "store/title", "store/customer-mode", "store/main"]) {
+  for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/lot", "exterior/grounds", "exterior/serviceroad", "store/lobby", "store/shelves", "store/plants", "store/theaterlobby", "store/lounge",
+    "store/shift", "exterior/sky", "store/clock", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/light", "tonys/inside", "tonys/cabinets", "tonys/arcade", "tonys/missile", "tonys/yard",
+    "tonys/outside", "store/roofkit", "store/roof", "store/office", "store/chores", "store/tapebox", "store/tv", "store/title", "store/customer-mode", "store/wheel", "store/main"]) {
     const s = document.createElement("script"); s.src = `${f}.js`; s.async = false;   // async off: run in order, not as they arrive
     if (f === "store/main") s.onload = s.onerror = () => { for (const t of INPUT) removeEventListener(t, hold, true); };
     document.body.appendChild(s);

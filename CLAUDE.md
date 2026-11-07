@@ -1,6 +1,6 @@
 # VaultBuster
 
-A first-person 90s video store in three.js. No build: `index.html` loads plain scripts, and it has to keep working from `file://`.
+A first-person 90s video store in three.js. No build: `index.html` loads plain scripts, and it has to keep working from `file://`. three.js and the register's font are in `vendor/` (`npm run vendor` rebuilds `vendor/three.js`, only needed to change its version); the stock is `catalog.js`, its covers `covers.js` and `mv-covers.js`, and tapes stream from archive.org.
 
 ## How the game's code is laid out
 
@@ -18,17 +18,26 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 |---|---|
 | Sizes and positions everything else is built from (`WALL_L`, `DOOR_W`, `LOT`, colours) | `store/core.js`: palette / constants |
 | `box` / `solid` / `wall` / `makeDoor`, the outer walls, the back hall | `store/shell.js` |
-| Janitor's closet, break room (lockers, table, kitchenette), restroom (toilet, sink) | `store/backrooms.js` |
-| Theater lobby, the auditorium and its seats, the projection booth over the lobby and its stairwell (`BOOTH`, `stairsAt`) | `store/theater.js` |
+| Janitor's closet, break room (lockers, table, kitchenette), the women's and men's restrooms (stalls, urinal, sinks) | `store/backrooms.js` |
+| The manager's office behind the break room (`BOH.officeZ`): shag, ceiling, desk, chair, computer, filing cabinet; the window and its blinds; the security desk, the cameras out in the store (`SEC_CAMS`) and their feeds. The office's paneled walls are the "paint" kind in `store/core.js` | `store/office.js` |
+| The theater lobby's shell, the auditorium and its seats, the projection booth over the lobby and its stairwell (`BOOTH`, `stairsAt`) | `store/theater.js` |
+| The lobby's dressing: concession stand, menu board, ropes, the NOW PLAYING poster | `store/theaterlobby.js` |
 | The lot, stalls, curbs, driveways, the road, street lamps, parked cars | `exterior/lot.js` |
-| Grass and paving round the building, the dumpster, the cardboard bed out back | `exterior/grounds.js` |
-| Employee counter, returns, back cabinet, entry lane and gates, trash receptacle, snack center (cooler, popcorn machine, snack rack) | `store/lobby.js` |
+| Grass round the building, the store's dumpster, the cardboard bed behind it | `exterior/grounds.js` |
+| The service road (laid out by `SERVICE_ROAD` in `store/core.js`): its worn paving and that shader, the fence, jersey barriers, bollards, the turning island | `exterior/serviceroad.js` |
+| Employee counter, returns, back cabinet, entry lane and gates, trash receptacle, snack center (cooler, snack rack; the popcorn machine, built here, stands in the theater's lobby) | `store/lobby.js` |
 | Posters, cover atlases, shelves and the store layout (walls, kids, center, Staff Picks, MonsterVision, standee, candy aisle) | `store/shelves.js` |
 | TV lounge (couch, TV, lamps), the light switches | `store/lounge.js` |
+| Potted plants: the weeping fig by the TV (`buildFig`, from VaultBusterGodot), the theater lobby's dracaena (`buildDracaena`) | `store/plants.js` |
 | The roof and everything on it (two decks: the store's at 4 m and the tall block's at 6.4, the iron stair between them, `roofY`; AC units, dish, sign, lawn chairs, projector, the kick-down ladder out back: `BACK_LADDER`), golf, and at the end of the file how it all works (`roofClimb`, `roofTick`, `cineTick`) | `store/roof.js` |
+| The roof's stamped hardware (`roofKit`: boxes, conduit, supports, drains, blocks; merged by material) | `store/roofkit.js` |
 | Tony's building from outside (brick, awning, glass front), Tony's roof | `tonys/outside.js` |
 | Inside Tony's: dining room, counter, kitchen | `tonys/inside.js` |
-| Tony's arcade cabinets (Space Invaders, Asteroids) | `tonys/arcade.js` |
+| Tony's day (in, out, locking up) | `tonys/arcade.js`: `tonyDayTick` |
+| Tony's light (its own shader: the table of lights, floor, walls, tin ceiling, brick) and `tonyKit`, which bakes static parts into one mesh | `tonys/light.js` |
+| Tony's arcade cabinets, built and painted | `tonys/cabinets.js` |
+| The games: Space Invaders, Asteroids (`tonys/arcade.js`), Missile Command (`tonys/missile.js`) | |
+| Out back of Tony's: slab, bulb, dumpster, the smokers' corner | `tonys/yard.js` |
 | Phone, post-its, calendar, corkboard, holiday decorations | `store/phone.js` |
 | Weather, the sky | `exterior/sky.js` |
 | Trees | `exterior/trees.js` · the couch model: `couch.js` · people's bodies: `customers.js` |
@@ -38,7 +47,8 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | For | Look in |
 |---|---|
 | The player, the stool, aiming and picking up, carrying the standee | `store/player.js` |
-| What E does (`onE`), holding a tape up, the store TV | `store/tv.js` |
+| What E does (`onE`), holding a tape up, the store TV (archive.org streams), winding (V / N), what you hear of a tape where you are (`tvHear`) | `store/tv.js` |
+| A tape held up: the 3D box, turning it over (R), its back drawn from the catalog | `store/tapebox.js` |
 | What the crosshair is on (the `aim*` flags), checkout, the receipt, eating and drinking, snack stock | `store/checkout.js` |
 | Customers: who they are, what they want, how they walk; people and cars going by out front | `store/shoppers.js` |
 | Dana and the staff, skills, job board, hiring | `store/staff.js` |
@@ -49,6 +59,7 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Customer mode | `store/customer-mode.js` |
 | Saving, the main loop, room culling, loading, the `__t` test hooks | `store/main.js` |
 | TV picture settings, screensaver | `store/lounge.js` |
+| The time and weather wheel (hold F) | `store/wheel.js` |
 | Renderer, TV-light shader, bloom, rewinding, canvas-texture helpers | `store/core.js` |
 | The register terminal | `pos.js` · sound: `ambience.js` · touch controls: `touch.js` |
 

@@ -56,22 +56,30 @@ function beaconAt(i, pos, ry, color, w = TAPE.w, h = TAPE.h, d = TAPE.d) {
 // dark room), fading over a few meters, as far as the door is open. [from a zone, to a box, through (x, y, z), reach]
 const SPILLS = (() => {
   const HZ = BOH.hallZ, Z = STORE.z, X = STORE.x, hall = [BOH.x0, CLOSET.x0, Z, HZ];
-  const rr = [BOH.x0, BOH.splitX, HZ, BOH.z1], brk = [BOH.splitX, X, HZ, BOH.z1], cl = [CLOSET.x0, X, Z, HZ], floor = [BOH_DOORS.store - 3, BOH_DOORS.store + 3, Z - 6, Z];
+  const rrM = [BOH.rrX, BOH.splitX, HZ, BOH.z1], rrF = [BOH.x0, BOH.rrX, HZ, BOH.z1], brk = [BOH.splitX, X, HZ, BOH.officeZ], off = [BOH.splitX, X, BOH.officeZ, BOH.z1], cl = [CLOSET.x0, X, Z, HZ], floor = [BOH_DOORS.store - 3, BOH_DOORS.store + 3, Z - 6, Z];
   // a doorway: in a wall along x (z = at) or along z (x = at), centered c, half width hw; the lit side (+1/-1 across the
   // wall), and how far back in there (depth) and how high (y) its light is. The door itself (if any) is found by position
   const dw = (alongX, at, c, hw, side, depth, y, door = true) => ({ alongX, at, c, hw, door,
     src: alongX ? [c, y, at + side * depth] : [at + side * depth, y, c] });
   const brkD = s => dw(true, HZ, BOH_DOORS.breakroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
-  const rrD = s => dw(true, HZ, BOH_DOORS.restroom, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
+  const offD = s => dw(true, BOH.officeZ, BOH_DOORS.office, OFFICE_DOOR_W / 2, s, s > 0 ? 1.2 : 0.9, s > 0 ? 2.45 : 2.4);
+  const winD = s => ({ ...dw(true, BOH.officeZ, (OFFICE_WIN.x0 + OFFICE_WIN.x1) / 2, (OFFICE_WIN.x1 - OFFICE_WIN.x0) / 2, s, s > 0 ? 1.2 : 1.35, 2.45, false), win: true });
+  const rrD = (s, c = BOH_DOORS.restroom) => dw(true, HZ, c, DOOR_W / 2, s, s > 0 ? 1.3 : 0.9, s > 0 ? 2.4 : 2.55);
   const clD = s => dw(false, CLOSET.x0, BOH_DOORS.closet, CLOSET.doorW / 2, s, s > 0 ? 0.6 : 0.9, s > 0 ? 2.28 : 2.55);
   const opD = s => dw(true, Z, BOH_DOORS.store, BOH_OPENING_W / 2, s, s < 0 ? 3 : 0.9, s < 0 ? 3.4 : 2.55, false);
   return [
     { from: "breakroom", into: "hall", to: hall, ...brkD(1) },
     { from: "restroom", into: "hall", to: hall, ...rrD(1) },
+    { from: "restroom", into: "hall", to: hall, ...rrD(1, BOH_DOORS.restroomF) },
     { from: "closet", into: "hall", to: hall, ...clD(1), warm: true, reach: 2.6 },
     { from: "lounge", into: "hall", to: hall, ...opD(-1), reach: 4.5 },                  // the sales floor through its wide opening
     { from: "hall", into: "breakroom", to: brk, ...brkD(-1) },
-    { from: "hall", into: "restroom", to: rr, ...rrD(-1) },
+    { from: "office", into: "breakroom", to: brk, ...offD(1), warm: true },
+    { from: "breakroom", into: "office", to: off, ...offD(-1) },
+    { from: "office", into: "breakroom", to: brk, ...winD(1), warm: true },              // through the window, as far as the blinds are open
+    { from: "breakroom", into: "office", to: off, ...winD(-1) },
+    { from: "hall", into: "restroom", to: rrM, ...rrD(-1) },
+    { from: "hall", into: "restroom", to: rrF, ...rrD(-1, BOH_DOORS.restroomF) },
     { from: "hall", into: "closet", to: cl, ...clD(-1), reach: 2 },
     { from: "hall", into: "lounge", to: floor, ...opD(1), reach: 4.5 },
   ];
@@ -81,12 +89,12 @@ function spillTick() {                            // the live spills (a lit room
   let n = 0;
   for (const s of SPILLS) {
     if (s.door && s.d === undefined) s.d = doors.find(d => d.alongX === s.alongX && Math.abs(d.at - s.at) < 0.01 && Math.abs(d.c - s.c) < 0.01) || null;
-    const open = !s.door ? 1 : s.d ? Math.min(1, Math.abs(s.d.a / s.d.openA)) : 0;   // how far its door's swung (a doorway: always open)
+    const open = s.win ? 0.8 * officeFx.blinds.reduce((a, b) => a + b.k, 0) / officeFx.blinds.length : !s.door ? 1 : s.d ? Math.min(1, Math.abs(s.d.a / s.d.openA)) : 0;   // how far its door's swung (a doorway: always open)
     const src = lvl(s.from), k = src > lvl(s.into) + 0.01 ? 0.75 * open * src : 0;
-    if (k < 0.005) continue;
+    if (k < 0.005 || n >= U.uSpillP.value.length) continue;
     U.uSpillP.value[n].set(...s.src, s.reach || 3.5); U.uSpillB.value[n].set(...s.to);
     U.uSpillD.value[n].set(s.alongX ? 0 : 1, s.at, s.c, s.hw);
-    U.uSpillC.value[n].set(k * (s.warm ? 1.12 : 1), k * (s.warm ? 0.95 : 1), k * (s.warm ? 0.74 : 1), 0);
+    U.uSpillC.value[n].set(k * (s.warm ? 1.12 : 1), k * (s.warm ? 0.95 : 1), k * (s.warm ? 0.74 : 1), s.win ? OFFICE_WIN.sill : 0);
     n++;
   }
   U.uSpillN.value = n;
@@ -420,7 +428,7 @@ function sheetHud() {
 const hiring = { open: false, apps: [], refund: 0 };
 const hireCost = () => Math.round(250 * 1.55 ** (upg.hires || 0) / 5) * 5;   // each hire costs more than the last
 function hireOpen(paid) {
-  hiring.open = true; hiring.refund = paid; hiring.apps = [rollApplicant(), rollApplicant(), rollApplicant()];
+  hiring.open = true; hiring.refund = paid; hiring.apps = []; while (hiring.apps.length < 3) { const a = rollApplicant(); if (!hiring.apps.some(o => o.first === a.first && o.last === a.last)) hiring.apps.push(a); }   // (three different people)
   const el = $("hireScreen"), shots = portraits(hiring.apps.map(a => a.outfit));
   el.innerHTML = `<div class="h">THREE APPLICANTS · PICK ONE</div><div class="apps">` + hiring.apps.map((a, i) => `<div class="app">
       <img src="${shots[i]}" alt=""><div class="nm">${a.first} ${a.last}</div><div class="lk">${a.female ? "Woman" : "Man"} · ${looksOf(a.outfit)}</div>
@@ -438,7 +446,7 @@ function hirePick(i) {
 }
 function hireClose() {
   hiring.open = false; $("hireScreen").style.display = "none";
-  if (started && !posTerm?.isOpen() && document.pointerLockElement !== canvas) canvas.requestPointerLock()?.catch?.(() => {});   // the register was closed underneath: back into the store
+  if (started && !posTerm?.isOpen() && document.pointerLockElement !== canvas) lockMouse()?.catch?.(() => {});   // the register was closed underneath: back into the store
 }
 function portraits(outfits) {                     // a head-and-shoulders render of each applicant (their own little renderer, then thrown away)
   const W = 180, H = 220, out = [];
@@ -477,16 +485,25 @@ function empBackToRegister(msg) {
 let tvAudio = null;
 function tvLevel() {                              // RMS of the TV's audio right now, 0..~0.5 (null if unreadable)
   if (!playing || video.paused) return 0;
-  if (!tvAudio) try {                             // built once, on first need: after this the TV's sound runs through it
-    const ac = VaultAudio.ctx(), an = ac.createAnalyser(); an.fftSize = 1024;
-    ac.createMediaElementSource(video).connect(an); an.connect(VaultAudio.out());
-    tvAudio = { ac, an, buf: new Float32Array(1024) };
-  } catch { tvAudio = { fail: true }; }
-  if (tvAudio.fail) return null;
-  if (tvAudio.ac.state === "suspended") tvAudio.ac.resume();
+  if (!tvAudioBuild()) return null;
   tvAudio.an.getFloatTimeDomainData(tvAudio.buf);
   let sum = 0; for (const v of tvAudio.buf) sum += v * v;
   return Math.sqrt(sum / tvAudio.buf.length);
+}
+function tvAudioBuild() {                         // built once, the first time a tape plays: after this the tape's sound runs through it. The analyser's first (what the tape sounds like, wherever you are), then what you're hearing it through (see tvHearTick). -> false if it can't be
+  if (!tvAudio) try {
+    const ac = VaultAudio.ctx(), an = ac.createAnalyser(), lp = ac.createBiquadFilter(), pan = ac.createStereoPanner(), gain = ac.createGain(); an.fftSize = 1024;
+    lp.type = "lowpass"; lp.frequency.value = 20000; lp.Q.value = 0.5; gain.gain.value = 0;
+    ac.createMediaElementSource(video).connect(an); an.connect(lp); lp.connect(pan); pan.connect(gain); gain.connect(fullVid.on ? ac.destination : VaultAudio.out());
+    tvAudio = { ac, an, lp, pan, gain, buf: new Float32Array(1024) };
+  } catch { tvAudio = { fail: true }; }
+  if (tvAudio.fail) return false;
+  if (tvAudio.ac.state === "suspended") tvAudio.ac.resume();
+  return true;
+}
+function tvAudioRoute() {                         // zoomed all the way in, the tape's sound as it is: past the store's compressor
+  if (!tvAudio || tvAudio.fail) return;
+  tvAudio.gain.disconnect(); tvAudio.gain.connect(fullVid.on ? tvAudio.ac.destination : VaultAudio.out());
 }
 const empCanWatch = () => frontLock.locked && !custs.length && emp.task === "register" && seated && !seatAt?.toilet && !seatAt?.roof;   // what brings her over (the couch, not the restroom)
 const inLounge = () => Math.hypot(player.x - TV.x, player.z - (TV.z - 2.5)) < 5.5;
@@ -571,7 +588,7 @@ function empLeaveStool() {                       // dropped mid-whatever (you ca
 function empTick(dt) { for (const e of staff) withEmp(e, () => empTickOne(dt)); staffChatTick(dt); }   // each of them in turn
 // ---- the staff between customers: leaning on the counter, checking the time, an eye on the lounge TV, a chat with
 // whoever else is on, and lunch in the break room (a half hour, sometime around midday, on a long enough shift) ----
-const LUNCH_CHAIRS = [{ x: 7.2, z: 31.05, ry: 0 }, { x: 7.8, z: 31.1, ry: 0.15 }, { x: 7.5, z: 32.45, ry: Math.PI }, { x: 8.42, z: 31.8, ry: -Math.PI / 2 + 0.2 }];
+const LUNCH_CHAIRS = [{ x: 9.4, z: 30.45, ry: Math.PI / 2, stand: { x: 9.4, z: 31 } }, { x: 10.6, z: 30.48, ry: -Math.PI / 2 + 0.12, stand: { x: 10.6, z: 31 } }];   // (stand: where you get in and out of it, from the room side: behind them's the door and the wall)   // (the break room's table: see store/backrooms.js)
 const CHAT_TOPICS = ["last night's X-Files", "a guy who returned a tape full of sand", "the new Pearl Jam album", "weekend plans", "whether Titanic's ever coming out on tape",
   "car trouble", "the Bulls game", "which of the regulars rewinds", "a weird dream", "the best pizza in town", "Friends", "the district manager's tie"];
 function empIdleTick(dt) {                        // at their post with nothing to do: the small stuff (see "post")
@@ -616,8 +633,7 @@ function empLunchDue() {                          // time for their lunch? (only
 function empLunchStart() {
   const taken = new Set(staff.map(e => e.lunchChair).filter(Boolean)), ch = LUNCH_CHAIRS.find(c => !taken.has(c)); if (!ch) return;
   emp.lunchDay = shift.day; emp.lunchChair = ch; empFidgetStop(); emp.chatWith = null; emp.c.talk(false);
-  const fx = Math.sin(ch.ry), fz = Math.cos(ch.ry);   // the way the chair faces (to the table): come at it from behind
-  empGo("toLunch", { x: ch.x - fx * 0.5, z: ch.z - fz * 0.5, ry: ch.ry });
+  empGo("toLunch", { x: ch.stand.x, z: ch.stand.z, ry: ch.ry });
   logAct(`${emp.first}'s on lunch`);
 }
 const sandwichMesh = () => {                      // a sandwich in its wax paper
@@ -794,7 +810,7 @@ function empTickOne(dt) {
         if ((emp.biteT -= dt) <= 0) { emp.biteT = 3 + Math.random() * 5; const r = Math.random(); c.setMood(r < 0.4 ? "happy" : r < 0.7 ? "neutral" : r < 0.85 ? "love" : "sleep"); c.lookAt(r > 0.6 ? (Math.random() * 2 - 1) * 0.8 : null); }
         if (emp.t <= 0 || emp.leaving) { c.holdItem(null); c.setPose("idle"); c.lookAt(null); c.setMood("neutral"); emp.state = "lunchUp"; emp.t = 0.5; }
         break;
-      case "lunchUp": if (emp.t <= 0) { const ch = emp.lunchChair; p.x = ch.x - Math.sin(ch.ry) * 0.5; p.z = ch.z - Math.cos(ch.ry) * 0.5; emp.lunchChair = null; logAct(`${emp.first}'s back from lunch`); empGo("toPost", emp.home); } break;
+      case "lunchUp": if (emp.t <= 0) { const ch = emp.lunchChair; p.x = ch.stand.x; p.z = ch.stand.z; emp.lunchChair = null; logAct(`${emp.first}'s back from lunch`); empGo("toPost", emp.home); } break;
       case "toCouch": emp.state = "sitDown"; emp.t = 0.7; emp.from = { x: p.x, z: p.z }; c.setPose("sit"); break;
       case "sitDown": {                            // back onto the cushion, facing the TV
         const k = 1 - Math.max(0, emp.t) / 0.7;

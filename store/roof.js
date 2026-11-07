@@ -6,12 +6,12 @@
 // level: its own colliders (the parapets and the kit), the inside of the store isn't drawn, the camera's on the deck.
 // And now that you can see it from up there, the world around the building: the stucco outside of its walls, a
 // paved apron round the sides and back with the dumpster, grass beyond, and the pizza place next door
-const roof = { g: new THREE.Group(), cols: [], ladderParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
+const roof = { g: new THREE.Group(), cols: [], ladderParts: [], hatchParts: [], climb: null, cam: new THREE.Vector3(), fans: [], units: [], turbine: null, lid: null, lidA: 0, bulb: null, sign: null, puddles: null, grime: null, shades: null, smoke: null, seats: [], back: null };
 scene.add(roof.g); roof.g.visible = false;
 const ROOF_LADDER = { x: 10.6, z: 28.28 };                 // the rungs' line: against the closet's north wall (the store's back wall), beside the chute
 const ROOF_HATCH = { x0: 10.28, x1: 10.88, z0: 28.12, z1: 28.87 };
 const ROOF_UP = { x: 9.8, z: 29.3 }, ROOF_DOWN = { x: 10.08, z: 28.8 };   // where you step off at the top / at the bottom
-// the ladder out back, on the back of house's back wall by the cardboard bed (the tall block's walls are too tall for it). Its
+// the ladder out back, on the back of house's back wall, in the hammerhead behind the store (the tall block's walls are too tall for it). Its
 // bottom half rides latched up out of reach of the ground till somebody on the roof kicks it down (once: it stays down, and
 // it's saved); then it's a way up from outside
 const BACK_LADDER = { x: 6.0, z: 35.39, wall: 35.25, mid: 2.3, raise: 2.0, up: { x: 6.0, z: 34.32 }, down: { x: 6.0, z: 35.92 } };   // z: the rungs' line, 14 cm off the wall's stucco (wall: its face); up / down: where you step off
@@ -25,7 +25,7 @@ function roofY(x, z) {                          // underfoot up top: the store's
   if (x > IRON.land && x < foot && z > IRON.z0 && z < ROOF.tall.z0) return x <= IRON.x0 ? ROOF.tall.y : ROOF.y + (foot - x) / (foot - IRON.x0) * (ROOF.tall.y - ROOF.y);
   return deckY(x, z) ?? ROOF.y;
 }
-const playerFloor = () => player.onRoof ? roofY(player.x, player.z) : player.inBooth ? TALL.booth : floorHeightAt(player.x, player.z);
+const playerFloor = () => (player.airH || 0) + (player.onRoof ? roofY(player.x, player.z) : player.inBooth ? TALL.booth : floorHeightAt(player.x, player.z));   // (airH: off the ground, see jumpTick)
 const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === "carried" || boxCarry.length || bagCarry.length || toolHeld || cmove.item;
 {
   const Y = ROOF.y, G = roof.g, T = 0.2, PH = ROOF.wall;
@@ -38,6 +38,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   const stick = (a, b, r, m, par = G) => { const d = new THREE.Vector3().subVectors(b, a), o = put(new THREE.CylinderGeometry(r, r, d.length(), 8), m, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, par); o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); return o; };
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   const galv = phong(0xa9aeb3, 40), alum = phong(0xd3d6da, 80), dark = lam(0x2a2c2f), beige = phong(0xd9d3c3, 20), cement = lam(0x9d9a92);
+  const K = roofKit();                             // the stamped hardware (store/roofkit.js): laid out as the roof's built, one mesh a material at the end
 
   // ---- the decks: gravel ballast over the membrane, one sheet over each (a hole in the store's for the hatch): the store's
   // and the back of house's at 4 m, the tall block's (the auditorium and the booth) at 6.4 ----
@@ -68,7 +69,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
 
   // ---- parapets: a wall just inside every edge, the stucco skin outside it all the way down (or down to the store's roof,
   // round the tall block over it), aluminium coping on top. The tall block's front is open over the iron stair's landing ----
-  const stucco = lam(0xcdbf9f), base = lam(0x8f8573), coping = phong(0xc2c6cb, 50), fasciaBlue = lam(0x00349c), fasciaY = lam(0xf2c200);
+  const stucco = wallSurface(lam(0xcdbf9f), "stucco"), base = lam(0x8f8573), coping = phong(0xc2c6cb, 50), fasciaBlue = lam(0x00349c), fasciaY = lam(0xf2c200);
   const membrane = new THREE.MeshLambertMaterial({ map: makeTexture((ctx, W, H) => {   // 3 m of the parapet's inside: the roof's white sheet run up it, weathered
     ctx.fillStyle = "#c4c5bf"; ctx.fillRect(0, 0, W, H);
     for (let i = 0; i < 2500; i++) { ctx.fillStyle = `rgba(${Math.random() < 0.5 ? "60,58,52" : "255,255,250"},${0.03 + Math.random() * 0.05})`; ctx.fillRect(Math.random() * W, Math.random() * H, 1 + Math.random() * 3, 1 + Math.random() * 2); }
@@ -86,7 +87,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
   const skin = new THREE.Group(); scene.add(skin);   // (the building's outside, in the scene not the roof group: seen from up here over the edge, and from anywhere out there)
   // each edge: from, to, its deck's height, how far down its skin goes (to the ground, or the store's roof under the tall
   // block's front and side), and whether it has a parapet (the tall front's gap over the stair: just the wall under it)
-  const EDGES = [[-7.84, -0.1, 11.1, -0.1, Y, 0], [11.1, -0.1, 11.1, 35.1, Y, 0], [11.1, 35.1, TX1, 35.1, Y, 0], [-7.84, TZ0, -7.84, -0.1, Y, 0],
+  const EDGES = [[-7.84, -0.1, 11.1, -0.1, Y, 0], [11.1, -0.1, 11.1, STORE_EXIT.z0, Y, 0, true, "b"], [11.1, STORE_EXIT.z0, 11.1, STORE_EXIT.z1, Y, DOOR_H], [11.1, STORE_EXIT.z1, 11.1, 35.1, Y, 0, true, "a"], [11.1, 35.1, TX1, 35.1, Y, 0], [-7.84, TZ0, -7.84, -0.1, Y, 0],
     [TX0, TZ0, IRON.land, TZ0, TY, Y], [IRON.land, TZ0, IRON.x0, TZ0, TY, Y, false], [IRON.x0, TZ0, TX1, TZ0, TY, Y], [TX1, TZ0, TX1, 35.1, TY, Y],
     [TX1, 35.1, TX1, TZ1, TY, 0], [TX1, TZ1, TX0, TZ1, TY, 0],
     [TX0, TZ1, TX0, FIRE_EXIT.z1, TY, 0, true, "b"], [TX0, FIRE_EXIT.z1, TX0, FIRE_EXIT.z0, TY, FIRE_EXIT.head], [TX0, FIRE_EXIT.z0, TX0, TZ0, TY, 0, true, "a"]];   // (over the emergency exit: from its head up; either side of it, the skin stops at its opening)
@@ -142,24 +143,27 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     const add = (w, h, d, m, x, y, z, par = hatch) => bx(w, h, d, m, x, y, z, par);
     add(x1 - x0 + 0.12, CH, 0.06, steel, cx, Y + CH / 2, z0 - 0.03); add(x1 - x0 + 0.12, CH, 0.06, steel, cx, Y + CH / 2, z1 + 0.03);
     add(0.06, CH, z1 - z0, steel, x0 - 0.03, Y + CH / 2, cz); add(0.06, CH, z1 - z0, steel, x1 + 0.03, Y + CH / 2, cz);
-    const lid = new THREE.Group(); lid.position.set(cx, Y + CH, z0 - 0.06); hatch.add(lid); roof.lid = lid;   // hinged along its south edge
-    add(x1 - x0 + 0.16, 0.05, z1 - z0 + 0.14, steel, 0, 0.025, (z1 - z0 + 0.14) / 2, lid);
-    add(0.04, 0.03, 0.2, dark, 0, 0.065, z1 - z0 - 0.05, lid);     // its handle
-    add(0.03, 0.4, 0.03, galv, -(x1 - x0) / 2 + 0.04, 0.2, 0.05, lid).rotation.x = 0.3;   // the hold-open arm (folded)
+    const lid = new THREE.Group(); lid.position.set(cx, Y + CH, z1 + 0.06); hatch.add(lid); roof.lid = lid;   // hinged along its north edge, the far side from the ladder: it opens away from the rails
+    const LX0 = x0 - 0.02, LX1 = STORE.x + 0.1 - T - 0.025;          // its width: over the opening, stopping short of the parapet's coping, which it would go through standing open
+    add(LX1 - LX0, 0.05, z1 - z0 + 0.14, steel, (LX0 + LX1) / 2 - cx, 0.025, -(z1 - z0 + 0.14) / 2, lid);
+    add(0.04, 0.03, 0.2, dark, 0, 0.065, -(z1 - z0 - 0.05), lid);     // its handle
     ext(hatch); col(x0 - 0.06, x1 + 0.06, z0 - 0.06, z1 + 0.06);
     // the shaft through the plenum, closet ceiling to deck (unlit: it's dark in there, and the room lighting would take it for outdoors)
     const shaftM = new THREE.MeshBasicMaterial({ color: 0x34322e }), sy0 = BOH.h, sh = Y - sy0;
-    for (const [w, d, x, z] of [[x1 - x0, 0.02, cx, z0 - 0.01], [x1 - x0, 0.02, cx, z1 + 0.01], [0.02, z1 - z0, x0 - 0.01, cz], [0.02, z1 - z0, x1 + 0.01, cz]]) box(w, sh, d, shaftM, x, sy0 + sh / 2, z);
-    for (const [w, d, x, z] of [[x1 - x0 + 0.1, 0.05, cx, z0 - 0.025], [x1 - x0 + 0.1, 0.05, cx, z1 + 0.025], [0.05, z1 - z0, x0 - 0.025, cz], [0.05, z1 - z0, x1 + 0.025, cz]]) box(w, 0.03, d, mat.frame, x, sy0 - 0.015, z);   // trim round it, under the ceiling
-    // the ladder: galvanised rails standing off the wall on brackets, round rungs every 30 cm, the rails carried on up past
-    // the hatch so there's something to hold stepping off
-    const { x: lx, z: lz } = ROOF_LADDER, top = Y + 1.05;
+    const keep = o => { roof.hatchParts.push(o); return o; };   // (seen from the roof as well as the closet: see roomSort)
+    keep(hatch);
+    for (const [w, d, x, z] of [[x1 - x0, 0.02, cx, z0 - 0.01], [x1 - x0, 0.02, cx, z1 + 0.01], [0.02, z1 - z0, x0 - 0.01, cz], [0.02, z1 - z0, x1 + 0.01, cz]]) keep(box(w, sh, d, shaftM, x, sy0 + sh / 2, z));
+    for (const [w, d, x, z] of [[x1 - x0 + 0.1, 0.05, cx, z0 - 0.025], [x1 - x0 + 0.1, 0.05, cx, z1 + 0.025], [0.05, z1 - z0, x0 - 0.025, cz], [0.05, z1 - z0, x1 + 0.025, cz]]) keep(box(w, 0.03, d, mat.frame, x, sy0 - 0.015, z));   // trim round it, under the ceiling
+    // the ladder: galvanised rails standing off the wall on brackets, round rungs every 30 cm, the rails just past the hatch's
+    // curb and curling over its lip, so there's something to hold stepping off
+    const { x: lx, z: lz } = ROOF_LADDER, top = Y + CH + 0.02;
     for (const sx of [-1, 1]) {
       roof.ladderParts.push(box(0.05, top, 0.016, galv, lx + sx * 0.22, top / 2, lz));
-      for (const y of [0.4, 1.6, 2.6]) box(0.04, 0.03, lz - CLOSET_Z0, galv, lx + sx * 0.22, y, (lz + CLOSET_Z0) / 2);   // wall brackets
+      for (const y of [0.4, 1.6, 2.6]) keep(box(0.04, 0.03, lz - CLOSET_Z0, galv, lx + sx * 0.22, y, (lz + CLOSET_Z0) / 2));   // wall brackets
       const g = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.016, 6, 12, Math.PI), galv); g.position.set(lx + sx * 0.22, top, lz - 0.12); g.rotation.y = Math.PI / 2; scene.add(g); roof.ladderParts.push(g);   // the rails curl over at the top
     }
     for (let y = 0.3; y < Y - 0.05; y += 0.3) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.44, 8), galv); r.rotation.z = Math.PI / 2; r.position.set(lx, y, lz); scene.add(r); roof.ladderParts.push(r); }
+    roof.hatchParts.push(...roof.ladderParts);
     for (const o of [...roof.ladderParts, ...hatch.children, ...lid.children]) if (o.isMesh) { o.userData.roofLadder = true; aimables.push(o); }
     colliders.push({ x0: lx - 0.26, x1: lx + 0.26, z0: CLOSET_Z0, z1: lz + 0.03, y1: Y });
     // a caged bulb on the parapet by the hatch, on at night (see roofTick)
@@ -176,51 +180,71 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     for (let y = 16; y < H - 14; y += 7) { ctx.fillStyle = "#8e8a80"; ctx.fillRect(14, y, W - 28, 3); ctx.fillStyle = "#bdb7a6"; ctx.fillRect(14, y, W - 28, 1); }
   }, 256, 128);
   const louvreM = new THREE.MeshLambertMaterial({ map: louvre });
-  const grille = makeTexture((ctx, W, H) => {        // the fan guard: wire rings and spokes, see-through
-    ctx.clearRect(0, 0, W, H); ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 3;
-    for (let r = 14; r < W / 2; r += 14) { ctx.beginPath(); ctx.arc(W / 2, H / 2, r, 0, 7); ctx.stroke(); }
-    for (let a = 0; a < 8; a++) { ctx.beginPath(); ctx.moveTo(W / 2, H / 2); ctx.lineTo(W / 2 + Math.cos(a * 0.785) * W / 2, H / 2 + Math.sin(a * 0.785) * H / 2); ctx.stroke(); }
-  }, 256, 256);
-  const grilleM = new THREE.MeshLambertMaterial({ map: grille, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
+  const RTU_FANS = [0.02, 0.76];                   // along the lid: the rings (0.36 across) clear of its end (1.15), of each other, and of what's sat on the other half
   const rtu = (x, z, ry, phase) => {
-    const u = new THREE.Group(); u.position.set(x, Y, z); u.rotation.y = ry; G.add(u);
-    const L = 2.3, W = 1.35, H = 1.05;
-    bx(L + 0.1, 0.3, W + 0.1, lam(0x7d7a73), 0, 0.15, 0, u);                    // the curb
-    bx(L, H, W, beige, 0, 0.3 + H / 2, 0, u);
-    for (const s of [-1, 1]) { const p = put(new THREE.PlaneGeometry(L * 0.62, H * 0.75), louvreM, L * 0.17, 0.3 + H * 0.48, s * (W / 2 + 0.003), u); if (s < 0) p.rotation.y = Math.PI; }
-    for (const s of [-1, 1]) bx(0.004, H * 0.8, 0.5, lam(0xb9b3a2), -L / 2 - 0.002, 0.3 + H / 2, s * 0.3, u);   // service panels on the end
-    bx(0.12, 0.06, 0.03, dark, -L / 2 - 0.02, 0.3 + H * 0.5, 0.3, u); bx(0.12, 0.06, 0.03, dark, -L / 2 - 0.02, 0.3 + H * 0.5, -0.3, u);   // their handles
-    for (const fx of [0.2, 0.85]) {
-      cy(0.33, 0.33, 0.12, dark, fx, 0.3 + H + 0.06, 0, 24, u);                   // the shroud
-      const blades = new THREE.Group(); blades.position.set(fx, 0.3 + H + 0.09, 0); u.add(blades);
-      for (let b = 0; b < 4; b++) { const bl = bx(0.28, 0.008, 0.11, lam(0x1c1c1c), 0.15, 0, 0, blades); bl.rotation.x = 0.35; const piv = new THREE.Group(); piv.rotation.y = b * Math.PI / 2; blades.add(piv); piv.add(bl); }
-      cy(0.04, 0.04, 0.05, dark, 0, 0, 0, 10, blades);
-      const gr = put(new THREE.CircleGeometry(0.32, 24), grilleM, fx, 0.3 + H + 0.125, 0, u); gr.rotation.x = -Math.PI / 2;
-      roof.fans.push({ g: blades, v: 0, phase });
-    }
+    const u = new THREE.Group(); u.position.set(x, Y, z); u.rotation.y = ry; G.add(u);   // (just what moves or is printed: all else is stamped)
+    const L = 2.3, W = 1.35, H = 1.05, B = 0.3, skin = K.met(0xd9d3c3, 20), skin2 = K.met(0xcec7b5, 20), band = K.lam(0x8c8778);
+    K.at(x, Y, z, ry, () => {
+      // the curb and base rail it sits on, flashed to the deck
+      K.box(K.lam(0x77746c), L + 0.14, B - 0.05, W + 0.14, 0, (B - 0.05) / 2, 0); K.box(K.mats.galv, L + 0.2, 0.03, W + 0.2, 0, B - 0.05, 0); K.box(band, L + 0.02, 0.06, W + 0.02, 0, B - 0.0, 0);
+      // the cabinet: a body, its seams, screws round its panels
+      K.box(skin, L, H, W, 0, B + H / 2, 0);
+      for (const px of [-L / 2 + 0.46, -0.28, 0.28 + 0.12]) for (const s of [-1, 1]) K.box(band, 0.014, H - 0.04, 0.006, px, B + H / 2, s * (W / 2 + 0.002));   // the panels' seams
+      K.box(band, L + 0.012, 0.018, W + 0.012, 0, B + H, 0);                                                     // the lid's drip edge
+      for (const s of [-1, 1]) K.at(0, 0, s * (W / 2 + 0.004), s < 0 ? Math.PI : 0, () => {
+        K.plane(louvreM, L * 0.62, H * 0.75, s * -L * 0.17 * -1, B + H * 0.48, 0);                               // the condenser coil's louvres
+        K.screws(-L / 2 + 0.05, -L / 2 + 0.4, B + 0.08, B + H - 0.08, 0.002, 2, 4);
+      });
+      // the service end: two doors with quarter-turn latches, the flue hood, the gas cock
+      for (const s of [-1, 1]) K.at(-L / 2 - 0.002, 0, s * 0.33, -Math.PI / 2, () => {
+        K.box(skin2, 0.56, H * 0.82, 0.012, 0, B + H / 2, 0); K.screws(-0.25, 0.25, B + 0.13, B + H - 0.13, 0.008, 2, 3);
+        K.box(K.lam(0x24262a), 0.1, 0.05, 0.022, 0, B + H * 0.5, 0.012); K.box(K.mats.galv, 0.012, 0.03, 0.03, 0, B + H * 0.5, 0.024);
+      });
+      K.at(-L / 2 - 0.09, B + 0.76, -0.36, -Math.PI / 2, () => {                                                 // the flue: a hooded box with slots
+        K.box(K.mats.steel, 0.22, 0.2, 0.16, 0, 0, 0); K.box(K.mats.steel, 0.25, 0.012, 0.2, 0, 0.105, 0.012);
+        for (let k = 0; k < 3; k++) K.box(K.lam(0x141414), 0.16, 0.012, 0.002, 0, -0.05 + k * 0.045, 0.081);
+      });
+      // the fans: a venturi ring standing proud of the lid, a wire guard over it, the motor's strut under the guard
+      for (const fx of RTU_FANS) {
+        const TOP = B + H;
+        K.cyl(K.mats.iron, 0.34, 0.36, 0.1, fx, TOP + 0.05, 0, 28, 0, 0, true); K.ring(K.mats.iron, 0.34, 0.01, fx, TOP + 0.1, 0, Math.PI / 2, 0, 32);
+        K.cyl(K.lam(0x1a1a1b), 0.33, 0.33, 0.004, fx, TOP + 0.012, 0, 28);                                       // the dark inside
+        for (let r = 0.09; r < 0.33; r += 0.05) K.ring(K.mats.galv, r, 0.0028, fx, TOP + 0.122, 0, Math.PI / 2, 0, 28);
+        for (let a = 0; a < 8; a++) K.rod(K.mats.galv, 0.0028, [fx, TOP + 0.124, 0], [fx + Math.cos(a * 0.785) * 0.335, TOP + 0.104, Math.sin(a * 0.785) * 0.335], 4);
+        K.cyl(K.lam(0x1d1d1e), 0.06, 0.06, 0.05, fx, TOP + 0.118, 0, 12);                                         // the motor's end
+      }
+      // the disconnect on its strut, the feed up into the cabinet: a whip of flex
+      const sx = -L / 2 - 0.45;
+      K.strut(sx, 0, 0.92, 0.5); K.disconnect(sx, 0.75, 0.53, 0);
+      K.tube(K.lam(0x3a3c3e), 0.012, [[sx + 0.03, 0.56, 0.53], [sx + 0.2, 0.48, 0.55], [-L / 2 - 0.08, 0.52, 0.52], [-L / 2 - 0.01, 0.62, 0.5]], 14, 6);
+      K.ring(K.mats.galv, 0.016, 0.005, -L / 2 - 0.012, 0.62, 0.5, 0, Math.PI / 2, 10);
+      // the gas: up out of the deck on its blocks, a drip leg, a cock, a union, in the side
+      const gas = K.lam(0xe0b400), gx = -L / 2 + 0.3;
+      K.rod(gas, 0.018, [gx, 0.12, -W / 2 - 0.25], [gx, 0.12, -W / 2 - 2.6]); K.rod(gas, 0.018, [gx, 0.12, -W / 2 - 0.25], [gx, 0.45, -W / 2 - 0.25]); K.rod(gas, 0.018, [gx, 0.45, -W / 2 - 0.25], [gx, 0.45, -W / 2]);
+      K.rod(gas, 0.022, [gx, 0.12, -W / 2 - 0.25], [gx, 0.05, -W / 2 - 0.25]);                                   // the drip leg
+      K.cyl(K.mats.galv, 0.03, 0.03, 0.05, gx, 0.45, -W / 2 - 0.14, 8, Math.PI / 2); K.box(K.lam(0xc4301f), 0.1, 0.012, 0.02, gx, 0.5, -W / 2 - 0.14);   // the union; the cock's red handle
+      for (let k = 0; k < 3; k++) K.support(gx, 0, -W / 2 - 0.7 - k * 0.8, 0.1, Math.PI / 2);
+    });
     const plate = textPlane("CARRIER", 0.32, 0.07, "#ffffff", "#1d4f9c", "Arial Black", 60); plate.material = new THREE.MeshLambertMaterial({ map: plate.material.map });
-    plate.position.set(-L / 2 - 0.004, 0.3 + H - 0.12, 0); plate.rotation.y = -Math.PI / 2; u.add(plate);
-    // the disconnect on a strut beside it, and its conduit
-    const sx = -L / 2 - 0.45;
-    bx(0.04, 0.9, 0.04, galv, sx, 0.45, 0.5, u); bx(0.26, 0.34, 0.12, lam(0x7e858c), sx, 0.75, 0.5, u); bx(0.03, 0.12, 0.05, dark, sx - 0.13, 0.75, 0.5, u);
-    stick(V(sx, 0.55, 0.45), V(-L / 2, 0.55, 0.45), 0.012, galv, u);
-    // the gas line in on its blocks
-    const gasM = lam(0xe0b400);
-    stick(V(-L / 2 + 0.3, 0.12, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.12, -W / 2 - 2.6), 0.018, gasM, u);
-    stick(V(-L / 2 + 0.3, 0.12, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.45, -W / 2 - 0.25), 0.018, gasM, u);
-    stick(V(-L / 2 + 0.3, 0.45, -W / 2 - 0.25), V(-L / 2 + 0.3, 0.45, -W / 2), 0.018, gasM, u);
-    for (let k = 0; k < 3; k++) bx(0.12, 0.08, 0.1, lam(0x4a3f33), -L / 2 + 0.3, 0.04, -W / 2 - 0.7 - k * 0.8, u);
+    plate.position.set(-L / 2 - 0.012, B + H - 0.12, 0); plate.rotation.y = -Math.PI / 2; u.add(plate);
     const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry)), hx = (L / 2 + 0.55) * c + (W / 2 + 0.1) * s, hz = (L / 2 + 0.55) * s + (W / 2 + 0.1) * c;
     col(x - hx, x + hx, z - hz, z + hz);
+    // the blades: their own mesh, they turn
+    for (const fx of RTU_FANS) {
+      const geos = []; for (let b = 0; b < 4; b++) { const g = new THREE.BoxGeometry(0.28, 0.008, 0.11); g.translate(0.17, 0, 0); g.rotateX(0.35); g.rotateY(b * Math.PI / 2); geos.push(g); }
+      const blades = new THREE.Mesh(mergeGeometries(geos), lam(0x1c1c1c)); blades.position.set(fx, B + H + 0.085, 0); u.add(blades);
+      roof.fans.push({ g: blades, v: 0, phase });
+    }
     roof.units.push({ x, z, phase, on: false });
   };
-  rtu(-2.6, 9.5, 0, 0); rtu(4.6, 19.5, 0, 120);
+    rtu(-2.6, 9.5, 0, 0); rtu(4.6, 19.5, 0, 120);
 
   // ---- the whirlybird over the lobby: a turbine vent that turns with the wind ----
   {
     const tx = -3.2, tz = 30.4, t = new THREE.Group(); t.position.set(tx, roofY(tx, tz), tz); G.add(t);
     cy(0.2, 0.24, 0.25, alum, 0, 0.125, 0, 16, t);                               // the throat on its flashing
     cy(0.34, 0.34, 0.015, alum, 0, 0.01, 0, 20, t);
+    for (let i = 0; i < 8; i++) { const a = i * 0.785; bx(0.022, 0.008, 0.022, galv, Math.cos(a) * 0.3, 0.021, Math.sin(a) * 0.3, t); }   // the flange's fasteners
     const head = new THREE.Group(); head.position.y = 0.28; t.add(head); roof.turbine = head;
     const n = 20, R = 0.24, HH = 0.32;
     for (let i = 0; i < n; i++) {                                                // curved vanes: each sweeps a quarter turn as it bulges out and back in
@@ -229,23 +253,32 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
       put(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 0.012, 3), alum, 0, 0, 0, head);
     }
     cy(R * 0.64, R * 0.64, 0.025, alum, 0, 0, 0, 20, head);                      // bottom ring
-    const cap = put(new THREE.SphereGeometry(R * 0.66, 16, 6, 0, Math.PI * 2, 0, Math.PI / 2), alum, 0, HH, 0, head); cap.scale.y = 0.45;
+    cy(R * 0.2, R * 0.66, 0.05, alum, 0, HH + 0.025, 0, 20, head);                // the crown: a shallow spun cone, ribbed, a bearing cap on top
+    cy(0.022, 0.03, 0.03, galv, 0, HH + 0.065, 0, 10, head);
+    for (let i = 0; i < 10; i++) { const a = i * 0.628; stick(V(Math.cos(a) * R * 0.2, HH + 0.052, Math.sin(a) * R * 0.2), V(Math.cos(a) * R * 0.66, HH + 0.002, Math.sin(a) * R * 0.66), 0.004, galv, head); }
     col(tx - 0.36, tx + 0.36, tz - 0.36, tz + 0.36);
   }
-  // ---- mushroom exhaust fans over the restroom and the break room ----
-  for (const [ex, ez] of [[9.6, 31.4], [5.2, 31.6]]) {
-    bx(0.62, 0.3, 0.62, lam(0x8a877f), ex, Y + 0.15, ez);
-    cy(0.2, 0.22, 0.25, alum, ex, Y + 0.42, ez, 20);
-    const dome = put(new THREE.SphereGeometry(0.36, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2), alum, ex, Y + 0.58, ez); dome.scale.y = 0.55;
-    cy(0.36, 0.36, 0.02, alum, ex, Y + 0.58, ez, 20);
-    put(new THREE.CylinderGeometry(0.34, 0.34, 0.1, 20, 1, true), grilleM, ex, Y + 0.52, ez);   // the screen under the hood
+  // ---- upblast exhaust fans over the restrooms and the break room: a square curb, a flared neck, an open windband, a guard over the blades, the motor's whip ----
+  for (const [ex, ez] of [[9.6, 31.4], [5.2, 31.6]]) K.at(ex, Y, ez, 0, () => {
+    const body = K.met(0xbfc3c6, 45);
+    K.box(K.lam(0x77746c), 0.62, 0.24, 0.62, 0, 0.12, 0); K.box(K.mats.galv, 0.68, 0.016, 0.68, 0, 0.245, 0);   // the curb, its cap flashing
+    for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) K.bolt(a * 0.3, 0.256, b * 0.3);
+    K.lathe(body, [[0.3, 0], [0.27, 0.015], [0.19, 0.09], [0.19, 0.2], [0.27, 0.27], [0.27, 0.46]], 0, 0.253, 0, 24);   // the flared neck, opening into the band
+    K.ring(body, 0.27, 0.008, 0, 0.713, 0, Math.PI / 2, 0, 28);
+    K.cyl(K.lam(0x141414), 0.26, 0.26, 0.004, 0, 0.56, 0, 24);                                                   // the dark throat
+    for (let r = 0.08; r < 0.27; r += 0.045) K.ring(K.mats.galv, r, 0.003, 0, 0.7, 0, Math.PI / 2, 0, 24);
+    for (let a = 0; a < 6; a++) K.rod(K.mats.galv, 0.003, [0, 0.702, 0], [Math.cos(a * 1.047) * 0.265, 0.7, Math.sin(a * 1.047) * 0.265], 4);
+    for (let b = 0; b < 6; b++) { const a = b * 1.047; K.box(K.lam(0x2b2d30), 0.2, 0.006, 0.07, Math.cos(a) * 0.13, 0.6, -Math.sin(a) * 0.13, a, 0, 0.3); }   // the wheel, under the guard
+    K.cyl(K.lam(0x24262a), 0.05, 0.05, 0.1, 0, 0.62, 0, 12);
+    K.jbox(0.32, 0.17, 0.12, Math.PI / 2, 0.1, 0.1, 0.05);                                                       // its junction box, on the curb, a whip up the neck
+    K.tube(K.lam(0x3a3c3e), 0.009, [[0.35, 0.22, 0.12], [0.32, 0.34, 0.1], [0.2, 0.42, 0.06], [0.19, 0.46, 0.03]], 8, 5);
     col(ex - 0.36, ex + 0.36, ez - 0.36, ez + 0.36);
-  }
+  });
   // ---- the satellite dish: a 1 m offset dish on a ballasted sled, aimed south and up at the satellites ----
   {
     const dx = 8.4, dz = 3.2, d = new THREE.Group(); d.position.set(dx, Y, dz); G.add(d);
     bx(1.1, 0.06, 0.1, galv, 0, 0.05, 0.4, d); bx(1.1, 0.06, 0.1, galv, 0, 0.05, -0.4, d); bx(0.1, 0.06, 0.9, galv, 0, 0.08, 0, d);   // the sled
-    for (const [sx, sz] of [[-0.42, 0.4], [0.42, 0.4], [-0.42, -0.4], [0.42, -0.4]]) bx(0.2, 0.1, 0.4, cement, sx, 0.13, sz, d);   // the blocks holding it down
+    for (const [sx, sz] of [[-0.3, 0.4], [0.3, 0.4], [-0.3, -0.4], [0.3, -0.4]]) K.cinder(dx + sx, Y + 0.08, dz + sz);   // the blocks holding it down
     cy(0.035, 0.035, 1.1, galv, 0, 0.6, 0, 10, d);
     for (const [sx, sz] of [[0.5, 0], [-0.5, 0], [0, 0.4]]) stick(V(sx, 0.1, sz), V(0, 0.75, 0), 0.012, galv, d);   // braces
     const aim = new THREE.Group(); aim.position.set(0, 1.12, 0); aim.rotation.set(0.68, 0, 0); d.add(aim);   // tipped up toward -z (south)
@@ -270,18 +303,14 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     col(ax - 0.5, ax + 0.5, az - 0.5, az + 0.5);
   }
   // ---- vent stacks with their boots, drains, and walkway pads out to the units ----
-  for (const [vx, vz] of [[9.2, 34.4], [5.8, 34.6], [-1.2, 31.6], [-4.8, 42.5]]) {
-    const y = roofY(vx, vz); cy(0.16, 0.2, 0.12, lam(0x5a5c5e), vx, y + 0.06, vz, 12); cy(0.05, 0.05, 0.42, lam(0x9a9c9e), vx, y + 0.21, vz, 10);
-  }
-  for (const [dx, dz] of [[1.5, 8], [1.5, 22], [-2.9, 42], [-6.5, 15]]) {
-    const y = roofY(dx, dz); cy(0.22, 0.24, 0.02, dark, dx, y + 0.01, dz, 16); const s = put(new THREE.SphereGeometry(0.12, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), dark, dx, y + 0.02, dz); s.scale.y = 0.8;
-  }
+  for (const [vx, vz] of [[9.2, 34.4], [5.8, 34.6], [-1.2, 31.6], [-4.8, 42.5]]) K.stack(vx, roofY(vx, vz), vz);
+  for (const [dx, dz] of [[1.5, 8], [1.5, 22], [-2.9, 42], [-6.5, 15]]) K.drain(dx, roofY(dx, dz), dz);
   const padM = lam(0x8f908c);
   const pads = (pts) => { for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx2, bz] = pts[i + 1], n = Math.ceil(Math.hypot(bx2 - ax, bz - az) / 0.75);
     for (let k = 0; k < n; k++) { const f = (k + 0.5) / n, p = bx(0.6, 0.025, 0.6, padM, ax + (bx2 - ax) * f, Y + 0.012, az + (bz - az) * f); p.rotation.y = Math.atan2(bx2 - ax, bz - az); } } };
   pads([[10.6, 29.2], [6.6, 26], [6.6, 21.2]]); pads([[6.6, 21.2], [-0.4, 14], [-0.4, 10.9]]);
 
-  buildGrounds({ lam, put, bx, cy, ext, dark });   // around the building: the grass, the paved apron, the dumpster, the cardboard bed (exterior/grounds.js)
+  buildGrounds({ lam, put, bx, cy, ext, dark });   // around the building: the grass, the service road and its fence, the dumpster, the cardboard bed (exterior/grounds.js, exterior/serviceroad.js)
   tonyOutside({ lam, put, ext, beige, cement, coping });   // Tony's, next door (tonys/outside.js)
 
   // ---- the sign over the storefront: an internally lit cabinet on the fascia, standing up past the coping. From the lot
@@ -315,7 +344,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     }
     const flex = new THREE.CatmullRomCurve3([V(SX + 2.4, y1 - 0.55, zb + 0.02), V(SX + 2.4, Y + PH + 0.22, 0.05), V(SX + 2.4, Y + 0.45, 0.55), V(SX + 2.4, Y + 0.12, 1.0)]);
     put(new THREE.TubeGeometry(flex, 16, 0.016, 6), dark, 0, 0, 0);
-    bx(0.2, 0.24, 0.14, lam(0x7e858c), SX + 2.4, Y + 0.2, 1.1); bx(0.06, 0.08, 0.06, lam(0x2a2c2f), SX + 2.4, Y + 0.36, 1.1);   // the junction box, a photocell on top
+    K.strut(SX + 2.4, Y, Y + 0.32, 1.06); K.jbox(SX + 2.4, Y + 0.2, 1.1, 0, 0.2, 0.22, 0.09); K.cyl(K.lam(0x2a2c2f), 0.028, 0.028, 0.05, SX + 2.4, Y + 0.345, 1.1, 10);   // the junction box on its strut, a photocell on top
     col(SX + 2.25, SX + 2.55, 0.1, 1.2);
   }
 
@@ -400,24 +429,26 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     }
   }
 
-  // ---- conduit and condensate: the disconnects' feeds on blocks to where they go down through the roof; the condensate
-  // lines to a drain and a splash block ----
+  // ---- conduit and condensate: EMT from each disconnect on rubber-footed supports to a pitch pocket where it goes down through the
+  // roof; the condensate in white PVC, through a trap, along the deck to a drain or a splash block ----
   {
-    const blockM = lam(0x6b5a45), pvc = lam(0xe6e4dc);
-    const run = (pts, r, m, blocks = true) => {
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = V(...pts[i]), b = V(...pts[i + 1]); stick(a, b, r, m);
-        if (!blocks || Math.abs(a.y - b.y) > 0.05) continue;
-        const n = Math.floor(a.distanceTo(b) / 1.5); for (let k = 1; k <= n; k++) { const p = a.clone().lerp(b, k / (n + 1)); bx(0.12, a.y - Y - r, 0.1, blockM, p.x, (Y + a.y - r) / 2, p.z); }
-      }
+    const pvc = K.lam(0xe6e4dc), y = Y + 0.13, FEEDS = [[[-4.2, Y + 0.56, 10.0], [-4.2, y, 10.0], [-4.2, y, 13.5], [-6.9, y, 13.5], [-6.9, Y + 0.09, 13.5]], [[3.0, Y + 0.56, 20.0], [3.0, y, 20.0], [3.0, y, 24.6], [3.0, Y + 0.09, 24.6]]];
+    for (const pts of FEEDS) {
+      K.conduit(pts, { r: 0.018, m: K.mats.galv, base: Y });
+      const [c0, c1] = pts; K.lb(c0[0], (c1[1] + 0.06), c0[2] + 0.002, 0);
+      const e = pts.at(-1); K.pitchPocket(e[0], Y, e[2], 0.018); col(e[0] - 0.2, e[0] + 0.2, e[2] - 0.2, e[2] + 0.2);
+    }
+    const trap = (x, yy, z, dx) => {             // a P-trap off the drain pan's stub: down, round, up and out
+      K.rod(pvc, 0.014, [x, yy, z], [x + dx * 0.06, yy, z]); K.rod(pvc, 0.014, [x + dx * 0.06, yy, z], [x + dx * 0.06, yy - 0.12, z]); K.ring(pvc, 0.045, 0.014, x + dx * 0.105, yy - 0.12, z, 0, 0, 12);
+      K.rod(pvc, 0.014, [x + dx * 0.15, yy - 0.12, z], [x + dx * 0.15, yy - 0.03, z]);
     };
-    const y = Y + 0.1;
-    run([[-4.2, Y + 0.6, 10.0], [-4.2, y, 10.0], [-4.2, y, 13.5], [-6.9, y, 13.5], [-6.9, Y + 0.02, 13.5]], 0.018, galv);
-    run([[3.0, Y + 0.6, 20.0], [3.0, y, 20.0], [3.0, y, 24.6], [3.0, Y + 0.02, 24.6]], 0.018, galv);
-    for (const [x, z] of [[-6.9, 13.5], [3.0, 24.6]]) { bx(0.3, 0.16, 0.3, lam(0x3b3a37), x, Y + 0.08, z); col(x - 0.2, x + 0.2, z - 0.2, z + 0.2); }   // pitch pockets, filled with sealant round the pipe
-    run([[-1.42, Y + 0.32, 9.0], [-1.3, Y + 0.32, 9.0], [-1.3, Y + 0.08, 9.0], [1.15, Y + 0.08, 8.15]], 0.013, pvc);
-    run([[5.72, Y + 0.32, 19.2], [6.05, Y + 0.32, 19.2], [6.05, Y + 0.08, 19.2], [6.3, Y + 0.08, 18.75]], 0.013, pvc);
-    bx(0.3, 0.05, 0.6, cement, 6.4, Y + 0.025, 18.6).rotation.y = 0.5;    // the splash block
+    const flat = Y + 0.07;
+    trap(-1.42, Y + 0.36, 9.0, 1); K.conduit([[-1.27, Y + 0.33, 9.0], [-1.27, flat, 9.0], [1.15, flat, 8.15]], { r: 0.013, m: pvc, couple: 3, spacing: 1.2, base: Y });
+    trap(5.72, Y + 0.36, 19.2, 1); K.conduit([[5.87, Y + 0.33, 19.2], [6.05, Y + 0.33, 19.2], [6.05, flat, 19.2], [6.3, flat, 18.75]], { r: 0.013, m: pvc, couple: 0 });
+    K.at(6.4, Y, 18.6, 0.5, () => {              // the splash block: concrete, a channel down its middle
+      for (const s of [-1, 1]) K.box(K.mats.conc, 0.09, 0.05, 0.6, s * 0.105, 0.025, 0);
+      K.box(K.lam(0x7f7c75), 0.12, 0.02, 0.6, 0, 0.01, 0); K.box(K.mats.conc, 0.3, 0.05, 0.05, 0, 0.025, -0.28);
+    });
   }
 
   // ---- where the staff come up for a smoke: a webbed lawn chair facing the lot, a coffee can of butts, a milk crate
@@ -488,50 +519,91 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     const crate = bx(0.33, 0.28, 0.33, new THREE.MeshLambertMaterial({ map: crateTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), 9.45, Y + 0.14, 25.95); crate.rotation.y = 0.3;
     cy(0.033, 0.033, 0.12, lam(0x3d8a3b), 9.42, Y + 0.34, 25.9, 12); cy(0.03, 0.03, 0.006, alum, 9.42, Y + 0.403, 25.9, 12);
     bx(0.11, 0.018, 0.17, lam(0x8a2f6a), 9.52, Y + 0.289, 26.02).rotation.y = 0.8;
-    // ---- a movie up here: a second lawn chair beside the first, and behind them a projector on a box and two milk
-    // crates, the VCR beside it, pointed over their heads at a bedsheet clipped to a length of conduit between a broom
-    // and a mop stood up in crates of tapes, a few metres off. Whatever's in a VCR plays on it (see cineTick): washed
-    // out to almost nothing in the day, the picture after dark, its edges soft and ragged, the sheet's weave and folds
-    // through it, and the beam over your head. Built facing the way the chairs do (-z), from behind them ----
+    // ---- a movie up here: a second lawn chair beside the first, and a projector propped on a VCR
+    // on the AC unit behind the screen, turned to aim at the back of a bedsheet clipped to a length of conduit between
+    // a broom and a mop stood up in crates of tapes, a few metres off: rear projection, so the beam's out of your eyes,
+    // back there for anyone who walks round. Whatever's in a VCR plays on it (see cineTick): washed out to almost nothing
+    // in the day, the picture after dark, its edges soft and ragged, the sheet's weave and folds through it ----
     lawnChair(9.9 - Math.cos(0.55) * 0.8, 26.4 + Math.sin(0.55) * 0.8, 0.62, [lam(0x2a5fa8), lam(0xf0d34a)]);   // the second: blue and yellow, the same vintage
     {
       const k = new THREE.Group(); k.position.set(9.9 - Math.cos(0.55) * 0.4 + Math.sin(0.55) * 0.95, Y, 26.4 + Math.sin(0.55) * 0.4 + Math.cos(0.55) * 0.95); k.rotation.y = 0.58; G.add(k); k.updateMatrixWorld(true);
-      const cardboard = lam(0xb08a5a), crateM = new THREE.MeshLambertMaterial({ map: crateTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), tapeM = lam(0x161616);
-      // the stand: a shipping box of tapes, two crates upside down on it, a few tapes to shim it level; the VCR beside them
-      bx(0.62, 0.42, 0.44, cardboard, 0, 0.21, 0, k); bx(0.62, 0.012, 0.06, lam(0xc9b58c), 0, 0.425, 0, k);   // (the packing tape down its middle)
-      for (const y of [0.56, 0.84]) bx(0.33, 0.28, 0.33, crateM, -0.13, y, 0, k);
-      for (let i = 0; i < 3; i++) bx(0.19, 0.025, 0.105, tapeM, -0.13, 0.993 + i * 0.026, 0, k).rotation.y = (Math.random() - 0.5) * 0.3;
-      const proj = new THREE.Group(); proj.position.set(-0.13, 1.07, 0); k.add(proj);   // the projector: a 90s LCD one, a school's, from somebody's garage
+      const crateM = new THREE.MeshLambertMaterial({ map: crateTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }), tapeM = lam(0x161616);
+      // the projector, a 90s LCD one, a school's, from somebody's garage: on top of the AC unit behind the screen, clear of its fans, propped up on the VCR, the pair turned to aim at the sheet
+      const screenAt = k.localToWorld(V(-0.06, 0, -4.6)), UNIT_TOP = Y + 1.35, PX = 4.0, PZ = 19.6, VCR_H = 0.085;
+      const proj = new THREE.Group(); proj.position.set(PX, UNIT_TOP + VCR_H, PZ); proj.rotation.y = Math.atan2(PX - screenAt.x, PZ - screenAt.z); G.add(proj); proj.updateMatrixWorld(true);
       const shell = phong(0xcfcabf, 30);
       bx(0.31, 0.1, 0.25, shell, 0, 0.05, 0, proj); bx(0.29, 0.015, 0.23, lam(0x9a968e), 0, 0.105, 0, proj);
       for (let i = 0; i < 6; i++) bx(0.004, 0.06, 0.12, dark, 0.157, 0.05, -0.05 + i * 0.02, proj);   // its fan grille
       cy(0.042, 0.042, 0.05, dark, 0.07, 0.055, -0.14, 16, proj).rotation.x = Math.PI / 2;               // the lens barrel
       const lens = put(new THREE.CircleGeometry(0.03, 16), new THREE.MeshBasicMaterial({ color: 0x223040 }), 0.07, 0.055, -0.1655, proj); lens.rotation.y = Math.PI;
       const led = put(new THREE.PlaneGeometry(0.012, 0.012), new THREE.MeshBasicMaterial({ color: 0x331a00 }), -0.1, 0.1135, 0.06, proj); led.rotation.x = -Math.PI / 2;
-      const vcr = new THREE.Group(); vcr.position.set(0.17, 0.425, 0.02); vcr.rotation.y = -0.08; k.add(vcr);
-      bx(0.25, 0.085, 0.3, lam(0x1d1d1f), 0, 0.0425, 0, vcr);
+      const vcr = new THREE.Group(); vcr.position.set(PX, UNIT_TOP, PZ); vcr.rotation.y = proj.rotation.y; G.add(vcr);
+      bx(0.25, VCR_H, 0.3, lam(0x1d1d1f), 0, 0.0425, 0, vcr);
       bx(0.17, 0.022, 0.004, lam(0x050505), -0.02, 0.05, -0.151, vcr);                              // the tape door
       const vled = put(new THREE.PlaneGeometry(0.05, 0.016), new THREE.MeshBasicMaterial({ color: 0x0a1a10 }), 0.08, 0.05, -0.1515, vcr); vled.rotation.y = Math.PI;
-      const cord = lam(0xd8641c), blk = lam(0x111111);                                                 // the cables: video to the projector, and an orange extension cord off over the parapet
-      stick(V(0.1, 0.47, 0.13), V(-0.02, 0.5, 0.2), 0.006, blk, k); stick(V(-0.02, 0.5, 0.2), V(-0.05, 1.1, 0.17), 0.006, blk, k);
-      { const pts = [[0.2, 0.42, 0.1], [0.3, 0.02, 0.15], [0.55, 0.02, 0.7], [0.75, 0.02, 1.1]].map(([x, y, z]) => k.localToWorld(V(x, y, z)));
-        pts.push(V(10.88, Y + 0.02, pts[3].z + 0.2), V(10.92, Y + PH, pts[3].z + 0.3), V(11.12, Y + PH - 0.04, pts[3].z + 0.3)); for (let i = 0; i < pts.length - 1; i++) stick(pts[i], pts[i + 1], 0.007, cord); }
-      roof.cine = { proj: proj.children.slice(), vcr: vcr.children.slice(), led, vled, lens, on: false };
-      const P = k.localToWorld(V(-0.06, 1.125, -0.17));                                                // the lens, in the world
+      const cord = lam(0xd8641c), blk = lam(0x111111);                                                 // the cables: below, the video from the VCR up to the projector, and the projector's power
+      roof.cine = { proj: proj.children.slice(), vcr: vcr.children.slice(), led, vled, lens, sound: k, on: false };   // (the sound's by the chairs: the projector and VCR are way off behind the screen)
+      const P = proj.localToWorld(V(0.07, 0.055, -0.17));                                              // the lens, in the world
+      // the projector's plugged in by the AC unit: a weatherproof outlet on the disconnect's strut, a short run of orange cord out over the unit's edge and down its end
+      const OX = 3.0, OZ = 20.0; bx(0.09, 0.13, 0.07, lam(0x7e858c), OX + 0.05, Y + 0.42, OZ); bx(0.012, 0.09, 0.05, lam(0x9a9fa4), OX + 0.1, Y + 0.42, OZ);
+      { const pts = [proj.localToWorld(V(-0.1, 0.05, 0.13)), proj.localToWorld(V(-0.1, -0.02, 0.19)), V(3.6, UNIT_TOP + 0.03, 19.95), V(3.36, UNIT_TOP + 0.025, 20.0), V(3.33, UNIT_TOP - 0.1, 20.02), V(3.3, Y + 0.46, 20.02), V(OX + 0.11, Y + 0.4, OZ)]; for (let i = 0; i < pts.length - 1; i++) stick(pts[i], pts[i + 1], 0.007, cord); }
+      // the video cable: out the VCR's back, up to the projector's
+      { const pts = [proj.localToWorld(V(0.1, -0.03, 0.15)), proj.localToWorld(V(0.11, -0.01, 0.2)), proj.localToWorld(V(0.1, 0.05, 0.13))]; for (let i = 0; i < pts.length - 1; i++) stick(pts[i], pts[i + 1], 0.006, blk); }
       const box = (o, x0, x1, z0, z1) => { const p = [[x0, z0], [x1, z0], [x0, z1], [x1, z1]].map(([x, z]) => o.localToWorld(V(x, 0, z))), xs = p.map(q => q.x), zs = p.map(q => q.z); col(Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)); };
-      box(k, -0.32, 0.32, -0.23, 0.23);                                                                 // (the stand: you walk round it)
       // the screen, 4.6 m out in front
       const sc = new THREE.Group(); sc.position.copy(k.localToWorld(V(-0.06, 0, -4.6))).setY(Y); sc.rotation.y = 0.58; G.add(sc); sc.updateMatrixWorld(true);
-      const SW = 1.9, SH = 1.32, TOP = 1.98, wood = lam(0x9a7448), tape = phong(0xb9bcc0, 40);
-      for (const s of [-1, 1]) {
-        bx(0.33, 0.28, 0.33, crateM, s * 1.02, 0.14, 0, sc);                                           // a crate, upside down, a stack of tapes in it to hold it down
-        for (let i = 0; i < 5; i++) bx(0.105, 0.19, 0.025, tapeM, s * 1.02 + (Math.random() - 0.5) * 0.08, 0.1, -0.1 + i * 0.045, sc).rotation.z = (Math.random() - 0.5) * 0.3;
-        stick(V(s * 1.02, 0.05, 0), V(s * 1.02, TOP + 0.08, 0), 0.013, wood, sc);                      // the broom handle / the mop handle, down through the crate
-        for (const y of [0.3, TOP - 0.02]) cy(0.017, 0.017, 0.06, tape, s * 1.02, y, 0, 10, sc);      // duct tape
-      }
-      bx(0.32, 0.07, 0.07, lam(0x7a3a24), -1.02, TOP + 0.12, 0, sc); for (let i = 0; i < 14; i++) bx(0.012, 0.11, 0.05, lam(0xc89a3c), -1.16 + i * 0.021, TOP + 0.2, 0, sc);   // the broom's head, bristles up
-      for (let i = 0; i < 22; i++) { const a = i / 22 * Math.PI * 2, r = 0.03 + Math.random() * 0.05; stick(V(1.02, TOP + 0.08, 0), V(1.02 + Math.cos(a) * r * 2.5, TOP + 0.2 + Math.random() * 0.12, Math.sin(a) * r * 2.5), 0.008, lam(0xa8a49a), sc); }   // the mop's head, strings flopped over
-      stick(V(-1.1, TOP, 0.015), V(1.1, TOP, 0.015), 0.011, galv, sc);                                 // the crossbar: a stick of conduit
+      const SW = 1.9, SH = 1.32, TOP = 1.98, wood = K.lam(0x9a7448), woodD = K.lam(0x6e4f2e), rope = K.lam(0xd8cfa8);
+      // Two handles stood up in milk crates packed tight with tapes, a stick of conduit taped across them, a guy rope off each to a cinder
+      // block: the rig. On the left, a corn broom, head up, stitched and flared. On the right, a string mop, its strands flopped over. Taped
+      // and re-taped by someone who wanted to see a movie.
+      K.frame(sc.matrixWorld, () => {
+        for (const s of [-1, 1]) {
+          const X = s * 1.02, tilt = s * 0.006;    // (not quite plumb)
+          for (const [dx, dz, ry] of [[0, 0.165, 0], [0, -0.165, Math.PI], [0.165, 0, Math.PI / 2], [-0.165, 0, -Math.PI / 2]]) K.plane(crateM, 0.33, 0.28, X + dx, 0.14, dz, ry);   // the crate: four sides, open at the top
+          for (const [dx, dz, w, d] of [[0, 0.165, 0.34, 0.012], [0, -0.165, 0.34, 0.012], [0.165, 0, 0.012, 0.34], [-0.165, 0, 0.012, 0.34]]) K.box(K.lam(0x24479a), w, 0.018, d, X + dx, 0.275, dz);   // its rim
+          K.box(K.lam(0x101012), 0.31, 0.012, 0.31, X, 0.012, 0);                        // ...its floor, dark past the slats
+          // packed with tapes, round the handle, spines up: a double row either side, one or two jammed in on the skew
+          const LAB = [0xefeee6, 0xd9c26a, 0xc7dbe8, 0xe3b6a6];
+          for (const zs of [-0.115, 0.115]) for (let i = 0; i < 5; i++) { const px = X - 0.12 + i * 0.06; K.at(px, 0.115, zs, Math.PI / 2, () => K.tape(0, 0, 0, 0, 0, Math.PI / 2, LAB[(i + (zs > 0 ? 1 : 0)) % 4])); }
+          K.at(X - 0.1, 0.19, 0.012, 0.3, () => K.tape(0, 0, 0, 0, 0.5, 0.1, LAB[1]));
+          K.at(X + 0.095, 0.2, -0.02, -0.5, () => K.tape(0, 0, 0, 0, -0.35, -0.2, LAB[2]));
+          // the handle: wood, a darker stain where hands go, a band of duct tape down at the crate and another round the conduit
+          K.rod(wood, 0.014, [X, 0.03, 0], [X + tilt, TOP + 0.12, 0], 10);
+          K.rod(woodD, 0.0146, [X + tilt * 0.5, 0.95, 0], [X + tilt * 0.6, 1.3, 0], 10);
+          K.ductTape(X, 0.3, 0, 0.014, 5, 0.05);
+          K.box(K.met(0xb9bcc0, 40), 0.05, 0.003, 0.345, X, 0.287, 0); K.box(K.met(0xb9bcc0, 40), 0.05, 0.1, 0.003, X, 0.24, 0.172); K.box(K.met(0xb9bcc0, 40), 0.05, 0.1, 0.003, X, 0.24, -0.172);   // a strip over the tapes and down the crate, holding them in
+          K.ductTape(X + tilt, TOP, 0, 0.018, 6, 0.045, s > 0);                          // the joint: round and round, over the conduit
+          K.rod(K.met(0xb9bcc0, 40), 0.003, [X - 0.05, TOP + 0.045, 0.021], [X + 0.05, TOP - 0.045, 0.021], 5); K.rod(K.met(0xb9bcc0, 40), 0.003, [X - 0.05, TOP - 0.045, 0.021], [X + 0.05, TOP + 0.045, 0.021], 5);
+          // the guy rope: a clove hitch up by the joint, down and out to a cinder block, slack enough to sag, a knot at the block
+          const BX = s * 1.85, BZ = -0.55;
+          K.ring(rope, 0.019, 0.005, X, TOP - 0.1, 0, Math.PI / 2, 0, 10); K.ring(rope, 0.019, 0.005, X, TOP - 0.112, 0, Math.PI / 2, 0, 10);
+          K.tube(rope, 0.0045, [[X, TOP - 0.1, 0], [X + s * 0.26, TOP - 0.62, BZ * 0.32], [X + s * 0.56, 0.72, BZ * 0.66], [BX, 0.24, BZ]], 14, 5);
+          K.cinder(BX, 0, BZ, s * 0.5);
+          K.ring(rope, 0.024, 0.006, BX, 0.2, BZ, 0.5, 0, 10);
+          { const w = new THREE.Vector3(BX, 0, BZ).applyMatrix4(sc.matrixWorld); col(w.x - 0.24, w.x + 0.24, w.z - 0.24, w.z + 0.24); }
+        }
+        // the broom: a tin ferrule, the corn flared and flattened, three rows of red stitching, the tips splayed
+        { const X = -1.02 - 0.006, B0 = TOP + 0.1, straw = K.lam(0xc89a3c), strawD = K.lam(0xa77c2a), red = K.lam(0xb3211d), tin = K.met(0xa9aeb3, 50);
+          K.cyl(tin, 0.02, 0.016, 0.05, X, B0 + 0.015, 0, 12); K.ring(tin, 0.02, 0.0025, X, B0 + 0.04, 0);
+          K.lathe(straw, [[0.018, 0], [0.05, 0.03], [0.1, 0.1], [0.135, 0.19], [0.155, 0.27], [0.13, 0.285], [0, 0.285]], X, B0 + 0.04, 0, 18, 1, 1, 0.3);   // the head, flattened
+          for (const [y, r] of [[0.1, 0.103], [0.14, 0.12], [0.18, 0.137]]) K.lathe(red, [[r - 0.002, y - 0.004], [r + 0.0035, y - 0.002], [r + 0.0035, y + 0.002], [r - 0.002, y + 0.004]], X, B0 + 0.04, 0, 18, 1, 1, 0.31);
+          for (let i = 0; i < 46; i++) { const f = i / 45, sp = (f - 0.5) * 2, off = (i % 5 - 2) * 0.008; K.rod(i % 3 ? straw : strawD, 0.0028, [X + sp * 0.14, B0 + 0.28, off], [X + sp * (0.17 + (i % 4) * 0.008), B0 + 0.345 + ((i * 7) % 5) * 0.009, off * 1.6], 4); }   // the tips, past the shoulder
+          for (const s of [-1, 1]) K.rod(K.lam(0x8a2a1c), 0.002, [X + s * 0.03, B0 + 0.1, 0.048], [X + s * 0.06, B0 + 0.21, 0.052], 4);
+        }
+        // the mop: a sheet-metal clamp with its wing bolt, cotton strings up over it and down its outer side, clear of the picture
+        { const X = 1.02 + 0.006, M0 = TOP + 0.12, clamp = K.met(0x9aa0a6, 40), cot = K.lam(0xeee8d6), cotD = K.lam(0xb9b5a4);
+          K.cyl(clamp, 0.019, 0.019, 0.06, X, M0, 0, 10); K.box(clamp, 0.2, 0.022, 0.05, X + 0.05, M0 + 0.035, 0); K.box(clamp, 0.2, 0.006, 0.058, X + 0.05, M0 + 0.05, 0);
+          K.bolt(X, M0 + 0.056, 0, 0.012, K.mats.steel); K.box(K.mats.steel, 0.05, 0.004, 0.012, X, M0 + 0.064, 0);   // its wing nut
+          for (let i = 0; i < 44; i++) {
+            const a = (i / 43 - 0.5) * Math.PI * 0.94, cx = Math.cos(a), cz = Math.sin(a),   /* (a half circle, the side away from the screen) */ j = (i * 13) % 7 / 7, sag = 0.26 + j * 0.2;
+            const x0 = X + cx * 0.02, z0 = cz * 0.022, r1 = 0.11 + cx * 0.06 + j * 0.05;
+            K.tube(i % 5 === 0 ? cotD : cot, 0.0078, [[x0, M0 + 0.05, z0], [X + cx * 0.13, M0 + 0.085, cz * 0.06], [X + cx * r1, M0 + 0.03, cz * (0.09 + j * 0.03)], [X + cx * (r1 + 0.03), M0 - sag * 0.5, cz * (0.11 + j * 0.03)], [X + cx * (r1 + 0.01 + j * 0.03), M0 - sag, cz * (0.1 + j * 0.05)]], 9, 4);
+          }
+        }
+        // the crossbar: a stick of half-inch EMT, past the handles either side, a coupling in it, a cut end
+        K.conduit([[-1.1, TOP, 0.015], [1.1, TOP, 0.015]], { r: 0.011, couple: 1.3 });
+        for (const x of [-1.1, 1.1]) K.ring(K.lam(0x62666a), 0.0095, 0.0015, x, TOP, 0.015, 0, Math.PI / 2, 10);
+      });
       // the sheet: an old twin flat sheet, cream with a faded stripe, clipped up along the bar, sagging between the clips,
       // creased from the linen closet, its bottom hem hanging free
       const sheetTex = makeTexture((c, W, H) => {
@@ -554,7 +626,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
       }
       geo.computeVertexNormals();
       const sheetM = new THREE.MeshLambertMaterial({ map: sheetTex, side: THREE.DoubleSide });
-      const IMG = { y: 0.06, w: 1.56 / SW, h: 1.04 / SH };                                             // the picture on it: 1.56 x 1.04 m (the 3:2 frame), a touch above the middle
+      const PIC_W = 1.84, PIC_H = PIC_W / 1.5, IMG = { y: 0.01, w: PIC_W / SW, h: PIC_H / SH };        // the picture on it: nearly edge to edge (the 3:2 frame)
       const cu = roof.cineU = { uVid: { value: videoTex }, uProj: { value: 0 }, uBlue: { value: 1 }, uImg: { value: new THREE.Vector4(0.5, 0.5 + IMG.y / SH, IMG.w, IMG.h) } };
       sheetM.onBeforeCompile = sh => {
         THREE.MeshLambertMaterial.prototype.onBeforeCompile(sh);                                   // (the lighting everything gets: see the top of the file)
@@ -566,18 +638,21 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
             pu.x = (pu.x - 0.5) / (1.0 + 0.035 * (pu.y - 0.5)) + 0.5;                      // a touch of keystone: it's aimed up a little
             float n = 0.006 * sin(pu.y * 41.0) + 0.004 * sin(pu.y * 97.0 + 1.7) + 0.005 * sin(pu.x * 57.0 + 0.4);   // the frame's edge, ragged where it lands on the folds
             float m = smoothstep(-0.012, 0.025, pu.x + n) * (1.0 - smoothstep(0.975, 1.012, pu.x - n)) * smoothstep(-0.012, 0.03, pu.y - n) * (1.0 - smoothstep(0.97, 1.012, pu.y + n));
-            vec2 q = pu - 0.5; float hot = 1.05 - 0.55 * dot(q, q) * 4.0;               // brighter in the middle, falling off to the corners
+            vec2 q = pu - 0.5; float hot = 1.04 - 0.85 * dot(q, q);                     // brighter in the middle, the outer edges a little darker
             vec3 img = mix(texture2D(uVid, clamp(pu, 0.0, 1.0), 0.6).rgb, vec3(0.06, 0.16, 0.78), uBlue);   // (a little soft: the focus); no tape: the VCR's blue
             float halo = (1.0 - m) * 0.06 * (1.0 - smoothstep(0.0, 0.12, max(max(-pu.x, pu.x - 1.0), max(-pu.y, pu.y - 1.0))));   // spill past the frame
             totalEmissiveRadiance += (img * m * hot + vec3(halo)) * uProj * diffuseColor.rgb * 1.15;   // lit on the sheet: its weave and stripe through it
           }`);
       };
       const sheet = put(geo, sheetM, 0, TOP - SH / 2 - 0.01, 0, sc);
-      for (const x of CLIPS) { bx(0.032, 0.03, 0.022, lam(0x101010), x, TOP - 0.018, 0.012, sc); stick(V(x - 0.01, TOP - 0.002, 0.02), V(x - 0.01, TOP + 0.025, 0.02), 0.0015, alum, sc); }   // binder clips
+      K.frame(sc.matrixWorld, () => { for (const x of CLIPS) K.binder(x, TOP - 0.014, 0.014); });   // binder clips
       shade(sc.position.x, sc.position.z, 2.6, 0.5, 0.58);
-      box(sc, -1.2, 1.2, -0.2, 0.2);
+      for (let x = -0.96; x < 1; x += 0.24) box(sc, x - 0.12, x + 0.12, -0.02, 0.02);                  // the sheet, a short box at a time: it's at an angle, and one box round it took up 2.2 x 1.6 m of nothing
+      for (const s of [-1, 1]) box(sc, s * 1.02 - 0.165, s * 1.02 + 0.165, -0.165, 0.165);             // the crates
+      shade(sc.localToWorld(V(-1.85, 0, -0.55)).x, sc.localToWorld(V(-1.85, 0, -0.55)).z, 0.55, 0.38, 0.58 - 0.5); shade(sc.localToWorld(V(1.85, 0, -0.55)).x, sc.localToWorld(V(1.85, 0, -0.55)).z, 0.55, 0.38, 0.58 + 0.5);
+      for (const s of [-1, 1]) { const w = sc.localToWorld(V(s * 1.02, 0, 0)); shade(w.x, w.z, 0.56, 0.56, 0.58); }
       // the beam: the frustum from the lens to the frame's corners, a faint haze, brightest by the lens; only shows after dark
-      const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => sc.localToWorld(V(sx * 0.78, TOP - SH / 2 - 0.01 + IMG.y + sy * 0.52, 0.02)));
+      const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => sc.localToWorld(V(sx * PIC_W / 2, TOP - SH / 2 - 0.01 + IMG.y + sy * PIC_H / 2, 0.02)));
       const lensPts = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => V(P.x + sx * 0.02, P.y + sy * 0.015, P.z));
       const pos = [], along = [], across = [];
       for (let i = 0; i < 4; i++) {
@@ -597,11 +672,39 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     shade(9.9, 26.4, 0.8, 0.8, 0.55); shade(9.45, 25.95, 0.5, 0.5, 0.3); shade(9.9 - Math.cos(0.55) * 0.8, 26.4 + Math.sin(0.55) * 0.8, 0.8, 0.8, 0.62);
     col(9.35, 10.65, 25.7, 26.85); col(8.95, 9.65, 26.5, 27.25);
   }
-  // things that ended up up here over the years and nobody came for
+  // things that ended up up here over the years and nobody came for, each one something: a frisbee, tennis balls, a kickball; what the
+  // roofers and the AC guys left (a tar pail with its brush, spent filters, a coil of hose, a stack of pavers); what the staff left (a
+  // Tony's box, a crushed can, a bottle)
   {
-    const fr = cy(0.135, 0.12, 0.022, lam(0xd8743a), -7.25, Y + 0.02, 18.3, 20); fr.rotation.set(0.12, 0, 0.08);
-    for (const [x, z] of [[1.95, 8.45], [-6.25, 15.5], [-7.4, 31.2]]) put(new THREE.SphereGeometry(0.033, 10, 8), lam(0xc8dc48), x, Y + 0.03, z);
-    const kick = put(new THREE.SphereGeometry(0.2, 16, 10), lam(0xa8302c), -5.4, TY + 0.06, 48.1); kick.scale.y = 0.32;
+    // the frisbee, on its back: a dished disc, a rolled lip
+    K.at(-7.25, Y + 0.012, 18.3, 0, () => { K.lathe(K.lam(0xd8743a), [[0, 0.012], [0.09, 0.008], [0.122, 0], [0.135, -0.012], [0.128, -0.012], [0.115, 0.002], [0, 0.004]], 0, 0.01, 0, 22); });
+    for (const [x, z] of [[1.95, 8.45], [-6.25, 15.5], [-7.4, 31.2]]) { put(new THREE.SphereGeometry(0.033, 10, 8), lam(0xc8dc48), x, Y + 0.033, z); K.ring(K.lam(0xeeeadd), 0.0335, 0.0018, x, Y + 0.033, z, 0.7, 0.4, 14); }
+    // the kickball: pumped up, red, its seams
+    { const kx = -5.4, kz = 48.05, kr = 0.105; put(new THREE.SphereGeometry(kr, 18, 12), lam(0xa8302c), kx, TY + kr, kz); for (const [rx, ry] of [[Math.PI / 2, 0], [0, 0], [0, Math.PI / 2]]) K.ring(K.lam(0x7d1f1c), kr + 0.0006, 0.0015, kx, TY + kr, kz, rx, ry, 24); K.cyl(K.lam(0x1a1a1a), 0.006, 0.006, 0.003, kx + kr * 0.7, TY + kr * 1.7, kz, 8, 0, 0.8); }
+    // the tar pail, by the east unit's gas line: black drips down it, a wire bail, a roofing brush stood in it
+    { const px = 2.35, pz = 16.6, H = 0.36, pail = K.lam(0x1a1a1b), tar = K.lam(0x0d0d0d);
+      K.lathe(pail, [[0.135, 0], [0.15, H], [0.158, H], [0.158, H + 0.018], [0.146, H + 0.018], [0.135, H - 0.05], [0, H - 0.05]], px, Y, pz, 22);
+      for (const a of [0.4, 1.6, 2.4, 3.6, 5.1]) K.box(tar, 0.022, 0.09 + a * 0.03, 0.006, px + Math.cos(a) * 0.15, Y + H - 0.05 - a * 0.015, pz + Math.sin(a) * 0.15, -a + Math.PI / 2);
+      K.tube(K.mats.galv, 0.003, [[px - 0.155, Y + H, pz], [px - 0.1, Y + H + 0.14, pz + 0.04], [px + 0.1, Y + H + 0.14, pz + 0.04], [px + 0.155, Y + H, pz]], 10, 4);
+      K.rod(K.lam(0x7a6242), 0.012, [px + 0.02, Y + H - 0.1, pz], [px + 0.11, Y + H + 0.5, pz - 0.09]); K.box(K.lam(0x2b2118), 0.12, 0.05, 0.05, px + 0.02, Y + H - 0.08, pz, 0, -0.14, -0.14);
+      col(px - 0.2, px + 0.2, pz - 0.2, pz + 0.2); }
+    // spent filters from the units, leaned against the east one: cardboard frames, grey pleats
+    { const pleat = new THREE.MeshLambertMaterial({ map: makeTexture((c, W, H) => { for (let x = 0; x < W; x += 8) { c.fillStyle = x % 16 ? "#7b7870" : "#5d5b55"; c.fillRect(x, 0, 8, H); } for (let i = 0; i < 300; i++) { c.fillStyle = "#3a3833a0"; c.fillRect(Math.random() * W, Math.random() * H, 4, 2 + Math.random() * 10); } }, 128, 128) }), card = K.lam(0xa78a5e);
+      for (const [fx, rx] of [[5.12, 0.3], [5.32, 0.36]]) K.at(fx, Y, 20.5, 0.06, () => { const o = new THREE.Matrix4().makeRotationX(rx).setPosition(0, 0.31, 0.09); K.frame(o, () => { K.plane(pleat, 0.48, 0.58, 0, 0, 0.012); K.plane(pleat, 0.48, 0.58, 0, 0, -0.012, Math.PI); for (const s of [-1, 1]) { K.box(card, 0.04, 0.62, 0.026, s * 0.25, 0, 0); K.box(card, 0.52, 0.04, 0.026, 0, s * 0.3, 0); } }); });
+      shade(5.25, 20.55, 0.8, 0.35); }
+    // a garden hose, coiled and forgotten, the brass end poking out
+    { const hx = 8.15, hz = 32.45, g = K.lam(0x2c6a3a); for (let i = 0; i < 6; i++) K.ring(g, 0.23 + (i % 2) * 0.012, 0.0135, hx + (i % 3 - 1) * 0.008, Y + 0.015 + i * 0.024, hz, Math.PI / 2, 0, 28);
+      K.tube(g, 0.0135, [[hx + 0.24, Y + 0.13, hz], [hx + 0.34, Y + 0.05, hz + 0.08], [hx + 0.44, Y + 0.016, hz + 0.05]], 8, 6); K.cyl(K.met(0xc09a4a, 70), 0.019, 0.019, 0.05, hx + 0.46, Y + 0.018, hz + 0.045, 8, 0, Math.PI / 2 - 0.2); shade(hx, hz, 0.7, 0.7); col(hx - 0.27, hx + 0.27, hz - 0.27, hz + 0.27); }
+    // spare ballast: concrete pavers, stacked by someone meaning to come back; a cinder block beside them
+    { const sx = 9.7, sz = 15.8; for (let i = 0; i < 4; i++) K.box(K.mats.conc, 0.6, 0.05, 0.6, sx + (i % 2 ? 0.015 : -0.01), Y + 0.025 + i * 0.05, sz + (i === 3 ? 0.03 : 0), i * 0.03); K.cinder(sx + 0.02, Y, sz + 0.56, 0.4); shade(sx, sz + 0.2, 1.0, 1.2); col(sx - 0.33, sx + 0.33, sz - 0.33, sz + 0.75); }
+    // by the chairs: a Tony's box (the lid weathered, grease coming through), a crushed can, a brown bottle on its side
+    { const pizza = new THREE.MeshLambertMaterial({ map: makeTexture((c, W, H) => {
+        c.fillStyle = "#c6b28f"; c.fillRect(0, 0, W, H); c.fillStyle = "#b3211d"; c.font = `italic 900 50px Georgia, serif`; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("Tony's", W / 2, H * 0.42); c.font = "bold 18px Arial"; c.fillText("HOT · FRESH · TO YOUR DOOR", W / 2, H * 0.62);
+        c.strokeStyle = "#b3211d"; c.lineWidth = 5; c.strokeRect(14, 14, W - 28, H - 28); const g = c.createRadialGradient(W * 0.66, H * 0.72, 4, W * 0.66, H * 0.72, 70); g.addColorStop(0, "#6b4a2488"); g.addColorStop(1, "#6b4a2400"); c.fillStyle = g; c.fillRect(0, 0, W, H);
+      }, 256, 256) }), card = K.lam(0xa79472);
+      K.at(8.72, Y, 25.32, 0.5, () => { K.box(card, 0.36, 0.042, 0.36, 0, 0.021, 0); K.plane(pizza, 0.355, 0.355, 0, 0.0425, 0, 0, -Math.PI / 2); });
+      K.at(8.7, Y, 26.05, 1.3, () => { const m = K.met(0xb33a2e, 60); K.cyl(m, 0.033, 0.033, 0.03, 0, 0.022, 0, 10, 0.25, 0.1); K.cyl(K.mats.alum, 0.03, 0.03, 0.004, 0.006, 0.042, 0, 10, 0.28, 0.1); K.box(m, 0.05, 0.018, 0.09, 0, 0.012, 0.015, 0.4, 0, 0.1); });
+      K.at(10.62, Y, 27.28, 0.8, () => { const m = new THREE.MeshPhongMaterial({ color: 0x4a2a10, specular: 0xaaaaaa, shininess: 90 }); K.frame(new THREE.Matrix4().makeRotationZ(Math.PI / 2).setPosition(0.11, 0.03, 0), () => K.lathe(m, [[0, 0], [0.03, 0], [0.031, 0.13], [0.012, 0.18], [0.012, 0.22], [0, 0.22]], 0, 0, 0, 12)); }); shade(8.72, 25.32, 0.5, 0.5, 0.5); }
   }
 
   // ---- the back ladder (see BACK_LADDER): galvanised like the hatch's, its rails carried up over the parapet. The top
@@ -629,6 +732,7 @@ const roofHandsFull = () => stool.carried || cutout.carried || ladder.state === 
     roof.back = { down: false, v: 0, slide, top: hit(0.6, 1.2, 0.6, lx - OVER, Y + PH + 0.5), foot: hit(0.3, 2.7, 0.6, lx, 1.45),
       col: { x0: bxw - 0.28, x1: bxw + 0.28, z0: WX, z1: lx + 0.06, y1: 3 }, at: new THREE.Vector3(bxw, 1, lx) };   // col: in the way once it's down
   }
+  K.flush(G);                                      // everything stamped, into its meshes
   tonyRoof({ lam, phong, put, bx, cy, ext, V, alum, gravel, coping, shade });   // Tony's roof, seen from ours (tonys/outside.js)
 }
 let aimRoofLadder = false, aimGolf = false, aimCine = null, aimBack = false;   // aimCine: "vcr" | "proj", the movie setup up top
@@ -975,12 +1079,9 @@ function backLadderE() {                           // E on it: from up top, kick
 }
 { const under = floorHeightAt; floorHeightAt = (x, z) => pavedAt(x, z) ? LOT.y : under(x, z); }   // (the lot and the road sit a curb lower than the walk)
 const PUDDLE_DARK = new THREE.Color(0x24282e), PUDDLE_GREY = new THREE.Color(0xb4b8bc);   // (a puddle: the sky, darkened by the water and what's under it)
-const cineAt = new THREE.Vector3();
 function cineTick(dt) {                           // the movie on the roof: the projector's picture on the sheet, washed out by daylight, and its beam after dark
   const C = roof.cine; if (!C) return;
-  let k = 1;                                       // the tape's sound: up top it comes from the projector (loud by it, faint across the roof, nothing with it off)
-  if (player.onRoof || roof.climb) { const d = camera.position.distanceTo(C.lens.getWorldPosition(cineAt)); k = C.on ? Math.min(1, Math.max(0.03, 3 / Math.max(d, 0.01)) ** 1.5) : 0; }
-  video.volume = tvSet.volume / 100 * k;
+  tvHearTick();                                    // (the tape's sound: where you're standing, see store/tv.js)
   if (!roof.g.visible) return;
   const on = C.on, day = Math.max(0, Math.min(1, tod.level));
   roof.cineU.uProj.value = on ? 0.06 + 0.9 * (1 - day) ** 1.5 : 0;   // (in the sun it's barely there; after dark it's the picture)
@@ -995,7 +1096,7 @@ function cineTick(dt) {                           // the movie on the roof: the 
 function roofTick(dt) {
   cineTick(dt);
   const R = roof, mo = shiftDate().getMonth(), h = shift.h;
-  R.lidA += ((player.onRoof || R.climb ? 1.45 : 0) - R.lidA) * Math.min(1, dt * 2.5); R.lid.rotation.x = -R.lidA;
+  R.lidA += ((player.onRoof || R.climb ? 1.62 : 0) - R.lidA) * Math.min(1, dt * 2.5); R.lid.rotation.x = R.lidA;
   if (R.bulb) R.bulb.color.setHex(tod.level < 0.5 ? 0xffe2a8 : 0x4a4a44);
   if (R.pizzaWin) R.pizzaWin.color.setHex(tod.level < 0.6 && h > 10 && h < 23.5 ? 0xffc77a : tod.level < 0.6 ? 0x1a1d22 : 0x3a4048);
   if (R.turbine) R.turbine.rotation.y += dt * (0.4 + 7 * (WX.wind || 0) + 4 * (WX.gust || 0));

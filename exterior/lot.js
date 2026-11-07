@@ -21,8 +21,14 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     const g = new THREE.Mesh(new THREE.PlaneGeometry(w, zNear - zFar), m);
     g.rotation.x = -Math.PI / 2; g.position.set(cx, 0, (zNear + zFar) / 2); ea(g);
   };
-  ground(0, -SIDEWALK, mat.sidewalk);                    // sidewalk right outside the doors
+  { const cuts = SERVICE_ROAD.cuts, edges = [x0, ...cuts.flat(), x1];   // sidewalk right outside the doors, but for the service road's two cuts through it
+    for (let i = 0; i < edges.length; i += 2) { const w2 = edges[i + 1] - edges[i], g = new THREE.Mesh(new THREE.PlaneGeometry(w2, SIDEWALK), mat.sidewalk); g.rotation.x = -Math.PI / 2; g.position.set(edges[i] + w2 / 2, 0, -SIDEWALK / 2); ea(g); }
+    const y0 = 0.004, y1 = LOT.y + 0.003, tilt = Math.atan2(y0 - y1, SIDEWALK);   // the cuts: paved, down from the road's level to the lot's, a curb down each side
+    for (const [a, b] of cuts) { const r = new THREE.Mesh(new THREE.PlaneGeometry(b - a, Math.hypot(SIDEWALK, y0 - y1)), mat.pavement); r.rotation.x = -Math.PI / 2 - tilt; r.position.set((a + b) / 2, (y0 + y1) / 2, -SIDEWALK / 2); ea(r);
+      const lip = new THREE.Mesh(new THREE.PlaneGeometry(b - a, 0.1), mat.pavement); lip.rotation.x = -Math.PI / 2; lip.position.set((a + b) / 2, LOT.y + 0.004, -SIDEWALK - 0.03); ea(lip);
+      for (const ex of [a - 0.075, b + 0.075]) eb(0.15, CURB_H, SIDEWALK, mat.curb, ex, CURB_Y, -SIDEWALK / 2); } }
   for (let x = x0 + 1; x < x1; x += 2) {                  // expansion joints
+    if (SERVICE_ROAD.cuts.some(([a, b]) => x > a - 0.1 && x < b + 0.1)) continue;
     const joint = new THREE.Mesh(new THREE.PlaneGeometry(0.03, SIDEWALK), mat.sidewalkJoint);
     joint.rotation.x = -Math.PI / 2; joint.position.set(x, 0.002, -SIDEWALK / 2); ea(joint);
   }
@@ -376,7 +382,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
         const c = eb(Rs * Math.PI / 2 / 8 + 0.02, CURB_H, 0.15, mat.curb, x, CURB_Y, z); c.rotation.y = a0 + Math.PI / 2;
       }
     }
-    eb((lx1 - Rs) - (lx0 + Rs), CURB_H, 0.15, mat.curb, (lx0 + lx1) / 2, CURB_Y, zw + 0.075);                   // along the walk (on the walk's edge, meeting the corners' curves)
+    { const e = [lx0 + Rs, ...SERVICE_ROAD.cuts.flat(), lx1 - Rs]; for (let i = 0; i < e.length; i += 2) eb(e[i + 1] - e[i], CURB_H, 0.15, mat.curb, (e[i] + e[i + 1]) / 2, CURB_Y, zw + 0.075); }   // along the walk (on the walk's edge, meeting the corners' curves; open at the service road)
   }
   // where each driveway meets the road: a quarter-circle flare either side, the curb curving round it out to the road
   { const R = lotFar - LOT.roadNear;
