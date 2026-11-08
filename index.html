@@ -61,7 +61,7 @@
   }
   /* ---------- main menu: continue / new game (simulation or sandbox) ---------- */
   #mainMenu .mm { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: min(420px, calc(100vw - 32px)); }
-  #mainMenu .mm[hidden] { display: none; }
+  #mainMenu .mm[hidden], #mainMenu .set[hidden] { display: none; }
   #mainMenu button { font: bold 17px Verdana, sans-serif; letter-spacing: 2px; color: #fff; background: var(--bb-blue); cursor: pointer;
     border: 3px solid var(--bb-yellow); border-radius: 6px; padding: 12px 18px; text-align: center; box-shadow: 0 6px 20px #0008; }
   #mainMenu button:hover { background: #0a3fa0; transform: translateY(-1px); }
@@ -95,6 +95,16 @@
   #mainMenu .acts button.mode { flex-basis: 100%; text-align: left; }
   #mainMenu .acts .q { flex-basis: 100%; color: #fff; font-size: 13px; text-align: center; }
   #mainMenu .acts .q.warn { color: #ffb3b3; }
+  /* play together: the code to show (a QR, and the text to copy), the camera that reads theirs */
+  #mainMenu .tgBox { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #mainMenu .tgBox[hidden] { display: none; }
+  #tgQR { width: min(260px, 70vw); height: auto; image-rendering: pixelated; background: #fff; border-radius: 6px; }
+  #tgCam { width: min(320px, 80vw); aspect-ratio: 4 / 3; object-fit: cover; background: #000; border: 2px solid var(--bb-yellow); border-radius: 6px; transform: scaleX(-1); }
+  #tgCam[hidden] { display: none; }
+  #mainMenu .tgBox textarea, #mainMenu .set input[type=text] { font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; color: #fff; background: #0a1a45; border: 1px solid #ffffff55; border-radius: 4px; padding: 6px; }
+  #mainMenu .tgBox textarea { width: 100%; height: 64px; resize: none; }
+  #mainMenu .tgBox .row { display: flex; gap: 8px; width: 100%; }
+  #mainMenu .tgBox .row button { flex: 1 1 0; font-size: 13px; padding: 8px; }
   #playHint { color: var(--bb-yellow); font-weight: bold; letter-spacing: 3px; font-size: 18px; text-align: center; animation: blink 1.4s infinite; text-shadow: 0 2px 6px #000; }
   #titleScreen { cursor: default; }
   #titleScreen.paused #enterHint { color: #fff; }
@@ -302,7 +312,26 @@
       <div id="playHint" hidden></div>
       <div class="ttl" id="mmTitle">SELECT A STORE</div>
       <div id="mmFiles"></div>
+      <button id="mmTogetherBtn" class="back">PLAY TOGETHER</button>
       <button id="mmSettingsBtn" class="back">SETTINGS</button>
+    </div>
+    <div class="mm" id="mmTogether" hidden>
+      <div class="ttl">PLAY TOGETHER</div>
+      <div class="note" id="tgAbout">Two players on the same network. Whoever joins comes in as a customer: any tape's free, and nobody throws them out at closing. You'll see each other, share the time and weather (hold F), the tape in the VCR, and the doors and lights. Customers and stock are each your own.</div>
+      <label class="set" id="tgNameRow">Your name <input type="text" id="tgName" maxlength="24" spellcheck="false" autocomplete="off"><span></span></label>
+      <div class="note" id="tgStatus" aria-live="polite"></div>
+      <div class="tgBox" id="tgGive" hidden>
+        <canvas id="tgQR" aria-label="Connection code, as a QR code"></canvas>
+        <div class="row"><button id="tgCopy" class="back">COPY CODE</button></div>
+      </div>
+      <div class="tgBox" id="tgTake" hidden>
+        <video id="tgCam" muted playsinline hidden></video>
+        <textarea id="tgPaste" placeholder="…or paste their code here" spellcheck="false" aria-label="The other player's code"></textarea>
+      </div>
+      <button id="tgHost">HOST</button>
+      <button id="tgJoin">JOIN</button>
+      <button id="tgStop" class="back" hidden>STOP</button>
+      <button id="tgBack" class="back">BACK</button>
     </div>
     <div class="mm" id="mmSettings" hidden>
       <div class="ttl">SETTINGS</div>
@@ -385,6 +414,8 @@
 <script src="exterior/trees.js"></script>     <!-- window.VaultTrees: the trees outside (instanced), swaying, through the seasons; built from store/ -->
 <script src="ambience.js"></script>  <!-- window.VaultAmbience: the store's sound (hum, room tone, traffic, chime, footsteps), modelled not recorded -->
 <script src="touch.js"></script>     <!-- touchscreen controls on phones / tablets (?touch=1 to force) -->
+<script src="vendor/qrcode.js"></script>  <!-- window.qrcode: draws the play-together code as a QR (qrcode-generator) -->
+<script src="vendor/jsQR.js"></script>    <!-- window.jsQR: reads one off the camera, where the browser has no BarcodeDetector -->
 <script type="module">
   // load the game (store/, tonys/, exterior/: one shared scope, in this order) as classic scripts, which file:// allows.
   // Keys and the mouse wait for the last file: a handler from one file can't run before the files after it are in.
@@ -392,7 +423,7 @@
   for (const t of INPUT) addEventListener(t, hold, true);
   for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/lot", "exterior/grounds", "exterior/serviceroad", "store/lobby", "store/shelves", "store/plants", "store/theaterlobby", "store/lounge",
     "store/shift", "exterior/sky", "store/clock", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/light", "tonys/inside", "tonys/cabinets", "tonys/arcade", "tonys/missile", "tonys/yard",
-    "tonys/outside", "store/roofkit", "store/roof", "store/office", "store/chores", "store/tapebox", "store/tv", "store/title", "store/customer-mode", "store/wheel", "store/main"]) {
+    "tonys/outside", "store/roofkit", "store/roof", "store/office", "store/chores", "store/tapebox", "store/tv", "store/title", "store/customer-mode", "store/wheel", "store/together", "store/main"]) {
     const s = document.createElement("script"); s.src = `${f}.js`; s.async = false;   // async off: run in order, not as they arrive
     if (f === "store/main") s.onload = s.onerror = () => { for (const t of INPUT) removeEventListener(t, hold, true); };
     document.body.appendChild(s);

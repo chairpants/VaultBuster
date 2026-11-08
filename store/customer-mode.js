@@ -260,7 +260,7 @@ function cmNotice(n) { const e = staff.find(cmSees); if (e) { cm.trust = Math.ma
 
 // ---- what's yours, what isn't, and what it costs ----
 const cmPrice = e => (e.kind === "tape" ? posTerm.rentPrice(e.ref) : e.kind === "snack" ? snackPrice(e.ref.userData.snack) : e.kind === "popcorn" ? 1.5 : 0) * (cmRegular() ? 0.9 : 1);
-const cmPaid = e => e.kind === "item" || (e.kind === "tape" ? cm.rented.has(e.ref) : e.kind === "snack" ? !!e.ref.userData.paid : !!e.ref?.paid);
+const cmPaid = e => !!GUEST || e.kind === "item" || (e.kind === "tape" ? cm.rented.has(e.ref) : e.kind === "snack" ? !!e.ref.userData.paid : !!e.ref?.paid);
 const cmUnpaid = () => inv.filter(e => !cmPaid(e));
 function invRemove(e) {                          // taken off you: out of the inventory (and your hand, if it was in it)
   const i = inv.indexOf(e); if (i < 0) return;
@@ -953,7 +953,7 @@ function cmSlip() {                               // the end of your day, on the
   $("shiftNext").textContent = "NEXT DAY ▸";
   $("shiftReport").style.display = "flex";
 }
-function cmDoorOpen(fromInside) { return fromInside || (!frontLock.locked && cm.banned !== shift.day); }   // (out's always fine: they let you out)
+function cmDoorOpen(fromInside) { return fromInside || !!GUEST || (!frontLock.locked && cm.banned !== shift.day); }   // (out's always fine: they let you out)
 
 function cmTick(dt) {
   cmNoteTick(); cmSleepTick(); cmShowTick(dt);
@@ -989,7 +989,7 @@ function cmTick(dt) {
   const sn = $("sneak"); sn.style.display = where || cm.heat > 0 ? "block" : "none";
   if (where || cm.heat > 0) { sn.className = seer ? "seen" : ""; sn.firstChild.textContent = seer ? `SEEN · ${seer.first.toUpperCase()}` : `STAFF ONLY · ${(where || "").toUpperCase()}${cmRunning() ? " · THEY CAN HEAR YOU RUN" : ""}`; sn.lastChild.style.setProperty("--h", `${(cm.heat * 100).toFixed(0)}%`); }
   // a door on a closer: one the staff left open swings shut once nobody's in it (unless you unlocked it yourself)
-  for (const k of KEYED) {
+  for (const k of GUEST ? [] : KEYED) {            // (a guest's doors are the host's: they shut when the host's do)
     const d = k.door(); if (!d?.open || d.byYou) { if (d) d.closeT = 0; continue; }
     const [x, , z] = doorAt(d), near = Math.hypot(player.x - x, player.z - z) < 1.6 || staff.some(e => e.c && Math.hypot(e.c.group.position.x - x, e.c.group.position.z - z) < 1.8);
     if (near) d.closeT = 0; else if ((d.closeT = (d.closeT || 0) + dt) > 3) { d.closeT = 0; if (!playerIn(d.shut)) toggleDoor(d); }
@@ -1032,7 +1032,7 @@ function cmHud() {
       ...(cm.rec?.day === shift.day ? [`${cm.rec.done ? "✓" : "☐"} ${cm.rec.by}'s pick: ${cm.rec.title.title}`] : []), ...(cmShowToday() && !["done", "failed"].includes(show.status) ? [`${cm.ticket === shift.day ? "✓ Ticket" : "☐ Tonight"}: ${show.title.title}, 8 PM`] : [])]];
 }
 function cmE() {                                  // E, as a customer: what's different. -> true if handled
-  if (aimBed) { if (!cm.sleeping) cmSleep(); return true; }
+  if (aimBed) { if (GUEST) toast("You're only visiting: the day ends when your host's does"); else if (!cm.sleeping) cmSleep(); return true; }
   if (aimTony) { tonyE(aimTony); return true; }
   if (cm.term) { cmTermClose(); return true; }
   if (aimPickup) { cmPickUp(aimPickup); return true; }

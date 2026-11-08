@@ -7,8 +7,10 @@ camera.rotation.y = player.yaw;
 // camera is where they'd be. It stands a little behind the eye so looking
 // down shows your chest, belly and feet; on the couch it takes Dana's sitting
 // pose and the camera rides its head
+// a guest (playing together): somebody plain, the same on both screens. A grey tee (its print the same grey: none to see), jeans, white sneakers
+const GUEST_LOOK = { female: false, top: "tee", topA: "#8a8f96", topB: "#8a8f96", sleeve: "baggy", longSleeves: false, pants: "khaki", pantsColor: "#3b5b8c", shoes: "#eeeeee", hightop: false, hat: null, height: 1, build: 1 };
 const ME_OUTFIT = { ...VaultCustomers.randomOutfit(seeded(1985), false), height: 1, build: 1, hat: null,
-  ...(CUSTOMER ? {} : { top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" }) };   // Dana's uniform, no name tag (a customer: your own clothes). (Playing together, the other player's sent this: they see you as you see yourself)
+  ...(GUEST ? GUEST_LOOK : CUSTOMER ? {} : { top: "uniform", topA: "#1b3fa0", topB: "#ffd400", longSleeves: false, pants: "khaki", pantsColor: "#b9a27a", shoes: "#1e1e1e" }) };   // Dana's uniform, no name tag (a customer: your own clothes). (Playing together, the other player's sent this: they see you as you see yourself)
 const me = VaultCustomers.build(ME_OUTFIT);
 me.rig.head.visible = false; me.rig.neck.visible = false;
 me.walkLean = false;                        // the eye doesn't tip forward, so neither does the chest: the feet stay in view
@@ -775,6 +777,7 @@ function pushDoorTick(d, dt) {
   const bodies = [[player.x, player.z]];
   for (const k of custs) if (k.c) bodies.push([k.c.group.position.x, k.c.group.position.z]);
   for (const e of staff) if (e.c) bodies.push([e.c.group.position.x, e.c.group.position.z]);
+  if (together.peer?.c?.group.visible) bodies.push([together.peer.c.group.position.x, together.peer.c.group.position.z]);   // (the other player, playing together)
   let near = null;                              // across-the-wall offset of whoever's closest to the threshold
   for (const [x, z] of bodies) {
     const along = (d.alongX ? x : z) - d.c, across = (d.alongX ? z : x) - d.at;
@@ -830,7 +833,7 @@ function doorCloserTick(d, dt) {
   const pad = 0.45, cx = (d.shut.x0 + d.shut.x1) / 2, cz = (d.shut.z0 + d.shut.z1) / 2;
   const inWay = (x, z) => inDoorSweep(d, x, z, pad) || Math.hypot(x - cx, z - cz) < 1.2;
   const near = inWay(player.x, player.z) || custs.some(k => k.c && inWay(k.c.group.position.x, k.c.group.position.z))
-    || staff.some(e => e.c && inWay(e.c.group.position.x, e.c.group.position.z));
+    || staff.some(e => e.c && inWay(e.c.group.position.x, e.c.group.position.z)) || (together.peer?.c && inWay(together.peer.c.group.position.x, together.peer.c.group.position.z));
   if (near) d.closeT = 0; else if ((d.closeT = (d.closeT || 0) + dt) > 1.5) { d.closeT = 0; toggleDoor(d); d.selfShut = true; }
 }
 function toggleDoor(d) {

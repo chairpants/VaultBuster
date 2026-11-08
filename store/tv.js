@@ -96,7 +96,7 @@ async function playEpisode(idx, tape = playing?.tape) {
   const eps = tape.seasons[0].episodes;
   idx = Math.max(0, Math.min(eps.length - 1, idx));
   const woundTo = tape.tapePos?.ep === idx ? tape.tapePos.t : 0;   // it plays from wherever it's wound to
-  playing = { tape, idx, eps };
+  playing = { tape, idx, eps, from: woundTo };   // (from: where it went in at. Playing together, that's what's said, before the video's caught up)
   tape.tapePos = { ep: idx, t: 0 };          // the tape winds forward as it plays (see the main loop)
   inspecting = false;                        // into the TV — box drops to your side
   const [iaId, epTitle, hint] = eps[idx];
@@ -122,8 +122,8 @@ async function playEpisode(idx, tape = playing?.tape) {
     $("nowPlaying").textContent = `⚠ ${err.message}`;
   }
 }
-function eject() {
-  const tape = playing?.tape;
+function eject(toHand = true) {               // (toHand false: the other player's tape, playing together: it just goes)
+  const tape = toHand ? playing?.tape : null;
   streamAsk++; video.pause(); video.removeAttribute("src"); video.load();
   playing = null; tvLight.base = 0;
   miniScreens.forEach(m => m.material = screensaverMat);   // back to the bouncing-logo screensaver
@@ -360,15 +360,16 @@ function onE() {
 }
 function vcrUse() {                          // E on the TV or a VCR (the store's, the theater's, the roof's: one tape, every screen)
   if (held) {
-    const tape = held, old = playing?.tape;
+    const tape = held, old = playing?.tape === tgVcr.theirs ? null : playing?.tape;   // (the other player's tape, playing together: nobody's to hand back)
     playEpisode(tape.tapePos?.ep || 0, tape);   // it plays from wherever it's wound to
     releaseFromHand();                     // the tape leaves your hand...
     showTableBox(tape);                    // ...and its case lands on the coffee table
     if (old) {                             // swap: the tape that was in the VCR comes out into your inventory
       if (invMakeRoom()) showTape(old); else { returnBin.push(old); refreshReturnsBin(); }   // (9 items already: Returns)
     }
+    tgVcrMine();                           // (playing together: on theirs too)
   }
-  else if (playing) eject();
+  else if (playing) { eject(playing.tape !== tgVcr.theirs); tgVcrMine(); }
 }
 // TV light colors: every 150ms the screen canvas (already cropped,
 // letterboxed and filtered — exactly what's on the glass) is shrunk to 24x24

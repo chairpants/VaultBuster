@@ -66,7 +66,7 @@ function titleMenu() {
     sandbox: ["SANDBOX", "Everything unlocked, Dana on staff, $10,000 in the budget: just play store."],
     customer: ["CUSTOMER", "You don't work here. The store runs itself; you come in off the lot with your own wallet, and play by its rules. Some doors are locked."],
   };
-  const panels = { main: $("mmMain"), settings: $("mmSettings") };
+  const panels = { main: $("mmMain"), settings: $("mmSettings"), together: $("mmTogether") };
   const show = k => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
   const write = (n, d) => { try { d ? localStorage.setItem(slotKey(n), typeof d === "string" ? d : JSON.stringify(d)) : localStorage.removeItem(slotKey(n)); } catch {} };
   const raw = n => { try { return localStorage.getItem(slotKey(n)); } catch { return null; } };
@@ -121,8 +121,10 @@ function titleMenu() {
       list.appendChild(acts);
     }
     const hint = $("playHint"); hint.hidden = !autoPlay; hint.textContent = `STORE ${SLOT} · CLICK OR PRESS A KEY TO PLAY`;
+    if (GUEST) { list.innerHTML = ""; $("mmTitle").textContent = `GUEST OF ${GUEST.who}`.toUpperCase(); hint.hidden = false; hint.textContent = "CLICK OR PRESS A KEY TO WALK IN"; }
   }
-  titleMenu.refresh = () => { if (started) { saveState(); sel = SLOT; } step = null; render(); show("main"); };
+  titleMenu.refresh = () => { if (started) { saveState(); sel = SLOT; } step = null; render(); show(GUEST && together.state !== "connected" ? "together" : "main"); };   // (a guest not yet linked: their reply code, for the host to scan)
+  titleMenu.show = show;
   titleMenu.autoPlay = () => autoPlay;
   $("playHint").onclick = play;
   titleMenu.refresh();
@@ -146,6 +148,9 @@ function titleMenu() {
   tv.oninput = () => { tvSet.volume = +tv.value; tvV.textContent = `${tvSet.volume}%`; applyTv(); };   // (the same setting as the TV's own picture menu)
   $("mmSettingsBtn").onclick = () => { tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`; show("settings"); };
   $("mmSettingsBack").onclick = () => show("main");
+  $("mmTogetherBtn").onclick = () => { show("together"); togetherOpen(); };
+  $("tgBack").onclick = () => { if (!GUEST && tgCam.want === "o") { tgScanStop(); tgStatus(""); tgButtons(); } show("main"); };   // (looking for a host's code: the camera goes off)
+  { const n = !GUEST && tgNoteShown(); if (n) { show("together"); togetherOpen(); tgStatus(n.note, n.bad); } }   // (a guest just sent home: why, where they'd try again)
 }
 let relockOnInput = false;                        // backed out with Escape: the next click or key (not Escape) takes the mouse back
 function backToStore() { relockOnInput = true; keys.clear(); $("crosshair").hidden = true; toast("Click or press any key to get back in", true); }

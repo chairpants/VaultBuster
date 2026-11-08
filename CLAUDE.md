@@ -1,6 +1,6 @@
 # VaultBuster
 
-A first-person 90s video store in three.js. No build: `index.html` loads plain scripts, and it has to keep working from `file://`. three.js and the register's font are in `vendor/` (`npm run vendor` rebuilds `vendor/three.js`, only needed to change its version); the stock is `catalog.js`, its covers `covers.js` and `mv-covers.js`, and tapes stream from archive.org.
+A first-person 90s video store in three.js. No build: `index.html` loads plain scripts, and it has to keep working from `file://`. three.js, the register's font and the QR code maker and reader (`qrcode.js`, `jsQR.js`) are in `vendor/` (`npm run vendor` rebuilds `vendor/three.js`, only needed to change its version); the stock is `catalog.js`, its covers `covers.js` and `mv-covers.js`, and tapes stream from archive.org.
 
 ## How the game's code is laid out
 
@@ -58,6 +58,7 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Title screen, pointer lock, gate alarm, clocking out | `store/title.js` |
 | Customer mode | `store/customer-mode.js` |
 | Saving, the main loop, room culling, loading, the `__t` test hooks | `store/main.js` |
+| Playing together on the same network: pairing by swapping codes (shown as QR, read by the camera, or pasted), the direct WebRTC link, the other player's body, joining as a guest (`GUEST`), the shared time and weather, tape, doors and lights | `store/together.js` |
 | TV picture settings, screensaver | `store/lounge.js` |
 | The time and weather wheel (hold F) | `store/wheel.js` |
 | Renderer, TV-light shader, bloom, rewinding, canvas-texture helpers | `store/core.js` |
@@ -65,4 +66,4 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 
 ## Testing
 
-`npm test` runs `tests/smoke.mjs` (several minutes, software-rendered). `node tests/shot.mjs out.png x,z,yaw,pitch` takes a screenshot from anywhere.
+`npm test` runs `tests/smoke.mjs` (several minutes, software-rendered). `node tests/shot.mjs out.png x,z,yaw,pitch` takes a screenshot from anywhere. `node tests/together.mjs` pairs a host and a guest in two pages and checks what's shared.
