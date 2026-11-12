@@ -25,6 +25,9 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | The lot, stalls, curbs, driveways, the road, street lamps, parked cars | `exterior/lot.js` |
 | Grass round the building, the store's dumpster, the cardboard bed behind it | `exterior/grounds.js` |
 | The service road (laid out by `SERVICE_ROAD` in `store/core.js`): its worn paving and that shader, the fence, jersey barriers, bollards, the turning island | `exterior/serviceroad.js` |
+| Where the world stops out front (laid out by `EDGE` in `store/core.js`; `EDGE.off` is what stops you): the county's road yard behind chain-link, the power line along the road, and `outdoorKit` (plain coloured parts merged into one mesh). The woods and their brush are planted by `exterior/trees.js` from `EDGE.woods` / `EDGE.brush` | `exterior/edges.js` |
+| How the ground looks everywhere but the service road: asphalt, concrete, grass, crushed stone, dirt, each shaded from world position in its shader (`groundFx(material, kind)`) | `exterior/surfaces.js` |
+| The park across the road: the rocket and its slide, monkey bars, merry-go-round, seesaw, swings, picnic table, benches, the sign (`PLAYGROUND`) | `exterior/playground.js` |
 | Employee counter, returns, back cabinet, entry lane and gates, trash receptacle, snack center (cooler, snack rack; the popcorn machine, built here, stands in the theater's lobby) | `store/lobby.js` |
 | Posters, cover atlases, shelves and the store layout (walls, kids, center, Staff Picks, MonsterVision, standee, candy aisle) | `store/shelves.js` |
 | TV lounge (couch, TV, lamps), the light switches | `store/lounge.js` |

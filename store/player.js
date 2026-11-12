@@ -374,7 +374,8 @@ function blocked(x, z) {
     const f0 = floorHeightAt(player.x, player.z), f1 = floorHeightAt(x, z);
     if (f1 - f0 > 0.4 || (f0 - f1 > 0.6 && !(f0 > TALL.booth - 0.1 && x < SHAFT.x0))) return true;
   }
-  if (SERVICE_ROAD.behindFence(x, z) && !SERVICE_ROAD.behindFence(player.x, player.z)) return true;   // (the fence runs out to the treeline: no going round the end of it)
+  if (SERVICE_ROAD.behindFence(x, z) && !SERVICE_ROAD.behindFence(player.x, player.z)) return true;
+  if (EDGE.off(x, z) && !EDGE.off(player.x, player.z)) return true;   // out front: the yard's fence, the woods, and the road's two ends (see EDGE, store/core.js)   // (the fence runs out to the treeline: no going round the end of it)
   if (CUSTOMER ? outBlocked(x, z) : tonyBlocked(x, z)) return true;
   for (const c of colliders) if (!c.staff)       // (you walk through the staff: they can't pin you in a corner)
     if (x > c.x0 - player.r && x < c.x1 + player.r && z > c.z0 - player.r && z < c.z1 + player.r) {
