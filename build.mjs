@@ -31,6 +31,25 @@ function parseCsv(text) {
 
 const shows = parseCsv(csv);
 
+// What the library's scheduled check has found unplayable on archive.org:
+// whole items, and single episodes whose file is gone from a live item.
+// VaultVision's "Library check" workflow keeps library-health.json at its
+// root; a tape isn't stocked with episodes nobody can watch, and a tape with
+// none left isn't stocked at all. It's a record, not an edit: when an item
+// comes back, the next build stocks it again.
+const health = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(ROOT, "library-health.json"), "utf8")); }
+  catch (e) {
+    // the scheduled build must not quietly restock every dead tape
+    if (process.env.REQUIRE_LIBRARY_HEALTH === "1") throw e;
+    console.warn(`library-health.json not read (${e.message}); building without it`);
+    return {};
+  }
+})();
+const deadItems = new Set(Object.keys(health.deadItems || {})), deadEpisodes = new Set(Object.keys(health.deadEpisodes || {}));
+const playable = ([iaId, , file]) => !deadItems.has(iaId) && !deadEpisodes.has(file ? `${iaId}::${file}` : iaId);
+let unplayable = 0; const emptied = [];
+
 // extract a window.SHOW field or array from a data.js file without eval
 function readShow(id) {
   const src = fs.readFileSync(path.join(ROOT, "shows", id, "data.js"), "utf8");
@@ -66,7 +85,10 @@ const catalog = [];
 let missing = [], noCode = [];
 for (const [title, id, category, ext] of shows) {
   if (!fs.existsSync(path.join(ROOT, "shows", id, "data.js"))) { missing.push(id); continue; }
-  const { title: dataTitle, eps } = readShow(id);
+  const { title: dataTitle, eps: listed } = readShow(id);
+  const eps = listed.filter(playable);
+  unplayable += listed.length - eps.length;
+  if (listed.length && !eps.length) { emptied.push(id); continue; }
   const seasons = new Map(); // season# -> episodes
   let coded = 0;
   for (const [iaId, epTitle, file] of eps) {
@@ -108,3 +130,4 @@ fs.writeFileSync("catalog.js", `window.VAULT_CATALOG = \n${JSON.stringify(catalo
 const cats = [...new Set(catalog.map(t => t.category))].sort();
 console.log(`${catalog.length} tapes, ${epsTotal} episodes, ${cats.length} categories`);
 console.log("categories:", cats.join(" | "));
+if (unplayable) console.log(`left out ${unplayable} unplayable episodes` + (emptied.length ? `, and ${emptied.length} shows with nothing left: ${emptied.join(", ")}` : ""));
