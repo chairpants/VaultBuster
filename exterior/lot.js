@@ -454,8 +454,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   // cap and finial — softer and warmer than the sodium lot lights
   const iron = new THREE.MeshPhongMaterial({ color: 0x121212, specular: 0x333333, shininess: 40 });
   const lanternGlass = glowMat(0x4a3a1c, 0xffcf7a, 1.3);
-  {
-    const px = 1.2, pz = benchZ;
+  const parkLamp = (px, pz) => {
     ecyl(0.2, 0.24, 0.12, iron, px, 0.06, pz, 8);                           // plinth
     ecyl(0.12, 0.16, 0.4, iron, px, 0.32, pz, 8);                           // tapered base
     ecyl(0.14, 0.14, 0.04, iron, px, 0.54, pz, 12);                         // collar
@@ -468,7 +467,11 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     cap.position.set(px, 3.47, pz); cap.rotation.y = Math.PI / 4;
     const finial = ea(new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), iron)); finial.position.set(px, 3.6, pz);
     nightLight(new THREE.PointLight(0xffcf7a, 0, 10, 1.5), 14).position.set(px, 3.15, pz);
-  }
+  };
+  parkLamp(1.2, benchZ);
+  // and more of them in the park itself, for after dark: each well clear of the rocket, the merry-go-round, the seesaw and
+  // the swings' arc (exterior/playground.js), and of the paths between them. A post you can't walk through
+  for (const [px, pz] of [[-7.5, -27.5], [9, -25], [5.5, -37.5], [15.5, -36.5]]) { parkLamp(px, pz); colliders.push({ x0: px - 0.22, x1: px + 0.22, z0: pz - 0.22, z1: pz + 0.22 }); }
 
   // the trees: a layered pine (stacked tapering cones) and a round broadleaf (lumpy icosahedra), the treeline
   // across the road and now groves and a treeline all round, swaying, and the broadleaf ones through the seasons (trees.js)

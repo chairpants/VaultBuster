@@ -15,7 +15,11 @@ ROCKET.rAt = y => { const p = ROCKET.prof; for (let i = 1; i < p.length; i++) if
 ROCKET.walk = ROCKET.decks.map(d => { let m = Infinity; for (let y = d; y <= d + 1.85; y += 0.05) m = Math.min(m, ROCKET.rAt(y)); return m - 0.06 - 0.32; });
 const rocketSlideY = x => { const S = ROCKET.slide, top = ROCKET.decks[1] + 0.02; return x <= S.x0 ? top : x >= S.x0 + S.run ? top - S.drop : top - S.drop * (x - S.x0) / S.run; };   // the chute's top, out from the middle
 const SEESAW = { x: PLAYGROUND.seesaw[0], z: PLAYGROUND.seesaw[1], ry: 0.16, y0: 0.67, half: 1.75, seat: 1.45, handle: 1.08, max: 0.36, a: 0.36, w: 0, tip: null };   // a: tipped this far (+: the -x end down), max: an end on the ground
-const SWING = { x: PLAYGROUND.swings[0], z: PLAYGROUND.swings[1], ry: -0.12, H: 2.6, L: 2.08, seats: [{ lx: -0.85, th: 0, w: 0, tuck: 0.4, g: null }, { lx: 0.85, th: 0, w: 0, tuck: 0.4, g: null }] };   // th: out from straight down, +: forward (local +z)
+// the swings: a big old set, the top bar 3.3 m up (near twice a grown-up's height), 2.78 m of chain. W: half the bar, to the A-frames; splay: how far
+// each A-frame's feet stand out front and back. th: out from straight down, +: forward (local +z), and on round past the bar if you get it going
+// (not wrapped); free: the chains gone slack (going over too slowly): the seat's flying on its own, { y, z, vy, vz } from the bar, till they snap taut
+const SWING = { x: PLAYGROUND.swings[0], z: PLAYGROUND.swings[1], ry: -0.12, H: 3.3, L: 2.78, W: 2.35, splay: 1.5, stiff: 0.6,   // stiff: heavy old chains, a hand on each: they hold their line till it'd take more than this much of your weight to keep them straight
+  seats: [{ lx: -1.0, th: 0, w: 0, tuck: 0.4, g: null, free: null, pumped: -9 }, { lx: 1.0, th: 0, w: 0, tuck: 0.4, g: null, free: null, pumped: -9 }] };
 const ROUND = { x: PLAYGROUND.round[0], z: PLAYGROUND.round[1], ry: 0.3, th: 0, w: 0, top: 0.46, max: 6, g: null };   // th: turned this far (about y, as three.js turns things), w: how fast (rad/s); top: its deck, to stand on
 const parkWorld = (lx, lz, X, Z, ry) => { const c = Math.cos(ry), s = Math.sin(ry); return [X + lx * c + lz * s, Z - lx * s + lz * c]; };   // (a K.at frame's x, z to the world's)
 const parkLocal = (x, z, X, Z, ry) => { const dx = x - X, dz = z - Z, c = Math.cos(ry), s = Math.sin(ry); return [dx * c - dz * s, dx * s + dz * c]; };
@@ -111,17 +115,18 @@ function buildPlayground({ lam, ext }) {
   }
 
   // ---- the swings (SWING): an A-frame at each end, a top bar, two seats on chains, each its own pendulum (see swingTick) ----
-  { const S = SWING, { H } = S, W = 1.9; dirt(S.x - 0.85, S.z, 0.75, 1.5); dirt(S.x + 0.85, S.z, 0.75, 1.6);
+  { const S = SWING, { H, W, splay } = S, foot = W + 0.3; dirt(S.x + S.seats[0].lx, S.z, 0.8, 2.0); dirt(S.x + S.seats[1].lx, S.z, 0.8, 2.1);
     K.at(S.x, 0, S.z, S.ry, () => {
-      for (const e of [-1, 1]) { for (const s of [-1, 1]) K.pipe(CREAM, [e * (W + 0.25), 0, s * 1.15], [e * W, H, 0], 0.04, 8); K.pipe(CREAM, [e * (W + 0.14), 1.2, -0.62], [e * (W + 0.14), 1.2, 0.62], 0.022); }
-      K.pipe(TEAL, [-W - 0.12, H, 0], [W + 0.12, H, 0], 0.045, 8);
-      for (const { lx } of S.seats) for (const s of [-0.21, 0.21]) K.cyl(STEEL, 0.02, 0.02, 0.05, lx + s, H - 0.05, 0, 6);
+      for (const e of [-1, 1]) { for (const s of [-1, 1]) K.pipe(CREAM, [e * foot, 0, s * splay], [e * W, H, 0], 0.05, 8);
+        const by = 1.45, bz = splay * (1 - by / H), bx = W + 0.3 * (1 - by / H); K.pipe(CREAM, [e * bx, by, -bz], [e * bx, by, bz], 0.026); }   // the A-frames, a brace across each
+      K.pipe(TEAL, [-W - 0.14, H, 0], [W + 0.14, H, 0], 0.055, 8);
+      for (const { lx } of S.seats) for (const s of [-0.21, 0.21]) K.cyl(STEEL, 0.024, 0.024, 0.06, lx + s, H - 0.06, 0, 6);
     });
     const frame = new THREE.Group(); frame.position.set(S.x, 0, S.z); frame.rotation.y = S.ry; g.add(frame);
     for (const seat of S.seats) { const KS = outdoorKit(); seat.g = new THREE.Group(); seat.g.position.set(seat.lx, H, 0); frame.add(seat.g);
       for (const s of [-0.21, 0.21]) KS.pipe(CHAIN, [s, -0.04, 0], [s, -S.L + 0.02, 0], 0.009, 4);
       KS.box(RUBBER, 0.48, 0.03, 0.17, 0, -S.L, 0); seat.g.add(KS.mesh()); }
-    for (const e of [-1, 1]) for (const s of [-1, 1]) { const [x, z] = parkWorld(e * 2.15, s * 1.15, S.x, S.z, S.ry); solid(x - 0.08, x + 0.08, z - 0.08, z + 0.08); }
+    for (const e of [-1, 1]) for (const s of [-1, 1]) { const [x, z] = parkWorld(e * foot, s * splay, S.x, S.z, S.ry); solid(x - 0.09, x + 0.09, z - 0.09, z + 0.09); }
   }
 
   // ---- a picnic table, red once; the second bench, facing the swings; the park's sign by the walk ----
@@ -152,7 +157,7 @@ function buildPlayground({ lam, ext }) {
 // ---- the park, working: up and down the rocket's ladders, its decks, the slide; the swings; the seesaw. PARK.deck: which of the rocket's decks
 // you're standing on (0: the ground). climb: on a ladder; ride: on a swing, an end of the seesaw, or going down the slide. cam: where your eye is
 // meanwhile (main.js), tilt: what the swing does to it. parkTick runs before move (store/main.js), so the seesaw's under your feet before you step ----
-const PARK = { deck: 0, climb: null, ride: null, aim: null, cam: new THREE.Vector3(), tilt: 0, t: 0 };
+const PARK = { deck: 0, climb: null, ride: null, aim: null, cam: new THREE.Vector3(), tilt: 0, t: 0, jolt: 0, sit: null };   // jolt: a swing's chains catching you; sit: how you're sat on a ride (for the other player's copy: store/together.js)
 const PARK_MOVE = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
 const parkBusy = () => !!(PARK.deck || PARK.climb || PARK.ride);
 const rkAt = (rad, a, tan = 0) => [PLAYGROUND.rocket[0] + Math.cos(a) * rad - Math.sin(a) * tan, PLAYGROUND.rocket[1] + Math.sin(a) * rad + Math.cos(a) * tan];
@@ -185,13 +190,20 @@ function seesawOn() {                             // stood on the plank (or step
 }
 function seesawTick(dt) {
   const S = SEESAW, R = PARK.ride, on = seesawOn(), u = on ?? (R?.kind === "seesaw" ? R.e * S.seat * Math.cos(S.a) : null);
+  // the other player (store/together.js), sat on an end or stood on the plank: their weight on it too. Two sat at the ends balance it,
+  // so it stays where it is till whoever's end is down pushes off: up they go, and down comes the other, to push off in their turn
+  const Pp = together.peer, see = Pp?.see && performance.now() - Pp.heard < 1000 ? Pp.see : null, up = see ? (see.ride ? see.e * S.seat * Math.cos(S.a) : see.u) : null;
   let tq = 0, I = 25;                              // the plank's own (balanced on its pipe), and you, 70 kg, wherever you are along it
-  if (u != null) { tq = -70 * 9.81 * u * Math.cos(S.a); I += 70 * u * u; }
+  for (const w of [u, up]) if (w != null) { tq += -70 * 9.81 * w * Math.cos(S.a); I += 70 * w * w; }
+  if (u != null && up != null) tq += Math.sign(S.a) * 70 * 9.81 * 0.15;   // (two on it: whoever's down sits back, and it stays down till they push)
   S.w += (tq / I - 1.1 * S.w) * dt; S.a += S.w * dt;
+  if (see && !together.host && Pp.seeA != null) {   // both on it: the host's seesaw is the one that counts; ours eases to it
+    const k = 1 - Math.exp(-dt * 5); S.a += (Pp.seeA - S.a) * k; S.w += (Pp.seeW - S.w) * k;
+  }
   if (Math.abs(S.a) > S.max) {                    // an end on the ground: a thump, and a little bounce back up
     const e = -Math.sign(S.a); S.a = Math.sign(S.a) * S.max;
     if (Math.abs(S.w) > 0.5) { const [x, z] = parkWorld(e * S.half, 0, S.x, S.z, S.ry); ambStep(x, z, Math.min(1, Math.abs(S.w) * 0.5)); }
-    S.w = -S.w * 0.25;
+    S.w = -S.w * (u != null && up != null ? 0.1 : 0.25);
   }
   S.tip.rotation.z = S.a;
   if (on != null) player.airH = Math.max(0, seesawH(on) - floorHeightAt(player.x, player.z));   // it takes you with it
@@ -200,26 +212,69 @@ function seesawSeat(e) {                           // the top of the seat on end
   const S = SEESAW, s = e * S.seat, [x, z] = parkWorld(s * Math.cos(S.a), 0, S.x, S.z, S.ry);
   return { x, y: S.y0 + s * Math.sin(S.a) + 0.06, z, dx: -e * Math.cos(S.ry), dz: e * Math.sin(S.ry) };   // dx, dz: facing the middle
 }
-function seesawPush(e) {                           // your end down on the ground: shove off with your legs
-  if (e * SEESAW.a < -(SEESAW.max - 0.08)) SEESAW.w += e * 2.6;
+function seesawPush(e, theirs = false) {           // your end down on the ground: shove off with your legs (theirs: the other player's, sent over)
+  if (e * SEESAW.a < -(SEESAW.max - (theirs ? 0.16 : 0.08))) SEESAW.w += e * 2.6; else return;
+  if (!theirs && together.peer && together.ctl?.readyState === "open") try { together.ctl.send(JSON.stringify({ t: "seesaw", e })); } catch {}
 }
-// ---- the swings: a pendulum each, 2.08 m of chain. Pump at the bottom of the arc to go higher; let go at the top of it and you fly ----
-function swingAt(S) {                              // the seat's top, the chains' line up from it and forward square to them, in the world
-  const c = Math.cos(S.th), s = Math.sin(S.th), sr = Math.sin(SWING.ry), cr = Math.cos(SWING.ry), [x, z] = parkWorld(S.lx, s * SWING.L, SWING.x, SWING.z, SWING.ry);
-  return { x, y: SWING.H - c * SWING.L + 0.015, z, ux: -s * sr, uy: c, uz: -s * cr, fx: c * sr, fy: s, fz: c * cr };
+// ---- the swings: a pendulum each, 2.78 m of chain. Pump as you sweep through the bottom of the arc and each one sends you higher; keep it up
+// in time and you'll go level with the bar, then past it, and with enough speed right on over the top. Too slow up there and the chains go
+// slack: you drop, till they catch you with a jerk. Let go at the top of the arc and you fly ----
+const wrapPi = a => Math.atan2(Math.sin(a), Math.cos(a));
+function swingLocal(S) {                           // the seat from the bar, in the swing's own plane: z forward, y up; and how fast it's going
+  if (S.free) { const f = S.free; return { z: f.z, y: f.y, vz: f.vz, vy: f.vy, r: Math.hypot(f.z, f.y) }; }
+  const L = SWING.L, c = Math.cos(S.th), s = Math.sin(S.th);
+  return { z: L * s, y: -L * c, vz: L * S.w * c, vy: L * S.w * s, r: L };
+}
+function swingAt(S) {                              // the seat's top, the chains' line up from it and forward square to them, in the world; v: its velocity
+  const c = Math.cos(S.th), s = Math.sin(S.th), sr = Math.sin(SWING.ry), cr = Math.cos(SWING.ry), Lc = swingLocal(S), [x, z] = parkWorld(S.lx, Lc.z, SWING.x, SWING.z, SWING.ry);
+  return { x, y: SWING.H + Lc.y + 0.015, z, ux: -s * sr, uy: c, uz: -s * cr, fx: c * sr, fy: s, fz: c * cr, vx: Lc.vz * sr, vy: Lc.vy, vz: Lc.vz * cr, r: Lc.r };
 }
 function swingTick(dt) {
-  const R = PARK.ride;
-  SWING.seats.forEach((S, i) => { const on = R?.kind === "swing" && R.i === i, gust = on ? 0 : (WX.wind || 0.15) * 0.25 * Math.sin(PARK.t * 0.8 + i * 2.3);
-    S.w += (-(9.81 / SWING.L) * Math.sin(S.th) - (on ? 0.05 : 0.22) * S.w + gust) * dt; S.th += S.w * dt; S.g.rotation.x = -S.th;
+  const R = PARK.ride, g = 9.81, L = SWING.L, P = together.peer, n = Math.max(1, Math.ceil(dt / 0.008)), h = dt / n;
+  SWING.seats.forEach((S, i) => {
+    const on = R?.kind === "swing" && R.i === i;
+    if (!on && P?.swing && P.swing.i === i && performance.now() - P.heard < 1000) {   // the other player's on this one: it goes where theirs does
+      const k = 1 - Math.exp(-dt * 14), d = wrapPi(P.swing.th - S.th); S.th += d * k; S.w = d * k / Math.max(dt, 1e-4); S.free = null;
+      S.g.rotation.x = -S.th; S.g.scale.y = Math.max(0.3, P.swing.r / L); return;
+    }
+    const gust = on ? 0 : (WX.wind || 0.15) * 0.25 * Math.sin(PARK.t * 0.8 + i * 2.3), damp = on ? 0.02 : 0.22;
+    for (let k = 0; k < n; k++) {
+      if (!S.free) {
+        S.w += (-(g / L) * Math.sin(S.th) - damp * S.w - 0.003 * S.w * Math.abs(S.w) + gust) * h; S.th += S.w * h;
+        if (L * S.w * S.w + g * Math.cos(S.th) < -SWING.stiff * g) {   // up past level and nowhere near fast enough to keep the chains tight: they go slack
+          const c = Math.cos(S.th), s = Math.sin(S.th); S.free = { z: L * s, y: -L * c, vz: L * S.w * c, vy: L * S.w * s };
+        }
+      } else {                                      // flying on slack chains: falling, till they're taut again
+        const f = S.free; f.vy -= g * h; f.z += f.vz * h; f.y += f.vy * h;
+        const r = Math.hypot(f.z, f.y); S.th += wrapPi(Math.atan2(f.z, -f.y) - S.th);
+        if (r >= L) {                               // caught: the chains snap tight, and take all of it but the going round
+          const c = Math.cos(S.th), s = Math.sin(S.th), out = f.vz * s - f.vy * c;
+          S.w = (f.vz * c + f.vy * s) / L; S.free = null;
+          if (out > 0.8) { const [x, z] = parkWorld(S.lx, L * s, SWING.x, SWING.z, SWING.ry); ambStep(x, z, Math.min(1, out * 0.3)); if (on) PARK.jolt = Math.min(1, out * 0.25); }
+        }
+      }
+    }
+    const r = S.free ? Math.hypot(S.free.z, S.free.y) : L; S.g.rotation.x = -S.th; S.g.scale.y = Math.max(0.3, r / L);
     S.tuck += ((on ? (S.w > 0 ? -0.9 : 0.6) : 0.4) - S.tuck) * Math.min(1, dt * 5);   // legs out going forward, tucked under coming back
   });
 }
+// a pump: legs out and lean back (or the other way) as you sweep through the bottom. Timed right, through the bottom, it all goes into the
+// swing; a little early or late, some of it; out at the ends of the arc, hardly any. Mashing it does nothing: once a pass is all you get
 function swingPump(S) {
-  const eff = 0.3 + 0.7 * Math.max(0, Math.cos(S.th * 2.4));   // (at the bottom's where it counts)
-  S.w += (Math.abs(S.w) < 0.05 ? 1 : Math.sign(S.w)) * 0.5 * eff;
-  const g = 9.81, L = SWING.L, Emax = g * (1 - Math.cos(1.25)), E = 0.5 * S.w * S.w * L + g * (1 - Math.cos(S.th));   // (no higher than about 70 degrees: past that the chains go slack)
-  if (E > Emax) S.w = Math.sign(S.w) * Math.sqrt(Math.max(0, 2 * (Emax - g * (1 - Math.cos(S.th))) / L));
+  if (S.free) return;
+  const thw = wrapPi(S.th), sp = Math.abs(S.w), since = PARK.t - S.pumped; S.pumped = PARK.t;
+  if (sp < 0.15 && Math.abs(thw) < 0.3) { S.w += (Math.sign(S.w) || 1) * 0.55; return; }   // from still: a push off the ground to get going
+  const fromBottom = Math.abs(thw) / Math.max(sp, 0.3);   // (how long ago it went through the bottom, or how long till it does: seconds)
+  let q = Math.max(0, Math.min(1, 1 - (fromBottom - 0.12) / 0.3));
+  if (Math.cos(thw) < 0) q = 0;                    // (up over the bar: nothing to push against)
+  if (since < 0.45) q = 0;                        // (again already: you're still coming out of the last one)
+  S.w += Math.sign(S.w) * (0.42 + 0.15 * sp) * q;   // (going faster, you can throw more into it)
+  S.lastQ = q;                                     // (the tip says how that one went)
+}
+function swingTip(S) {                             // on a swing: what E does, and how the last pump went
+  const recent = PARK.t - S.pumped < 1.2, q = S.lastQ ?? 1, thw = Math.abs(wrapPi(S.th));
+  const how = S.free ? "the chains have gone slack: hold on…" : thw > Math.PI * 0.75 ? "over the top!" : recent && q > 0.75 ? "right on time" : recent && q > 0.2 ? "a bit off: pump right as you pass the bottom" : recent ? "no good: pump as you sweep through the bottom, once a pass" : "pump as you sweep through the bottom";
+  return `E — pump<div class="cat">${how} · a move key — let go</div>`;
 }
 // ---- the slide: s along it from the lip at the first deck, sliding on steel (a little friction), then the run-out (a lot) ----
 function slideAt(s) {                              // -> [out from the rocket's middle, the chute's top, on the slope?]
@@ -264,15 +319,15 @@ function parkOff() {                               // a move key: off whatever y
   const R = PARK.ride; PARK.ride = null; PARK.tilt = 0; me.reachTo(null); me.reachAlso(null);
   const f = floorHeightAt(player.x, player.z);
   if (R.kind === "swing") {
-    const S = SWING.seats[R.i], P = swingAt(S), v = S.w * SWING.L;
-    if (Math.abs(v) < 0.8) {                       // hardly moving: stand up off it
+    const S = SWING.seats[R.i], P = swingAt(S), v = Math.hypot(P.vx, P.vy, P.vz);
+    if (v < 0.8 && Math.cos(S.th) > 0.8) {         // hardly moving: stand up off it
       player.x = P.x + Math.sin(SWING.ry) * 0.35; player.z = P.z + Math.cos(SWING.ry) * 0.35; player.airH = 0;
       if (blocked(player.x, player.z)) { player.x = P.x; player.z = P.z; }
       S.w *= 0.3; return;
     }
     player.x = P.x; player.z = P.z; player.airH = Math.max(0, P.y + 0.05 - f);   // let go: you go on the way the seat was going
-    Object.assign(jump, { air: true, v: P.fy * v, vx: P.fx * v, vz: P.fz * v, peak: null, recover: 0 });
-    S.w *= 0.6;
+    Object.assign(jump, { air: true, v: P.vy, vx: P.vx, vz: P.vz, peak: null, recover: 0 });
+    if (S.free) { S.free.vz *= 0.6; S.free.vy *= 0.6; } else S.w *= 0.6;
   } else if (R.kind === "round") {                 // let go of the hoop: on the deck if it's slow, flung off it if it isn't
     const P = roundRider(R.i), v = Math.abs(ROUND.w) * 0.55; player.airH = ROUND.top - f;
     if (v > 1.3) { const t = Math.sign(ROUND.w) * Math.abs(ROUND.w) * 0.55, rx = P.x - ROUND.x, rz = P.z - ROUND.z, L = Math.hypot(rx, rz) || 1;
@@ -319,8 +374,10 @@ function parkTick(dt) {
   if (R) R.t += dt;
   if (R?.kind === "swing") {
     const S = SWING.seats[R.i], P = swingAt(S), hip = 0.06;
-    PARK.cam.set(P.x + P.ux * (hip + 0.7) + P.fx * 0.08, P.y + P.uy * (hip + 0.7) + P.fy * 0.08, P.z + P.uz * (hip + 0.7) + P.fz * 0.08);
-    PARK.tilt = S.th * 0.85 * Math.cos(player.yaw - SWING.ry - Math.PI);   // (looking the way it swings, the sky and the ground come and go)
+    const j = PARK.jolt * Math.sin(PARK.t * 60) * 0.05; PARK.jolt = Math.max(0, PARK.jolt - dt * 3);   // (the chains catching you: a jerk)
+    PARK.cam.set(P.x + P.ux * (hip + 0.7 + j) + P.fx * 0.08, P.y + P.uy * (hip + 0.7 + j) + P.fy * 0.08, P.z + P.uz * (hip + 0.7 + j) + P.fz * 0.08);
+    const thw = wrapPi(S.th), k = 0.85 + 0.15 * (thw / Math.PI) ** 2;   // (looking the way it swings, the sky and the ground come and go; all the way round, over the top)
+    PARK.tilt = thw * k * Math.cos(player.yaw - SWING.ry - Math.PI);
   } else if (R?.kind === "round") {
     const P = roundRider(R.i); PARK.cam.set(P.x, ROUND.top + 1.65, P.z);
   } else if (R?.kind === "seesaw") {
@@ -350,8 +407,8 @@ function parkBody(g) {                            // (meTick) you, on whatever i
   if (R.kind === "swing") {
     const S = SWING.seats[R.i], P = swingAt(S), hip = 0.06, hipY = 0.5, hx = P.x + P.ux * hip, hy = P.y + P.uy * hip, hz = P.z + P.uz * hip;
     g.position.set(hx - P.ux * hipY, hy - P.uy * hipY, hz - P.uz * hipY); g.rotation.y = SWING.ry; g.rotation.x = -S.th;
-    me.setPose("sit", { hipY, tuck: S.tuck });
-    const chain = side => { const k = SWING.L - 0.62, [x, z] = parkWorld(S.lx + side, Math.sin(S.th) * k, SWING.x, SWING.z, SWING.ry); return new THREE.Vector3(x, SWING.H - Math.cos(S.th) * k, z); };   // both hands on the chains, about shoulder high
+    me.setPose("sit", { hipY, tuck: S.tuck }); PARK.sit = { hipY, tuck: S.tuck };
+    const chain = side => { const k = P.r - 0.62, [x, z] = parkWorld(S.lx + side, Math.sin(S.th) * k, SWING.x, SWING.z, SWING.ry); return new THREE.Vector3(x, SWING.H - Math.cos(S.th) * k, z); };   // both hands on the chains, about shoulder high
     me.reachTo(chain(-0.21), 0, { lean: false }); me.reachAlso(chain(0.21), 1);
   } else if (R.kind === "round") {               // stood holding the hoop, facing it
     const P = roundRider(R.i); g.position.set(P.x - P.dx * 0.21, ROUND.top, P.z - P.dz * 0.21); g.rotation.y = Math.atan2(P.dx, P.dz); me.setPose("idle");
@@ -359,12 +416,12 @@ function parkBody(g) {                            // (meTick) you, on whatever i
     me.reachTo(grip(0.16), 0, { lean: false }); me.reachAlso(grip(-0.16), 1);
   } else if (R.kind === "seesaw") {
     const P = seesawSeat(R.e), hipY = 0.45, S = SEESAW; g.position.set(P.x, P.y + 0.03 - hipY, P.z); g.rotation.y = Math.atan2(P.dx, P.dz);
-    me.setPose("sit", { hipY, tuck: Math.max(-0.3, Math.min(1.2, (0.55 - P.y) * 2)) });
+    PARK.sit = { hipY, tuck: Math.max(-0.3, Math.min(1.2, (0.55 - P.y) * 2)) }; me.setPose("sit", PARK.sit);
     const hs = R.e * S.handle, hu = hs * Math.cos(S.a), hy = S.y0 + hs * Math.sin(S.a) + 0.28;
     const grip = v => { const [x, z] = parkWorld(hu, v, S.x, S.z, S.ry); return new THREE.Vector3(x, hy, z); };
     me.reachTo(grip(-R.e * 0.1), 0, { lean: false }); me.reachAlso(grip(R.e * 0.1), 1);
   } else {                                        // the slide: sat, legs out down it
-    g.position.set(player.x, PARK.cam.y - 0.72 - 0.5, player.z); g.rotation.y = Math.PI / 2; me.setPose("sit", { hipY: 0.5, tuck: -0.9 });
+    g.position.set(player.x, PARK.cam.y - 0.72 - 0.5, player.z); g.rotation.y = Math.PI / 2; PARK.sit = { hipY: 0.5, tuck: -0.9 }; me.setPose("sit", PARK.sit);
   }
 }
 // ---- the crosshair (store/checkout.js) and E (store/tv.js) ----
@@ -384,7 +441,7 @@ function parkAimTip(ray, tip) {                    // -> true if the park has th
   if (PARK.climb) { tip.style.display = "none"; return true; }
   const R = PARK.ride;
   if (R) {
-    tip.innerHTML = R.kind === "swing" ? "E — pump<div class=\"cat\">at the bottom of the swing · a move key — let go</div>"
+    tip.innerHTML = R.kind === "swing" ? swingTip(SWING.seats[R.i])
       : R.kind === "round" ? "E — kick off the ground<div class=\"cat\">a move key — let go</div>"
       : R.kind === "seesaw" ? (R.e * SEESAW.a < -(SEESAW.max - 0.08) ? "E — push off<div class=\"cat\">a move key — get off</div>" : "On the seesaw<div class=\"cat\">a move key — get off</div>") : "";
     tip.style.display = tip.innerHTML ? "block" : "none"; return true;
@@ -400,12 +457,13 @@ function parkAimTip(ray, tip) {                    // -> true if the park has th
     consider({ kind: "ladder", k: k - 1, dir: -1 }, ladBox(k - 1, D[k - 1] + 0.5, D[k] + 1.05));
   } else if (Math.hypot(player.x - X, player.z - Z) < 1.3 && player.airH < 0.2) consider({ kind: "ladder", k: 0, dir: 1 }, ladBox(0, 0, D[1]));
   else {
-    SWING.seats.forEach((S, i) => { const y = SWING.H - Math.cos(S.th) * SWING.L, lz = Math.sin(S.th) * SWING.L;
+    SWING.seats.forEach((S, i) => { if (together.peer?.swing?.i === i) return; const Lc = swingLocal(S), y = SWING.H + Lc.y, lz = Lc.z;   // (not the one the other player's on)
       consider({ kind: "swing", i }, parkRayBox(ray, SWING.x, SWING.z, SWING.ry, [S.lx - 0.3, y - 0.15, lz - 0.25, S.lx + 0.3, y + 0.35, lz + 0.25])); });
     for (let i = 0; i < 4; i++) consider({ kind: "round", i }, parkRayBox(ray, ROUND.x, ROUND.z, roundAngle() + i * Math.PI / 2, [0.78, 0.62, -0.42, 1.12, 1.25, 0.42]));   // the merry-go-round: a hoop, on you get;
     { const t = parkRayBox(ray, ROUND.x, ROUND.z, 0, [-1.42, 0.3, -1.42, 1.42, 0.5, 1.42]);                                                         // the deck's edge, a shove
       if (t != null) consider({ kind: "shove", hx: ray.origin.x + ray.direction.x * t, hz: ray.origin.z + ray.direction.z * t }, t); }
-    for (const e of [-1, 1]) { const s = e * SEESAW.seat, u = s * Math.cos(SEESAW.a), y = SEESAW.y0 + s * Math.sin(SEESAW.a);
+    for (const e of [-1, 1]) { if (together.peer?.see?.ride && together.peer.see.e === e) continue;   // (the other player's sat on that end)
+      const s = e * SEESAW.seat, u = s * Math.cos(SEESAW.a), y = SEESAW.y0 + s * Math.sin(SEESAW.a);
       consider({ kind: "seesaw", e }, parkRayBox(ray, SEESAW.x, SEESAW.z, SEESAW.ry, [u - 0.3, y - 0.15, -0.25, u + 0.3, y + 0.3, 0.25])); }
   }
   PARK.aim = best;
