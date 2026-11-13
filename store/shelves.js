@@ -285,11 +285,14 @@ function flushShelves() {
   scene.add(bodyMesh);
   shelfParts.clear(); coverParts.clear(); bodyParts.length = 0;
 }
-const catStripMat = {};  // yellow header strip per category
+const catStripMat = {};  // yellow header strip per category (or per sign name, see SIGN_CAT)
+// a section signed under another name than its genre (the kids' anime, so it isn't confused with the
+// grown-up anime in TV): sign name → the genre it stands for, for locking it like that genre
+const SIGN_CAT = { "Kids' Anime": "Anime" };
 const endTags = [];      // endcap genre lists: { mat, cats, w, lineH } (signsRefresh swaps a locked section for COMING SOON)
 let mvTopper = null;     // the MONSTERVISION topper (not up until the section's bought)
 function signsRefresh() {                     // simulation: a section that isn't in yet says COMING SOON instead of its genre
-  const soon = cat => libLocked({ category: cat });
+  const soon = cat => libLocked({ category: SIGN_CAT[cat] || cat });
   for (const [cat, m] of Object.entries(catStripMat)) {
     if (cat === "__soon") continue;
     m.userData.real ??= m.map;
@@ -462,7 +465,8 @@ const WALL_RUNS = [
   { x: STORE.x - 0.1, z: STORE_EXIT.z0 - 0.3, ry: Math.PI, bays: 11 },   // far wall, back → front, from just this side of the emergency exit, stopping short of the kids section
 ];
 const CENTER = { corridor: 1.5, westBays: 2, eastBays: 4, z0: 8.6, gap: 2.0, bands: 4 };   // corridor = half-width of the door→lounge walkway; z0 = front band's door-side face
-const KIDS = { bandX: [4.75, 8.15], z0: 1.1, bays: 4, x0: 1.95, x1: STORE.x - 0.1, z1: 8.3 };   // bandX = each band's center plane; x0..x1/z0..z1 = the carpet
+const KIDS = { bandX: [4.55, 7.75], z0: 1.1, bays: 4, wallBays: 4, x0: 1.95, x1: STORE.x - 0.1, z1: 8.3 };   // bandX = each band's center plane (nudged toward the entrance to make room for the wall run); wallBays: full-height shelves on the side wall, past the far band; x0..x1/z0..z1 = the carpet
+const TV_BACK = { x: 3.7, bays: 3, bands: [4, 5] };   // two more TV bands behind the center ones, east of the lounge rug (x ≤ 3.5); shorter, to keep a full aisle to the side wall
 // is this spot on a wall above one of the wall runs? (posters get lifted over them)
 function overWallShelf(x, z) {
   return wallSpans.some(w => w.axis === "x" ? Math.abs(x - w.at) < 0.5 && z > w.a0 - 0.5 && z < w.a1 + 0.5
@@ -499,7 +503,7 @@ const wallSpans = [];                        // what the wall runs cover, for li
   // crowded genres (tapes spread evenly across a genre's bays), so no bay is
   // left bare. ride: { host: guest } lets a genre too small for a bay of its
   // own sit on its host's last bay, under its own placard.
-  const layBlock = (list, order, runs, spec, ride = {}, fill = null) => {   // fill(tapes, slots) → tapes: restock a genre once its bays are set
+  const layBlock = (list, order, runs, spec, ride = {}, fill = null, names = {}) => {   // fill(tapes, slots) → tapes: restock a genre once its bays are set; names: genre → the sign it goes under here
     const cap = capOf(spec), byCat = new Map();
     for (const t of list) { if (!byCat.has(t.category)) byCat.set(t.category, []); byCat.get(t.category).push(t); }
     const cats = [...order.filter(c => byCat.has(c)), ...[...byCat.keys()].filter(c => !order.includes(c))];   // anything unlisted goes last
@@ -545,14 +549,14 @@ const wallSpans = [];                        // what the wall runs cover, for li
         if (f && f.cat === bay.cat) { bay.headers.forEach(h => f.headers.push({ ...h, index: h.index + f.tapes.length })); f.tapes.push(...bay.tapes); }
         else faces.push({ cat: bay.cat, tapes: [...bay.tapes], headers: [...bay.headers] });
       });
-      buildRun(faces, r.x, r.z, r.ry, r.dx, r.dz, spec);
+      buildRun(faces, r.x, r.z, r.ry, r.dx, r.dz, spec, names);
     }
     return Object.fromEntries(units.map(u => [u.cat + (u.guest ? " + " + u.guest.cat : ""), u.bays]));
   };
   // One double-sided gondola run: faces laid end to end from (x, z) along
   // world direction (dx, dz), shelves facing ry, with the stacked genre list
   // on the blue endcap at each end
-  const buildRun = (chain, x, z, ry, dx, dz, spec) => {
+  const buildRun = (chain, x, z, ry, dx, dz, spec, names = {}) => {
     if (!chain.length) return;
     const lx = Math.sin(ry), lz = Math.cos(ry);                     // the face's local +z, in world
     const m = Math.sign(lx * dx + lz * dz);                         // bays extend toward (dx, dz)
@@ -560,8 +564,8 @@ const wallSpans = [];                        // what the wall runs cover, for li
     // then every run reads left→right, and consecutive runs join end-to-end:
     // a genre snakes down one side of a band and back up the other
     let at = 0;
-    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec, f.cat); });
-    const cats = [...new Set(chain.flatMap(f => f.tapes.filter(Boolean).map(t => t.category)))];
+    (m > 0 ? [...chain].reverse() : chain).forEach((f, i) => { at += buildFace(f.tapes, x + dx * at, z + dz * at, ry, m, f.headers, i === 0, spec, names[f.cat] || f.cat); });
+    const cats = [...new Set(chain.flatMap(f => f.tapes.filter(Boolean).map(t => names[t.category] || t.category)))];
     const tag = tagPlane(cats, frontAt(1.1 + cats.length * 0.08, spec) - 0.04, 0.14);   // fits the wedge where its top edge is
     endTags.push({ mat: tag.material, cats, w: frontAt(1.1 + cats.length * 0.08, spec) - 0.04, lineH: 0.14 });   // (the clone at the far end shares this material)
     const nx = Math.cos(ry), nz = -Math.sin(ry), off = frontAt(1.1, spec) / 2;        // out from the back plane, to mid-wedge
@@ -633,7 +637,24 @@ const wallSpans = [];                        // what the wall runs cover, for li
     for (let i = 0; i < want; i++) { const t = best[i % best.length]; n.set(t, n.get(t) + 1); }
     return ts.flatMap(t => [t, ...Array.from({ length: n.get(t) - 1 }, () => { const c = newCopy(t); (t.copies ||= []).push(c); return c; })]);
   };
-  const kidsBays = layBlock(kidsList, ["Family & Kids", "Holiday", "Kids & Educational", "Animation", "Anime"], kidsRuns, SHORT, {}, copiesToFill);
+  // the bands take the section in order, a genre to whole bays as everywhere else; whatever doesn't
+  // fit carries on, in the same order, onto the full-height wall run across the aisle from the far band
+  const KIDS_ORDER = ["Family & Kids", "Holiday", "Kids & Educational", "Animation", "Anime"];
+  const kidsSorted = [...KIDS_ORDER, ...new Set(kidsList.map(t => t.category))].filter((c, i, a) => a.indexOf(c) === i)
+    .flatMap(c => kidsList.filter(t => t.category === c));
+  let kidsLeft = kidsRuns.reduce((a, r) => a + r.bays, 0), kidsCut = kidsSorted.length;
+  for (let i = 0; i < kidsSorted.length;) {
+    let j = i; while (j < kidsSorted.length && kidsSorted[j].category === kidsSorted[i].category) j++;
+    const need = Math.ceil((j - i) / capOf(SHORT));
+    if (need > kidsLeft) { kidsCut = i + kidsLeft * capOf(SHORT); break; }
+    kidsLeft -= need; i = j;
+  }
+  const KIDS_SIGNS = { Anime: "Kids' Anime" };
+  for (const t of kidsList) if (KIDS_SIGNS[t.category]) t.section = KIDS_SIGNS[t.category];   // what the game calls its section (sectionName)
+  const kidsBays = layBlock(kidsSorted.slice(0, kidsCut), KIDS_ORDER, kidsRuns, SHORT, {}, copiesToFill, KIDS_SIGNS);
+  const kidsWallRun = { x: STORE.x - 0.1, z: KIDS.z0, ry: Math.PI, dx: 0, dz: 1, bays: KIDS.wallBays };   // faces into the section, reads front → back
+  const kidsWallBays = layBlock(kidsSorted.slice(kidsCut), KIDS_ORDER, [kidsWallRun], BAY, {}, null, KIDS_SIGNS);
+  wallSpans.push({ axis: "x", at: kidsWallRun.x, a0: KIDS.z0, a1: KIDS.z0 + KIDS.wallBays * BAY.len });
   {                                                  // the kids' own carpet: arcade-style confetti on deep purple
     const kidsTex = makeTexture((ctx, W, H) => {
       ctx.fillStyle = "#2a1660"; ctx.fillRect(0, 0, W, H);
@@ -676,7 +697,9 @@ const wallSpans = [];                        // what the wall runs cover, for li
   // TV east of the corridor, all four bands; grown-up Animation right next to Anime
   const TV_ORDER = ["Sitcoms", "Classic Sitcoms", "Sketch Comedy & Late Night", "Broadcast Blocks", "Drama & Adventure",
     "Horror & Anthology", "Animation", "Anime", "Reality TV"];
-  const tvBays = layBlock(tv, TV_ORDER, blockRuns([0, 1, 2, 3], CENTER.corridor, 1, CENTER.eastBays), SHORT, { "Broadcast Blocks": "Music" }, copiesToFill);
+  // ...then on round the two back bands
+  const tvBays = layBlock(tv, TV_ORDER, [...blockRuns([0, 1, 2, 3], CENTER.corridor, 1, CENTER.eastBays), ...blockRuns(TV_BACK.bands, TV_BACK.x, 1, TV_BACK.bays)],
+    SHORT, { "Broadcast Blocks": "Music" }, copiesToFill);
   // classics west of the corridor, in its back two bands — the front band is
   // the candy aisle, and the one behind it stays open floor by the register
   const classicsFrom = 2;
@@ -691,6 +714,8 @@ const wallSpans = [];                        // what the wall runs cover, for li
     const zMid = bandZ(b) + SHORT.depth + CENTER.gap / 2;
     crtSpots.push([-CENTER.corridor - CENTER.westBays * BAY.len - 0.9, zMid], [CENTER.corridor + CENTER.eastBays * BAY.len + 0.9, zMid]);
   }
+  for (const b of [TV_BACK.bands[0] - 1, ...TV_BACK.bands.slice(0, -1)])   // and over the aisles behind the back bands, at their outer end
+    crtSpots.push([TV_BACK.x + TV_BACK.bays * BAY.len + 0.9, bandZ(b) + SHORT.depth + CENTER.gap / 2]);
 
   // ---- Staff Picks: a low display across the far end of the walkway, facing the entrance ----
   // Hand-picked, one copy of each: movies in the left section, TV in the
@@ -835,6 +860,6 @@ const wallSpans = [];                        // what the wall runs cover, for li
     const out = Math.floor(Math.random() * n * 0.45);
     t.copies.slice(t.copies.length - out).forEach(c => { setOnShelf(c, false); rentedCopies.push(c); });   // the POS checks each out to a member
   }
-  window.__layout = { mvBays, wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, tvBays, classicsBays };
+  window.__layout = { mvBays, wall: sweep.length, wallBays: Object.fromEntries(WALL_GENRES.map((g, i) => [g, bays[i]])), kidsBays, kidsWallBays, tvBays, classicsBays };
 }
 

@@ -305,7 +305,7 @@ function custTip(k) {                           // what E (and Q) do to this cus
     const w = k.want, give = held ? `<br>E — hand them ${tapeName(held)}` : "";
     if (w.kind === "hold") return `Here to pick up <b>${tapeName(w.title)}</b> (on hold)${give || "<br>Get it from the holds shelf"}<br>Q — tell them it's not here`;
     const stock = w.title && lv("you", "int") >= 3 ? (onShelfCopy(w.title) ? " · <i>on the shelf</i>" : " · <i>all out</i>") : "";   // (INT: you know the stock)
-    return w.kind === "title" ? `Looking for <b>${tapeName(w.title)}</b> (${w.title.category})${stock}${give}<br>Q — tell them it's all out`
+    return w.kind === "title" ? `Looking for <b>${tapeName(w.title)}</b> (${sectionName(w.title)})${stock}${give}<br>Q — tell them it's all out`
       : `Wants ${TASTE_ASK[k.who.persona.taste.name] || "something good"}${give || "<br>Bring them a tape"}`;
   }
   const mine = co?.cust === k && co.by === "player";
@@ -454,7 +454,7 @@ function pickHover() {
     highlight.visible = true; highlight.position.copy(hovered.pos); highlight.rotation.y = hovered.ry;
     const tip = $("hoverTip");
     const season = hovered.seasons?.[0]?.label;             // "Season 1", "Episodes", or "" for a movie
-    tip.innerHTML = `${hovered.title}<div class="cat">${hovered.category}${season ? " · " + season : ""}</div>`;
+    tip.innerHTML = `${hovered.title}<div class="cat">${sectionName(hovered)}${season ? " · " + season : ""}</div>`;
     tip.style.display = "block";
   } else {
     highlight.visible = false;

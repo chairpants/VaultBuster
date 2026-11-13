@@ -661,6 +661,7 @@ if (!("rewinder2" in upg)) upg.rewinder2 = !!SAVE?.upg;   // a store saved befor
 // a copy's stable id across reloads: "<tape id>#<season>:<n>", n = its place in
 // [tape, ...tape.copies] (shelving is deterministic, so n holds every load).
 // id + season is unique per tape; the id alone isn't (every season of a show shares it)
+const sectionName = t => t.section || t.category;   // the shelf sign it's under: its genre, unless the shelving signed it otherwise (the kids' anime)
 const tapeName = t => /^Season/.test(t.seasons?.[0]?.label || "") ? `${t.title} (${t.seasons[0].label})` : t.title;   // which tape of a show: "Cheers (Season 3)"
 const titleOfCopy = c => Object.hasOwn(c, "copies") || Object.getPrototypeOf(c) === Object.prototype ? c : Object.getPrototypeOf(c);
 const tapeKey = t => `${t.id}#${t.season ?? ""}`;

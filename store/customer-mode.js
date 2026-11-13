@@ -399,14 +399,14 @@ function cmShowTick(dt) {
 // ---- ask them what's good: whoever you talk to (away from the register) has a pick for you, once a day. Rent it
 // and they'll remember you took them up on it ----
 function cmRecommend(e) {
-  if (cm.rec?.day === shift.day) return toast(`${e.first}: "${cm.rec.done ? `Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${cm.rec.title.category}. You won't regret it.`}"`, true);
+  if (cm.rec?.day === shift.day) return toast(`${e.first}: "${cm.rec.done ? `Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${sectionName(cm.rec.title)}. You won't regret it.`}"`, true);
   let seed = 31 * shift.day + e.first.charCodeAt(0) * 7 + 3; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const films = catalog.filter(t => t.seasons?.[0]?.episodes?.length === 1 && !libLocked(t) && onShelfCopy(t));
   if (!films.length) return toast(`${e.first}: "Finding everything okay?"`, true);
   const t = films[Math.floor(rnd() * films.length)];
   cm.rec = { title: t, by: e.first, day: shift.day, done: false };
-  toast(`${e.first}: "Have you seen ${t.title}? It's over in ${t.category}. Trust me."`, true);
-  cmLog(`${e.first} says to rent ${t.title} (${t.category})`);
+  toast(`${e.first}: "Have you seen ${t.title}? It's over in ${sectionName(t)}. Trust me."`, true);
+  cmLog(`${e.first} says to rent ${t.title} (${sectionName(t)})`);
 }
 
 // ---- the end of the trail (for now): up on the roof, a ball off the mat ----
@@ -553,7 +553,7 @@ function cmStaffLine(e) {                         // a word about their day: wha
   const top = SKILL_IDS.reduce((a, k) => (e.skills[k]?.lvl ?? 1) > (e.skills[a]?.lvl ?? 1) ? k : a, SKILL_IDS[0]), cat = catalog[(shift.day * 7 + e.first.length) % catalog.length]?.category || "Horror";
   const now = [
     ["lunch", "lunchSit"].includes(e.state) && "Mm. On my lunch. Gimme a sec",
-    cm.rec?.by === e.first && cm.rec.day === shift.day && (cm.rec.done ? `So? Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${cm.rec.title.category}. You won't regret it`),
+    cm.rec?.by === e.first && cm.rec.day === shift.day && (cm.rec.done ? `So? Did you like ${cm.rec.title.title}?` : `Seriously, ${cm.rec.title.title}. ${sectionName(cm.rec.title)}. You won't regret it`),
     messes.length && (messes.length > 2 ? "It's a mess in here today. I'll get to it. I'll get to it" : "Somebody spilled something again. Story of my life"),
     e.lunchDay === shift.day ? "Tony's for lunch again. I can't keep doing this" : shift.h > 11.5 && shift.h < 14.5 && bits(m) >= 5 && "I'm starving. My lunch better be soon",
     cmShowToday() && (shift.h < SHOW.at ? `We're showing ${show.title.title} at eight.${cm.ticket === shift.day ? " You've got a ticket? Nice" : " Tickets at the register"}` : show.status === "on" && "The movie's on in there. I'm missing the good part"),

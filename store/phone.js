@@ -137,7 +137,7 @@ function callHud() {
       a.map((x, i) => `<span><b>${i + 1}</b> ${x}</span>`).join("");
     el.style.display = "block"; return;
   }
-  el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${tapeName(c.title)}</b> in?\u201d <span class="cat">(${c.title.category})</span></div>` +
+  el.innerHTML = `<div class="h">ON THE PHONE \u00b7 ${memberName(c.member)} #${c.member.num}</div><div class="q">\u201cHi, do you have <b>${tapeName(c.title)}</b> in?\u201d <span class="cat">(${sectionName(c.title)})</span></div>` +
     `<span><b>1</b> Yes, I'll hold one for you</span><span><b>2</b> Sorry, we're all out</span>`;
   el.style.display = "block";
 }

@@ -151,7 +151,7 @@ async function boxDrawBack(t, g) {
     y += 154 + 34 + 18 + 12;
   }
   const eps = t.kind === "series" ? t.seasons[0].episodes : [], listed = Math.min(10, eps.length), listH = listed ? Math.ceil(listed / 2) * 20 + 30 : 0;
-  const blurb = d.overview || `${t.category}. Rewind before returning.`;
+  const blurb = d.overview || `${sectionName(t)}. Rewind before returning.`;
   const room = bottom - y - listH - 14, maxLines = Math.max(2, Math.floor(room / 28));
   y = para(boxFitChars(blurb, t.kind === "movie" ? 760 : 420), PAD, y, inner, 22, 28, {}, maxLines) + 12;
   if (listed) {

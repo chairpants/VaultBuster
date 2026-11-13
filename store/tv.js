@@ -12,7 +12,7 @@ function pickup(tape) {                      // from a shelf slot OR out of the 
 function showTape(tape) {                    // the tape in your hand (fresh pickup, or back out of the inventory)
   held = tape; inspecting = false;
   $("holdingTag").style.display = "block"; $("holdingName").textContent = tapeName(tape);
-  $("inspectTitle").textContent = tapeName(tape); $("inspectSec").textContent = tape.newRelease ? `New Releases · ${tape.category}` : tape.category;   // where it goes back
+  $("inspectTitle").textContent = tapeName(tape); $("inspectSec").textContent = tape.newRelease ? `New Releases · ${sectionName(tape)}` : sectionName(tape);   // where it goes back
   coverZoom = 1;
   handBody.material = tape.sideMat || mat.tapeBody;
   loadCoverTexture(tape, t => { handArt.material.map = t; handArt.material.needsUpdate = true; });
