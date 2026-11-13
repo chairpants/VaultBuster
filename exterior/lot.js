@@ -449,6 +449,31 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
   };
   for (const x of LOT.lampX) streetLamp(x, (lotFar + LOT.roadNear) / 2);   // out on the grass strip (see LOT.lampX)
 
+  // security lights round the sides and backs of both buildings: bronze wall packs, a hood over a prismatic refractor angled down, each throwing a
+  // fan of sodium out and down off its wall (aimed off it, so none of it comes in through the wall). They strike and warm up with the lot's.
+  // x, y, z: on the wall's face; nx, nz: out from it; reach: how far out the middle of the pool lands
+  const packM = new THREE.MeshPhongMaterial({ color: 0x3b3226, specular: 0x222222, shininess: 20 });
+  const wallPack = (x, y, z, nx, nz, reach = 6) => {
+    const lens = new THREE.MeshLambertMaterial({ color: 0x3a2e1c, emissive: 0xffae4a, emissiveIntensity: 0 }), g = new THREE.Group();
+    g.position.set(x, y, z); g.rotation.y = Math.atan2(nx, nz);                 // (its +z: out from the wall)
+    const part = (w, h, d, m, px, py, pz, rx = 0) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(px, py, pz); o.rotation.x = rx; o.layers.set(EXTERIOR_LAYER); g.add(o); return o; };
+    part(0.36, 0.32, 0.05, packM, 0, 0, 0.025);                                  // the back box, on the wall
+    part(0.34, 0.1, 0.24, packM, 0, 0.1, 0.15, -0.12);                           // the hood
+    for (const sx of [-0.16, 0.16]) part(0.02, 0.24, 0.2, packM, sx, -0.02, 0.13);
+    part(0.3, 0.2, 0.02, lens, 0, -0.03, 0.235, -0.45).layers.enable(BLOOM_LAYER);   // the refractor, tipped down
+    part(0.32, 0.03, 0.12, lens, 0, -0.13, 0.15).layers.enable(BLOOM_LAYER);
+    scene.add(g);
+    const spot = new THREE.SpotLight(0xffae4a, 0, 17, 1.05, 0.6, 1.5); spot.layers.set(EXTERIOR_LAYER);
+    spot.position.set(x + nx * 0.3, y - 0.12, z + nz * 0.3); spot.target.position.set(x + nx * reach, 0, z + nz * reach); scene.add(spot, spot.target);
+    sodium.push({ lens, spot, delay: 0, full: 38 });
+  };
+  wallPack(9.5, 3.3, 35.1, 0, 1);            // the store's back wall, over the hammerhead and the back ladder
+  wallPack(11.1, 2.95, 26.85, 1, 0, 5);      // the store's east wall, over the emergency exit and the dumpster
+  wallPack(-7.84, 3.3, 16, -1, 0);           // the store's west wall, down the west lane
+  wallPack(-7.84, 3.6, 43.2, -1, 0, 5);      // the theater's west wall, by the fire exit's stairwell
+  wallPack(-3, 4.6, 48.6, 0, 1, 7);          // the theater's back wall, out over the service road
+  wallPack(21, 3.3, 8, 1, 0);                // Tony's east wall, down the east lane
+
   // ornamental park lamp beside the bench: black wrought iron, stepped
   // octagonal base, slim shaft with a collar, flared lantern with a pyramid
   // cap and finial — softer and warmer than the sodium lot lights
@@ -542,7 +567,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
       if (k < 1) done = false;
       if (k <= 0) continue;                    // not struck yet
       const strike = k < 0.06 && Math.random() < 0.35 ? 0.3 : 1;   // a little sputter as it strikes
-      s.spot.intensity = 72 * k * k * strike;  // slow start, then climbs to full
+      s.spot.intensity = (s.full ?? 72) * k * k * strike;  // slow start, then climbs to full
       s.lens.emissiveIntensity = 1.6 * (0.12 + 0.88 * k) * strike;
       s.spot.color.copy(cold).lerp(warm, k); s.lens.emissive.copy(cold).lerp(warm, k);
     }
