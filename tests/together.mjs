@@ -73,6 +73,24 @@ const there = await guest.evaluate(i => ({ open: doors[i].open, n: doors.length,
 console.log(`door ${door.i}: host ${JSON.stringify(door)} · guest ${JSON.stringify(there)}`);
 check("a door the host opens opens for the guest", door.open && there.open);
 
+// the park's rides: the merry-go-round turned the same on both, the host between the same two spokes of the guest's copy, hands on them;
+// then the host on a swing: the guest's copy of that seat where the host's is, and the host's hands on its chains
+await host.evaluate(() => { Object.assign(__t.player, { x: ROUND.x + 2, z: ROUND.z, airH: 0 }); ROUND.w = 2; parkSit({ kind: "round", i: 1 }); });
+await guest.waitForTimeout(2500);
+const hr = await host.evaluate(() => ({ th: ROUND.th, w: ROUND.w })), gr = await guest.evaluate(() => {
+  const g = together.peer.c.group, P = roundRider(1), [h0] = together.peer.c.reaching;
+  return { th: ROUND.th, w: ROUND.w, off: Math.hypot(g.position.x - P.bx, g.position.z - P.bz), hand: h0 ? h0.target.distanceTo(P.hands[0]) : 9 };
+});
+console.log(`merry-go-round: host ${JSON.stringify(hr)} · guest ${JSON.stringify(gr)}`);
+check("the merry-go-round's turned the same for the guest", Math.abs(Math.atan2(Math.sin(hr.th - gr.th), Math.cos(hr.th - gr.th))) < 0.35 && Math.abs(hr.w - gr.w) < 0.3);
+check("the guest sees the host stood between its spokes, holding on", gr.off < 0.05 && gr.hand < 0.05);
+await host.evaluate(() => { parkOff(); PARK.run = null; ROUND.w = 0; Object.assign(__t.player, { x: SWING.x, z: SWING.z + 1, airH: 0 }); const S = SWING.seats[0]; S.th = 0.9; S.w = 0; S.free = null; parkSit({ kind: "swing", i: 0 }); });
+await guest.waitForTimeout(1500);
+const hs = await host.evaluate(() => SWING.seats[0].th), gs = await guest.evaluate(() => { const S = SWING.seats[0], [h0] = together.peer.c.reaching; return { th: S.th, hand: h0 ? h0.target.distanceTo(swingHands(S)[0]) : 9, onIt: together.peer.swing?.i }; });
+console.log(`swing: host ${hs.toFixed(2)} · guest ${JSON.stringify(gs)}`);
+check("the guest sees the host's swing where it is, hands on its chains", gs.onIt === 0 && Math.abs(Math.atan2(Math.sin(hs - gs.th), Math.cos(hs - gs.th))) < 0.35 && gs.hand < 0.05);
+await host.evaluate(() => parkOff());
+
 // the host leaves: the guest's sent home, and told why
 await host.evaluate("tgStop()");
 await guest.waitForNavigation({ timeout: 30000 }).catch(() => {}); await ready(guest);
