@@ -118,7 +118,7 @@ scene.background = new THREE.Color(DAY_SKY);   // matches the default lights-on 
     const part = (geo, m, px, py, pz) => {
       const p = new THREE.Mesh(geo, m); p.position.set(px, py, pz); p.layers.set(EXTERIOR_LAYER); g.add(p); return p;
     };
-    const paint = new THREE.MeshPhongMaterial({ color, specular: 0x444444, shininess: 55 });
+    const paint = gloss(new THREE.MeshPhongMaterial({ color, specular: 0x444444, shininess: 55 }), 1, 0.2, 0.08);   // (clear-coated)
     const extrude = (shape, depth, m, bevel) => {
       const geo = new THREE.ExtrudeGeometry(shape, bevel
         ? { depth, bevelEnabled: true, bevelSize: BEV, bevelThickness: BEVT, bevelSegments: 3, curveSegments: 12 }

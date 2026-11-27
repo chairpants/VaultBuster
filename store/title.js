@@ -51,6 +51,7 @@ function applySettings() {
   window.VaultAmbience?.setVolume?.(SETTINGS.sound / 100); sfxRefresh();
   SHIFT.hour = SETTINGS.shiftMin * 60 / 14;
   aaApply();
+  if (renderer.getPixelRatio() !== pixelRatioWanted(SETTINGS.sharp)) { renderer.setPixelRatio(pixelRatioWanted(SETTINGS.sharp)); bloomResize(); }
 }
 function aaApply() {                              // smooth edges: 4x multisampling on the main pass (rebuilt with the glow target: they share a depth texture)
   const n = SETTINGS.aa ? 4 : 0; if (mainRT.samples === n) return;
@@ -142,9 +143,11 @@ function titleMenu() {
   bind("setSound", "sound", v => `${v}%`);
   bind("setSens", "sens", v => `${v}%`);
   bind("setInvert", "invertY", v => v ? "on" : "off");
+  bind("setSharp", "sharp", v => v ? "on (slower)" : "off");
   bind("setAA", "aa", v => v ? "on" : "off");
   bind("setShadows", "shadows", v => v ? "on" : "off");
   bind("setAO", "ao", v => v ? "on" : "off");
+  bind("setReflect", "reflect", v => v ? "on" : "off");
   bind("setFilm", "film", v => v ? "on" : "off");
   bind("setShift", "shiftMin", v => `${v} min`);
   const tv = $("setTv"), tvV = $("setTvV"); tv.value = tvSet.volume; tvV.textContent = `${tvSet.volume}%`;

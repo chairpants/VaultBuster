@@ -339,9 +339,11 @@
       <label class="set">TV volume <input type="range" id="setTv" min="0" max="100" step="5"><span id="setTvV"></span></label>
       <label class="set">Mouse sensitivity <input type="range" id="setSens" min="25" max="300" step="5"><span id="setSensV"></span></label>
       <label class="set">Invert mouse Y <input type="checkbox" id="setInvert"><span id="setInvertV"></span></label>
+      <label class="set">Sharp picture <input type="checkbox" id="setSharp"><span id="setSharpV"></span></label>
       <label class="set">Smooth edges <input type="checkbox" id="setAA"><span id="setAAV"></span></label>
       <label class="set">Shadows <input type="checkbox" id="setShadows"><span id="setShadowsV"></span></label>
       <label class="set">Shading in corners <input type="checkbox" id="setAO"><span id="setAOV"></span></label>
+      <label class="set">Reflections <input type="checkbox" id="setReflect"><span id="setReflectV"></span></label>
       <label class="set">Film look <input type="checkbox" id="setFilm"><span id="setFilmV"></span></label>
       <label class="set">Shift length <input type="range" id="setShift" min="10" max="60" step="1"><span id="setShiftV"></span></label>
       <div class="note">Shift length is real minutes from opening to midnight.</div>
@@ -426,7 +428,7 @@
   for (const t of INPUT) addEventListener(t, hold, true);
   for (const f of ["store/core", "store/shell", "store/backrooms", "store/theater", "exterior/surfaces", "exterior/lot", "exterior/grounds", "exterior/serviceroad", "exterior/edges", "exterior/playground", "exterior/bus", "exterior/parkgoers", "store/lobby", "store/shelves", "store/plants", "store/theaterlobby", "store/lounge",
     "store/shift", "exterior/sky", "store/clock", "store/player", "store/shoppers", "store/staff", "store/checkout", "store/phone", "tonys/light", "tonys/inside", "tonys/cabinets", "tonys/arcade", "tonys/missile", "tonys/yard",
-    "tonys/outside", "store/roofkit", "store/roof", "store/office", "store/chores", "store/tapebox", "store/tv", "store/title", "store/customer-mode", "store/wheel", "store/together", "store/main"]) {
+    "tonys/outside", "store/roofkit", "store/roof", "store/office", "store/chores", "store/tapebox", "store/tv", "store/title", "store/customer-mode", "store/wheel", "store/together", "store/reflect", "store/main"]) {
     const s = document.createElement("script"); s.src = `${f}.js`; s.async = false;   // async off: run in order, not as they arrive
     if (f === "store/main") s.onload = s.onerror = () => { for (const t of INPUT) removeEventListener(t, hold, true); };
     document.body.appendChild(s);

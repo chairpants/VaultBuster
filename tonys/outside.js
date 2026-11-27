@@ -15,7 +15,7 @@ function tonyOutside({ lam, put, ext, beige, cement, coping }) {                
   put(new THREE.BoxGeometry(px1 - px0 - 2 * W, 0.05, pz1 - 2 * W), brick, (px0 + px1) / 2, ph - 0.025, pz1 / 2, p);
   put(new THREE.BoxGeometry(px1 - px0 + 0.1, 0.08, pz1 + 0.1), coping, (px0 + px1) / 2, ph + 0.04, pz1 / 2, p);
   // the glass, in aluminum frames (a mullion or two), and a sill outside
-  const glass = new THREE.MeshBasicMaterial({ color: 0xbcd6e6, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }), alu = lam(0xb8bdc2); tony.glass = glass;
+  const glass = gloss(new THREE.MeshLambertMaterial({ color: 0x000000, emissive: 0xbcd6e6, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }), 1, 0.03, 0.14), alu = lam(0xb8bdc2); tony.glass = glass;   // (its own tint, unlit, as the emissive; shiny like the store's: see gloss)
   for (const [x0, x1] of WIN) {
     const gl = put(new THREE.PlaneGeometry(x1 - x0, WY[1] - WY[0]), glass, (x0 + x1) / 2, (WY[0] + WY[1]) / 2, 0.075, p); gl.renderOrder = 2;
     const n = Math.round((x1 - x0) / 1.4);
@@ -24,9 +24,10 @@ function tonyOutside({ lam, put, ext, beige, cement, coping }) {                
     put(new THREE.BoxGeometry(x1 - x0 + 0.1, 0.05, 0.12), cement, (x0 + x1) / 2, WY[0] - 0.025, -0.06, p);
   }
   { const hinge = new THREE.Group(); hinge.position.set(dl, 0, 0.17); hinge.rotation.y = -1.35; p.add(hinge);   // the door: glass in an aluminum frame, propped open while they're open (see tonyDayTick)
-    for (const [w2, h2, x, y] of [[0.07, 2.25, 0.035, 1.125], [0.07, 2.25, 1.115, 1.125], [1.15, 0.07, 0.575, 2.215], [1.15, 0.22, 0.575, 0.11], [1.0, 0.04, 0.575, 1.05]]) put(new THREE.BoxGeometry(w2, h2, 0.04), alu, x, y, 0, hinge);
-    const dg = put(new THREE.PlaneGeometry(1.01, 1.93), glass, 0.575, 1.185, 0, hinge); dg.renderOrder = 2;
-    const shut = textPlane("CLOSED", 0.5, 0.2, "#ffffff", "#a01818", "Arial Black", 220); shut.position.set(0.575, 1.42, -0.025); shut.rotation.y = Math.PI; shut.visible = false; hinge.add(shut); tony.door = hinge; tony.closedSign = shut; }
+    const DW = dr - dl, cx = DW / 2;               // (the whole opening: no gap round it)
+    for (const [w2, h2, x, y] of [[0.07, DH, 0.035, DH / 2], [0.07, DH, DW - 0.035, DH / 2], [DW, 0.07, cx, DH - 0.035], [DW, 0.22, cx, 0.11], [DW - 0.14, 0.04, cx, 1.05]]) put(new THREE.BoxGeometry(w2, h2, 0.04), alu, x, y, 0, hinge);
+    const dg = put(new THREE.PlaneGeometry(DW - 0.13, DH - 0.28), glass, cx, (0.22 + DH - 0.07) / 2, 0, hinge); dg.renderOrder = 2;
+    const shut = textPlane("CLOSED", 0.5, 0.2, "#ffffff", "#a01818", "Arial Black", 220); shut.position.set(cx, 1.42, -0.025); shut.rotation.y = Math.PI; shut.visible = false; hinge.add(shut); tony.door = hinge; tony.closedSign = shut; }
   // the awning: red and white stripes, sloping out over the walk, a scalloped edge hanging off the front
   const stripes = makeTexture((ctx, w2, h2) => { for (let i = 0; i < 16; i++) { ctx.fillStyle = i % 2 ? "#f4f1e6" : "#b3202a"; ctx.fillRect(i * w2 / 16, 0, w2 / 16, h2); } }, 256, 32);
   const awnM = new THREE.MeshLambertMaterial({ map: stripes, side: THREE.DoubleSide });

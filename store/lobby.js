@@ -622,7 +622,7 @@ let trashFlap = null, trashFlapT = 0, trashFlapRest = 0;   // rest: held ajar wh
   // matte on purpose: a Phong sheen here pays per-pixel specular for every point
   // light in the store (~40, mostly poster marquees) across a floor that fills
   // the screen up close — it more than halved the frame rate in the lobby
-  const terrazzo = new THREE.MeshLambertMaterial({ map: tileTex });
+  const terrazzo = gloss(new THREE.MeshLambertMaterial({ map: tileTex }), 1, 0.2, 0.08);   // (polished)
   const tile = new THREE.Mesh(new THREE.PlaneGeometry(XW, TILE_Z), terrazzo);
   tile.rotation.x = -Math.PI / 2; tile.position.set(XC, 0.003, TILE_Z / 2); scene.add(tile);
   const band = new THREE.MeshLambertMaterial({ color: BLUE });
@@ -660,7 +660,7 @@ let buildSnackRack = null;                   // (width, header) -> a stocked sna
   };
 
   const chrome = new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 90 });
-  const glass = new THREE.MeshLambertMaterial({ color: 0xcfe9f7, transparent: true, opacity: 0.16, depthWrite: false });
+  const glass = gloss(new THREE.MeshLambertMaterial({ color: 0xcfe9f7, transparent: true, opacity: 0.16, depthWrite: false }), 1, 0.02, 0.1);
 
   // ---- drink cooler: glass-door merchandiser, 0.78 wide, 2.1 tall with its marquee ----
   {

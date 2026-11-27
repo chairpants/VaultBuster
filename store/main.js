@@ -208,6 +208,9 @@ function regionTick() {
   else if (Math.hypot(camera.position.x - ROOF_LADDER.x, camera.position.z - ROOF_LADDER.z) < HATCH_PEEK) seen.add("closet");
   if (player.onRoof || seen.has("closet")) seen.add("hatch");
   for (const r of ROOMS) roomGroups[r].visible = seen.has(r);
+  // the inside of Tony's: only while the outdoors can be seen at all (from the store through its front or doorway, out there,
+  // in Tony's itself, on the roof). From deep in the store or the back rooms it was drawn for nothing
+  if (tonyInside.g) tonyInside.g.visible = player.onRoof || seen.has("out");
   // the booth and its stairs (BOOTH.g): from in there, from the auditorium (through its window), or through the stairs' open door
   stairDoor ??= doors.find(d => !d.push && d.alongX && Math.abs(d.c - SHAFT.door) < 0.01);
   const { x: cx, z: cz } = camera.position, inShaft = cx > SHAFT.x0 && cx < BOH.x0 && cz > SHAFT.z0 && cz < BOH.z1;
@@ -239,6 +242,55 @@ let pausedDrawAt = 0, onFeetT = 0;
 // frames). Then every shader's compiled and every texture's sent up, with every
 // room shown for it and a couple of customers stood in, and one frame's drawn through the bloom. Then the menu.
 // (Before, all that happened in your first seconds in the store) ----
+// ---- the snacks and drinks on show: one display per rack and cooler, always fully stocked ----
+// Every snack and drink on a rack or in the cooler was its own mesh (several, for a box's sides or a bottle's cap and label):
+// a couple of thousand draw calls a frame, the most of any one thing in the game. So what you see is them all merged, once,
+// into one mesh per material per rack, and that never changes: the shelves always look full. The units themselves are still
+// all there for everything that counts them, aims at them, takes and restocks them (snackUnits), only on a layer nothing
+// draws (STOCK_LAYER): the aiming ray looks at it, the camera and the sun's shadow don't. What's in a hand is a copy of its
+// own (showSnack, snackProxy), drawn as usual
+const STOCK_LAYER = 7;
+function stockDisplayBake() {
+  const byParent = new Map(), inv = new THREE.Matrix4(), m = new THREE.Matrix4(), KEEP = ["position", "normal", "uv"];
+  for (const u of snackUnits()) { const P = u.parent; if (!P) continue; if (!byParent.has(P)) byParent.set(P, []); byParent.get(P).push(u); }
+  const slice = (g, start, count) => {                // vertices [start, start + count) of a non-indexed geometry
+    const out = new THREE.BufferGeometry();
+    for (const k of KEEP) { const a = g.attributes[k]; out.setAttribute(k, new THREE.BufferAttribute(a.array.slice(start * a.itemSize, (start + count) * a.itemSize), a.itemSize)); }
+    return out;
+  };
+  let units = 0, meshes = 0;
+  for (const [P, list] of byParent) {
+    P.updateMatrixWorld(true); inv.copy(P.matrixWorld).invert();
+    const buckets = new Map();                        // material -> [geometry in P's frame], and the layers it's drawn on
+    for (const u of list) {
+      units++;
+      u.traverse(o => {
+        if (!o.isMesh) return;
+        const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+        g.applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld));
+        if (!g.attributes.normal) g.computeVertexNormals();
+        if (!g.attributes.uv) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const groups = Array.isArray(o.material) && g.groups.length ? g.groups : [{ start: 0, count: g.attributes.position.count, materialIndex: 0 }];
+        for (const gr of groups) {
+          const mat = mats[gr.materialIndex]; if (!mat || !gr.count) continue;
+          if (!buckets.has(mat)) buckets.set(mat, { geos: [], layers: o.layers.mask });
+          buckets.get(mat).geos.push(slice(g, gr.start, Math.min(gr.count, g.attributes.position.count - gr.start)));
+        }
+        g.dispose();
+        o.layers.set(STOCK_LAYER);
+      });
+    }
+    for (const [mat, { geos, layers }] of buckets) {
+      const merged = mergeGeometries(geos); geos.forEach(d => d.dispose()); if (!merged) continue;
+      const shown = new THREE.Mesh(merged, mat); shown.name = "stockDisplay"; shown.layers.mask = layers;
+      P.add(shown); meshes++;
+    }
+  }
+  raycaster.layers.enable(STOCK_LAYER); sunCam.layers.disable(STOCK_LAYER);
+  console.info(`Home: ${units} snacks and drinks on show as ${meshes} meshes`);
+}
+stockDisplayBake();
 let booted = false;
 async function boot() {
   const hint = $("enterHint"), frame = () => new Promise(r => requestAnimationFrame(r));
@@ -249,7 +301,7 @@ async function boot() {
   const showAll = () => { const s = [...Object.values(roomGroups), roof.g].filter(g => !g.visible); s.forEach(g => g.visible = true); scene.updateMatrixWorld(); return () => s.forEach(g => g.visible = false); };   // (regionTick puts it back each frame anyway)
   const stand = [true, false].map((f, i) => { const c = VaultCustomers.build(VaultCustomers.randomOutfit(seeded(7 + i), f)); c.group.position.set(player.x + i - 0.5, 0, player.z - 2); c.tick(0.016, 0); scene.add(c.group); return c; });
   scene.updateMatrixWorld(); lightsTick(1);     // (the fixed set of lights, in place before anything's compiled against them)
-  let hide = showAll(); const compiled = renderer.compileAsync(scene, camera); hide();   // (it picks its objects up straight away; the waiting's the GPU's)
+  let hide = showAll(); renderer.setRenderTarget(mainRT); const compiled = renderer.compileAsync(scene, camera); renderer.setRenderTarget(null); hide();   // (it picks its objects up straight away; the waiting's the GPU's. Into mainRT, where everything's really drawn: what a shader writes to is in its key, so compiled for the screen, each was compiled again the first time it was seen)
   await compiled;
   const texs = new Set(); scene.traverse(o => { if (o.material) for (const m of [o.material].flat()) for (const v of Object.values(m)) if (v?.isTexture) texs.add(v); });
   let i = 0; for (const t of texs) { renderer.initTexture(t); if (++i % 16 === 0) { bar(0.85 + 0.13 * i / texs.size, "WARMING UP"); await frame(); } }

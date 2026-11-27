@@ -212,7 +212,7 @@ let tonyOnK = 1;
 function tonyLightsTick(dt) {
   if (!tonyU.uTC) return;
   const t = tony.t2 = (tony.t2 || 0) + dt, open = tony.lit ? 1 : 0; tonyOnK += (open - tonyOnK) * Math.min(1, dt * 3);
-  const day = Math.max(0, Math.min(1, tod.level)); tonyU.uTOn.value = tonyOnK; if (tony.glass) { const k = 0.1 + 0.9 * day; tony.glass.color.setRGB(0.5 * k, 0.67 * k, 0.8 * k); }
+  const day = Math.max(0, Math.min(1, tod.level)); tonyU.uTOn.value = tonyOnK; if (tony.glass) { const k = 0.1 + 0.9 * day; tony.glass.emissive.setRGB(0.5 * k, 0.67 * k, 0.8 * k); }
   // the bulb: a steady sick yellow with a hum in it, and every so often it stutters, now and then all the way out
   bulb.burst -= dt;
   if (bulb.burst < 0) { bulb.phase = 0.08 + Math.random() * (Math.random() < 0.2 ? 1.1 : 0.45); bulb.burst = bulb.phase + 1.2 + Math.random() * Math.random() * 11; bulb.out = Math.random() < 0.25; }

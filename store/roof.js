@@ -1061,6 +1061,9 @@ function golfHud() {
 }
 function roofClimb(dir, L = CLIMBS.hatch) {         // up (1) or down (-1) a ladder: the closet's, unless it's the one out back
   if (dir > 0 && roofHandsFull()) { toast("Hands full: you need them both for the ladder"); return; }
+  // down through the hatch without ever working its padlock (up the back ladder instead): you've been through it, so it's open,
+  // or you'd be shut in the closet with no way back up
+  if (dir < 0 && L === CLIMBS.hatch && CUSTOMER && !cm.hatch) { cm.hatch = true; cmLog("Came down through the roof hatch: its padlock's hanging open now", "good"); toast("The hatch's padlock was only hooked through. It's open now", true); }
   roof.climb = { dir, L, t: 0, y0: camera.position.y, x0: camera.position.x, z0: camera.position.z };
   player.yaw = L.yaw;                               // facing the rungs, up or down
 }

@@ -640,7 +640,7 @@ rr.position.set(BOH_DOORS.store, DOOR_H + 0.62, Z - T / 2 - 0.02); rr.rotation.y
     }
   }, 256, 256);
   tileTex.wrapS = tileTex.wrapT = THREE.RepeatWrapping;
-  const tileMat = (len) => { const t = tileTex.clone(); t.needsUpdate = true; t.repeat.set(len / 0.4, WH / 0.4); return new THREE.MeshLambertMaterial({ map: t }); };
+  const tileMat = (len) => { const t = tileTex.clone(); t.needsUpdate = true; t.repeat.set(len / 0.4, WH / 0.4); return gloss(new THREE.MeshLambertMaterial({ map: t }), 1, 0.15, 0.08); };   // (glazed)
   const capMat = new THREE.MeshLambertMaterial({ color: 0x2a4d8a });
   const wains = (a0, a1, alongX, at, face) => {  // one wall's run: along x (at = z) or along z (at = x); face = which way it looks
     const len = a1 - a0, c = (a0 + a1) / 2, off = face * 0.003;

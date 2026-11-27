@@ -5,7 +5,7 @@
 // lit by tonys/light.js. E at the counter for a slice, E at a cabinet for a game ----
 const TONY_CAB_Z = i => 3.2 + i * 0.95;
 function tonyInside(x0, x1, z0, z1) {
-  const g = new THREE.Group(); scene.add(g);
+  const g = tonyInside.g = new THREE.Group(); scene.add(g);   // (hidden while you can't see outdoors: store/main.js regionTick)
   const T = tonyKit(), solidAt = (bx0, bx1, bz0, bz1, y1) => colliders.push({ x0: bx0, x1: bx1, z0: bz0, z1: bz1, y1 });
   const H = 3.0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, I = TONY_IN, WZ = I.wallZ, [h0, h1] = I.hole, [d0, d1] = I.doorX;
   const hitBox = (w, h, d, x, y, z, tag) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial()); o.visible = false; o.position.set(x, y, z); o.userData.tony = tag; g.add(o); aimables.push(o); return o; };

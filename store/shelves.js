@@ -109,7 +109,7 @@ function atlasFor(n) {
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    atlases.push({ canvas, ctx, texture, material: new THREE.MeshLambertMaterial({ map: texture }) });
+    atlases.push({ canvas, ctx, texture, material: gloss(new THREE.MeshLambertMaterial({ map: texture }), 1, 0.25, 0.06) });   // (the covers: in a shrink-wrapped sleeve)
   }
   return atlases[n];
 }

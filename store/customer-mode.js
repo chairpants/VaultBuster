@@ -69,11 +69,14 @@ function cmNoteTick() {                           // a note in hand: there it is
 }
 
 // ---- the doors you need a key for (staff walk through them all day: a door left open is a way in) ----
+// zone: the room behind it (lightZoneAt). From in there it opens without the key, as a locked door does from inside: you can
+// end up in the closet without coming through its door (down the roof hatch, the roof reached by the back ladder)
 const KEYED = [
-  { key: "breakKey", room: "break room", door: () => doors.find(d => !d.push && d.alongX && d.c === BOH_DOORS.breakroom) },
-  { key: "closetKey", room: "janitor's closet", door: () => doors.find(d => !d.push && !d.alongX && d.c === BOH_DOORS.closet) },
+  { key: "breakKey", room: "break room", zone: "breakroom", door: () => doors.find(d => !d.push && d.alongX && d.c === BOH_DOORS.breakroom) },
+  { key: "closetKey", room: "janitor's closet", zone: "closet", door: () => doors.find(d => !d.push && !d.alongX && d.c === BOH_DOORS.closet) },
 ];
 const keyedOf = d => KEYED.find(k => k.door() === d);
+const keyedInside = k => !player.onRoof && lightZoneAt(player.x, player.z) === k.zone;   // (on its side of the door: it opens from here)
 // ---- the padlocks: a combination, typed on the number keys while you're looking at the lock ----
 const COMBOS = {
   locker: { name: "Ray's locker", code: "", at: [BOH.splitX + 0.49, 0.93, 31.02], gives: "badge", open: "The padlock clicks open. Ray's locker: a can of Skoal, a Walkman, and his employee badge" },
@@ -1057,7 +1060,7 @@ function cmE() {                                  // E, as a customer: what's di
   if (aimCustomer) { toast(aimCustomer.kid ? "The kid stares at you" : `${memberName(aimCustomer.member).split(" ")[0]}: "Hey."`, true); return true; }
   if (aimDoor && keyedOf(aimDoor) && !aimDoor.open) {
     const k = keyedOf(aimDoor);
-    if (!cmHas(k.key)) { aimDoor.rattle = 0.35; doorSnd(aimDoor, "wood", "rattle"); toast(`Locked. The ${k.room} needs a key`); return true; }
+    if (!cmHas(k.key) && !keyedInside(k)) { aimDoor.rattle = 0.35; doorSnd(aimDoor, "wood", "rattle"); toast(`Locked. The ${k.room} needs a key`); return true; }
     toggleDoor(aimDoor); aimDoor.byYou = true; return true;
   }
   if (aimDoor && keyedOf(aimDoor)) { toggleDoor(aimDoor); aimDoor.byYou = false; return true; }
@@ -1082,7 +1085,7 @@ function cmTip() {                                // the hover tip, as a custome
       + (at && cmTicketOpen() && cm.ticket !== shift.day ? `T — a ticket for ${show.title.title}, 8 PM (${cmMoney(SHOW.ticket * (cmRegular() ? 0.9 : 1))})` : ""); }
   if (aimCustomer && cmCustTip(aimCustomer)) return cmCustTip(aimCustomer);
   if (aimCustomer) return `${aimCustomer.kid ? "A kid" : memberName(aimCustomer.member)}<div class="cat">shopping</div>`;
-  if (aimDoor && keyedOf(aimDoor)) { const k = keyedOf(aimDoor); return aimDoor.open ? "E — close the door" : cmHas(k.key) ? `E — unlock the ${k.room}<div class="cat">${ITEMS[k.key].name}</div>` : "Locked"; }
+  if (aimDoor && keyedOf(aimDoor)) { const k = keyedOf(aimDoor); return aimDoor.open ? "E — close the door" : keyedInside(k) ? "E — open the door<div class=\"cat\">it unlocks from this side</div>" : cmHas(k.key) ? `E — unlock the ${k.room}<div class="cat">${ITEMS[k.key].name}</div>` : "Locked"; }
   if (aimBin) return cm.searched.has(aimBin.id) && !(cmTrail.keyAt === `bin:${aimBin.id}` && !cm.found.has(cmTrail.keyAt)) ? `The ${aimBin.name}<div class="cat">already looked today</div>` : `E — dig through the ${aimBin.name}`;
   if (aimLock) return "The front doors' deadbolt";
   if (aimExit) return null;

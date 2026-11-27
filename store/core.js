@@ -229,7 +229,11 @@ const renderer = new THREE.WebGLRenderer({ antialias: false });   // (the scene'
 renderer.debug.checkShaderErrors = !!navigator.webdriver;          // checking forces each new shader to finish compiling there and then (a hitch); on for the tests only
 renderer.setSize(innerWidth, innerHeight);
 const LOWMEM = document.documentElement.classList.contains("touch");   // phones / tablets (touch.js): iOS caps a page's canvas memory, so go lighter
-renderer.setPixelRatio(Math.min(devicePixelRatio, LOWMEM ? 1.5 : 2));
+// how many pixels per screen point it draws: one, unless the SHARP PICTURE setting's on (then the screen's own, up to 2). A Retina
+// screen at 2 is four times the pixels for every pass after (the bloom, the shading in corners, the film grade), and that was
+// most of a frame
+const pixelRatioWanted = sharp => Math.min(devicePixelRatio, sharp ? (LOWMEM ? 1.5 : 2) : 1);
+renderer.setPixelRatio(pixelRatioWanted((() => { try { return !!JSON.parse(localStorage.getItem("jellybuster-settings"))?.sharp; } catch { return false; } })()));
 document.body.appendChild(renderer.domElement);
 // ---------------- TV light (shader side) ----------------
 // The big screen lights the room as a 3x3 grid of colored patches (one per
@@ -241,6 +245,7 @@ document.body.appendChild(renderer.domElement);
 // can see. Patched into every Lambert/Phong material; the uniform objects
 // are shared by reference, so one write per frame feeds every material.
 const TH_COLS = 6, TH_ROWS = 4;   // the theater screen's light: the picture sampled as 6 x 4 patches (see the auditorium in ROOM_FRAG)
+const ENV_PROBES = 9, ENV_BOXES = 12;   // the rooms' reflections (store/reflect.js): how many places they're caught from, how many boxes say which is whose
 const TVU = {
   uTvGain: { value: 0 }, uTvAmb: { value: new THREE.Color(0) }, uTvCell: { value: 0 },
   uTvZoneP: { value: new Float32Array(27) }, uTvZoneC: { value: new Float32Array(27) },
@@ -280,6 +285,12 @@ const TVU = {
   uSpillP: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
   uSpillC: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
   uSpillB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+  // what each room looks like from the middle of it, caught once (see store/reflect.js): what shiny things reflect, and the
+  // colour the room's own surfaces throw back onto everything in it. ENV_GLSL reads it
+  uEnvOn: { value: 0 }, uEnvAtlas: { value: null }, uEnvRows: { value: 1 }, uEnvTexel: { value: 0.5 / 128 }, uEnvBounce: { value: 0.4 },
+  uEnvPos: { value: Array.from({ length: ENV_PROBES }, () => new THREE.Vector4()) },    // each probe: where it was caught from (xyz), how lit its room is now against then (w)
+  uEnvBoxA: { value: Array.from({ length: ENV_BOXES }, () => new THREE.Vector4()) },    // the rooms: low corner (xyz), which probe (w: -1, none: a room it'd be wrong in)
+  uEnvBoxB: { value: Array.from({ length: ENV_BOXES }, () => new THREE.Vector4(-1e9, -1e9, -1e9, 0)) },   // high corner (an empty box till they're set)
 };
 // the sales floor's ceiling lights, a regular grid (see the troffers, with the theater): the first one's x, z, the spacing,
 // how many across and along, their height. ROOM_FRAG lights the floor from them (the nearest 3 x 3), not as one even wash
@@ -309,6 +320,58 @@ float trofferLight(vec3 F, vec3 P) {             // one panel facing down, on th
   vec3 L = F - P; float d2 = dot(L, L); float c = (F.y - P.y) * inversesqrt(d2);   // off from straight under it (cos^6: a pool
   float e = c * c * c; return e * e * c / (d2 + 0.6);                              // under each, dimmer between)
 }`;
+// The rooms caught from inside (store/reflect.js): an atlas of octahedral maps, a row per probe, four across: sharp, glossy,
+// rough, and last the bounce (each way a surface can face, the colour of the light coming back to it, over the room's average;
+// alpha: how much brighter or dimmer that way is). envFind: which probe's room P is in, and the box its reflections are
+// projected onto (so the ceiling's lights land where they really are, not at the far end of a sphere round the probe)
+const ENV_GLSL = `
+vec2 octEnc(vec3 d) {
+  vec3 n = d / (abs(d.x) + abs(d.y) + abs(d.z)); vec2 e = n.xz;
+  if (n.y < 0.0) e = (1.0 - abs(e.yx)) * vec2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+  return e * 0.5 + 0.5;
+}
+bool envFind(vec3 P, out int p, out int b) {
+  p = -1; b = -1; if (uEnvOn <= 0.0) return false;
+  for (int i = 0; i < ${ENV_BOXES}; i++) {
+    vec4 a = uEnvBoxA[i], c = uEnvBoxB[i];
+    if (all(greaterThan(P, a.xyz)) && all(lessThan(P, c.xyz))) { p = int(a.w); b = i; return p >= 0; }
+  }
+  p = 0; return true;                              // nowhere inside: out of doors, probe 0, the sky as far off as it is
+}
+vec4 envAt(int p, float lvl, vec3 d) {
+  vec2 o = clamp(octEnc(d), uEnvTexel, 1.0 - uEnvTexel);
+  return textureLod(uEnvAtlas, vec2((lvl + o.x) * 0.25, (float(p) + o.y) / uEnvRows), 0.0);
+}
+vec3 envDir(int p, int b, vec3 P, vec3 R) {
+  if (b < 0) return R;
+  vec3 lo = uEnvBoxA[b].xyz, hi = uEnvBoxB[b].xyz, Q = clamp(P, lo, hi);
+  R = vec3(abs(R.x) < 1e-4 ? 1e-4 : R.x, abs(R.y) < 1e-4 ? 1e-4 : R.y, abs(R.z) < 1e-4 ? 1e-4 : R.z);
+  vec3 t = max((hi - Q) / R, (lo - Q) / R);
+  return Q + R * min(min(t.x, t.y), t.z) - uEnvPos[p].xyz;
+}`;
+// A shiny surface (see gloss()): the room it's in, as the probe caught it, off it at the angle you're looking. Fresnel's: barely
+// anything straight on, most of it at a glance. Glass and other see-through things get more solid where they reflect
+const ENV_REFLECT = `
+{ int ep, eb; vec3 eN = inverseTransformDirection(normal, viewMatrix), eV = normalize(vTvPos - cameraPosition);
+  if (envFind(vTvPos + eN * 0.25, ep, eb)) {
+    vec3 R = reflect(eV, eN); float c = clamp(dot(-eV, eN), 0.0, 1.0), c5 = (1.0 - c) * (1.0 - c); c5 *= c5 * (1.0 - c);
+    float F = (uGloss.z + (1.0 - uGloss.z) * c5) * mix(1.0, 0.3, uGloss.y) * uGloss.x * (ep > 0 && diffuseColor.a < 1.0 ? 0.85 : 1.0);   // (glass, from inside: a touch less)
+    vec3 D = envDir(ep, eb, vTvPos, R); float lf = uGloss.y * 2.0, l0 = min(floor(lf), 1.0);
+    vec3 E = mix(envAt(ep, l0, D).rgb, envAt(ep, l0 + 1.0, D).rgb, clamp(lf - l0, 0.0, 1.0)) * uEnvPos[ep].w;
+    E *= mix(vec3(1.0), diffuseColor.rgb, uGloss.w);   // (a metal's reflection takes its colour)
+    float a0 = diffuseColor.a, a = a0 + (1.0 - a0) * min(F, 1.0);
+    outgoingLight = (outgoingLight * a0 * (1.0 - min(F, 1.0)) + E * F) / max(a, 1e-4); diffuseColor.a = a;
+  } }`;
+// which materials shine, and how: [strength, roughness 0..1, reflectance straight on, metal 0..1]. Set with gloss(); a Phong
+// material shiny enough (shininess 60 and up) gets one worked out from its own specular, so chrome and china and enamel shine
+function glossOf(m) {
+  const g = m?.userData?.gloss; if (g) return g;
+  if (!m?.isMeshPhongMaterial || m.shininess < 60) return null;
+  const s = m.specular, sl = 0.2126 * s.r + 0.7152 * s.g + 0.0722 * s.b, c = m.color, grey = Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b) < 0.08;
+  const rough = THREE.MathUtils.clamp(1 - m.shininess / 140, 0.05, 0.6);
+  return sl > 0.9 && grey && m.shininess >= 80 && !m.transparent ? [0.9, rough, 0.55, 1] : [0.5 + 0.5 * sl, rough, 0.06, 0];
+}
+function gloss(m, k = 1, rough = 0.3, f0 = 0.04, metal = 0) { m.userData.gloss = [k, rough, f0, metal]; m.needsUpdate = true; return m; }
 // Room lighting, per fragment, by where it is (world space): no light objects,
 // so it costs the same however many zones there are, and it stops dead at the
 // walls — a switched-off break room is dark even with the store lit next door.
@@ -395,6 +458,9 @@ const ROOM_FRAG = `
     spill += uSpillC[i].rgb * (1.0 - smoothstep(-soft, soft, edge)) * k * k * (0.35 + 0.65 * max(dot(rN, normalize(sp.xyz - P)), 0.0));
   }
   rl = max(rl, spill * flS);
+  { int ep, eb;                                    // what the room's own surfaces throw back: tinted by what's round it, the way it faces (a shelf's underside by the carpet, a wall by the floor)
+    if (envFind(P + rN * 0.05, ep, eb)) { vec4 tn = envAt(ep, 3.0, rN);
+      rl *= mix(vec3(1.0), clamp(tn.rgb, 0.55, 1.7) * mix(1.0, clamp(tn.a, 0.6, 1.3), 0.4), uEnvBounce * clamp(uEnvPos[ep].w * 2.0, 0.0, 1.0)); } }
   reflectedLight.indirectDiffuse += rl * BRDF_Lambert(diffuseColor.rgb);
 }
 `;
@@ -412,8 +478,20 @@ if (uTvGain > 0.0 && vTvPos.x > uTvRoom.x && vTvPos.x < uTvRoom.y && vTvPos.y < 
   vec3 tvC = vTvPos - uTvZoneP[4];   // fake bounce: a dim screen-tinted fill so shadows aren't pitch black
   reflectedLight.directDiffuse += (uTvGain * tvE + uTvAmb / (1.0 + 0.04 * dot(tvC, tvC))) * BRDF_Lambert(diffuseColor.rgb);
 }`;
-for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototype.onBeforeCompile = shader => {
+// three's lights, with the outdoor spotlights (the lot's poles, the wall packs: dark by day, but worked out for every pixel all the
+// same) passed over for what's well inside the store or Tony's, where none of them reaches
+const SPOTS_IN_GLSL = `bool spotsOff(vec3 P) { return (P.x > -7.35 && P.x < 10.8 && P.z > 0.2 && P.z < 34.7 && P.y < 3.6) || (P.x > -7.35 && P.x < 1.7 && P.z > 35.5 && P.z < 48.2 && P.y < 6.0)
+    || (P.x > 13.5 && P.x < 20.5 && P.z > 0.5 && P.z < 13.5 && P.y < 3.9); }`;
+const LIGHTS_BEGIN = (() => { const c = THREE.ShaderChunk.lights_fragment_begin, a = c.indexOf("#if ( NUM_SPOT_LIGHTS > 0 ) && defined( RE_Direct )"),
+  u0 = c.indexOf("#pragma unroll_loop_start", a), u1 = c.indexOf("#pragma unroll_loop_end", u0) + "#pragma unroll_loop_end".length;
+  return a < 0 || u0 < 0 ? c : c.slice(0, u0) + "if (!spotsOff(vTvPos)) {\n" + c.slice(u0, u1) + "\n}" + c.slice(u1); })();
+for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototype.onBeforeCompile = function (shader) {
   Object.assign(shader.uniforms, TVU);
+  const g = glossOf(this);                          // (this: the material; the prototype's own, called bare, has none)
+  if (g) {
+    shader.uniforms.uGloss = { value: new THREE.Vector4(...g) };
+    shader.fragmentShader = shader.fragmentShader.replace("#include <common>", "#include <common>\nuniform vec4 uGloss;").replace("#include <envmap_fragment>", "#include <envmap_fragment>\n" + ENV_REFLECT);
+  }
   shader.vertexShader = shader.vertexShader
     .replace("#include <common>", "#include <common>\nvarying vec3 vTvPos;")
     .replace("#include <project_vertex>", `#include <project_vertex>
@@ -429,12 +507,15 @@ for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototyp
       uniform vec4 uZone, uBoh, uFloorBox, uBohBox, uLobbyBox, uThBox; uniform vec3 uBohSplit; uniform vec4 uThLight, uTall; uniform vec2 uShaft; uniform vec4 uDeadL[3]; uniform vec3 uThScreenP; uniform float uThSconce, uOffice, uThGain; uniform vec3 uThZoneC[${TH_COLS * TH_ROWS}]; uniform vec2 uThScreenS;
       uniform vec4 uSpillP[8], uSpillC[8], uSpillB[8], uSpillD[8]; uniform int uSpillN;
       uniform vec2 uFrontL; uniform highp sampler2DShadow uSunMap; uniform mat4 uSunMat; uniform float uSunK, uSunIsDay, uSunTexel;
-      uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC, uFogC; uniform float uFogD, uFogCam;`)
+      uniform vec3 uInSky, uInGround, uInAmb, uInDirC, uInDir, uSunSky, uSunGround, uSunC, uSunDir, uMoonSky, uMoonGround, uMoonC, uMoonDir, uDayC, uNightC, uFogC; uniform float uFogD, uFogCam;
+      uniform float uEnvOn, uEnvRows, uEnvTexel, uEnvBounce; uniform sampler2D uEnvAtlas; uniform vec4 uEnvPos[${ENV_PROBES}], uEnvBoxA[${ENV_BOXES}], uEnvBoxB[${ENV_BOXES}];`)
+    .replace("#include <lights_fragment_begin>", LIGHTS_BEGIN)
     .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\nfloat tvOut = 0.0;\n" + ROOM_FRAG + TV_FRAG)
-    .replace("void main() {", TROFFER_GLSL + "\nvoid main() {")
+    .replace("void main() {", TROFFER_GLSL + ENV_GLSL + "\n" + SPOTS_IN_GLSL + "\nvoid main() {")
     .replace("#include <fog_fragment>", `#include <fog_fragment>
       if ((tvOut > 0.5 || uFogCam > 0.5) && uFogD > 0.0) gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogC, 1.0 - exp(-length(vTvPos - cameraPosition) * uFogD));   // outdoors only: the fog's out there`);
 };
+for (const M of [THREE.MeshLambertMaterial, THREE.MeshPhongMaterial]) M.prototype.customProgramCacheKey = function () { return this.onBeforeCompile.toString() + (glossOf(this) ? "|gloss" : ""); };   // (the shiny ones are a program of their own)
 
 // the fog on what isn't lit by the room shader: signs, lenses, glass (Tony's shader does the same: tonys/light.js). uFogCam: you're out in it, so it's between you and everything, indoors through a window too; from indoors, only what's out there
 const FOG_OUT_GLSL = `bool fogOut(vec3 P) { bool store = ((P.x > -7.85 && P.x < 11.3 && P.z > -0.3 && P.z < 35.2) || (P.x > -7.85 && P.x < 2.2 && P.z > 35.0 && P.z < 48.7)) && P.y < 7.0, tony = P.x > 13.0 && P.x < 21.0 && P.z > 0.0 && P.z < 14.0 && P.y < 4.4; return !store && !tony; }`;
@@ -601,11 +682,42 @@ const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHei
 const aoRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
 const SCREEN_VERT = "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }";
 const VIEW_AT = "vec3 viewAt(vec2 uv) { float d = texture2D(tDepth, uv).r; vec4 p = uInvProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return p.xyz / p.w; }";
+// In the same pass, at the same size: contact shadows (the green channel). From each pixel a short look, ~60 cm, toward
+// where its light's mostly coming from: straight up indoors (the panels overhead), the sun outdoors on a clear day, or
+// the nearest lamp when it's the one doing the lighting (see lightSlots). Anything in the way, a hair under a shelf, the
+// gap under the couch, a tape against its neighbour, puts the spot in its shade: what the room's light (worked out per
+// surface, not per light) can't know, and the sun's shadow map is too coarse for up close
 const aoPass = new ShaderPass(new THREE.ShaderMaterial({
-  uniforms: { tDepth: { value: mainRT.depthTexture }, uProj: { value: camera.projectionMatrix }, uInvProj: { value: camera.projectionMatrixInverse }, uFull: { value: new THREE.Vector2(1, 1) } },
+  uniforms: { tDepth: { value: mainRT.depthTexture }, uProj: { value: camera.projectionMatrix }, uInvProj: { value: camera.projectionMatrixInverse }, uFull: { value: new THREE.Vector2(1, 1) },
+    uView: { value: camera.matrixWorldInverse }, uCamWorld: { value: camera.matrixWorld }, uAOOn: { value: 1 }, uCS: { value: 1 }, uUpW: { value: 1 }, uSunCS: { value: new THREE.Vector4() },
+    uSlotP: { value: Array.from({ length: 6 }, () => new THREE.Vector4()) }, uSlotI: { value: new Float32Array(6) } },
   vertexShader: SCREEN_VERT,
-  fragmentShader: `varying vec2 vUv; uniform sampler2D tDepth; uniform mat4 uProj, uInvProj; uniform vec2 uFull;
+  fragmentShader: `varying vec2 vUv; uniform sampler2D tDepth; uniform mat4 uProj, uInvProj, uView, uCamWorld; uniform vec2 uFull; uniform float uAOOn, uCS, uUpW; uniform vec4 uSunCS, uSlotP[6]; uniform float uSlotI[6];
     ${VIEW_AT}
+    ${FOG_OUT_GLSL}
+    float contact(vec3 P, vec3 N, vec2 px, float n) {   // 1 lit, down to ~0.45 in the shade of something right by it
+      vec3 W = (uCamWorld * vec4(P, 1.0)).xyz, Lw = vec3(0.0, 1.0, 0.0);
+      bool inside = !fogOut(W); float best = inside ? uUpW : 0.35, k = inside ? 0.6 : 0.35;
+      if (!inside && uSunCS.w > 0.0) { Lw = uSunCS.xyz; best = uSunCS.w; k = 0.45; }
+      for (int i = 0; i < 6; i++) {                // a lamp close enough to outshine the rest
+        vec3 D = uSlotP[i].xyz - W; float r = length(D), f = uSlotI[i] * pow(max(0.0, 1.0 - r / max(uSlotP[i].w, 0.01)), 2.0);
+        if (f > best && r > 0.05) { best = f; Lw = D / r; k = 0.55; }
+      }
+      vec3 L = (uView * vec4(Lw, 0.0)).xyz;
+      if (dot(L, N) <= 0.02) return 1.0;           // (facing away: it's in its own shade already)
+      float zt = -P.z * 0.004;                      // (what a pixel's depth is good to, that far off: less than that in the way is the surface itself)
+      vec3 o = P + N * (0.02 + zt); float t = 0.02 * (0.6 + 0.8 * n), st = 0.015, occ = 0.0, run = 0.0;
+      for (int i = 0; i < 10; i++) {
+        vec3 Q = o + L * t; if (Q.z > -0.05) break;
+        vec4 c = uProj * vec4(Q, 1.0); vec2 s = c.xy / c.w * 0.5 + 0.5;
+        if (s.x < 0.0 || s.y < 0.0 || s.x > 1.0 || s.y > 1.0) break;
+        float dz = viewAt((floor(s * uFull) + 0.5) * px).z - Q.z;
+        if (dz > 0.015 + zt && dz < 0.25) { if (++run >= 2.0) { occ = 1.0 - smoothstep(0.15, 0.64, t); break; } }   // (twice running: a lone hit's an edge, or the pole itself)
+        else run = 0.0;
+        t += st; st *= 1.3;
+      }
+      return 1.0 - k * occ * min(best, 1.0);
+    }
     void main(){
       vec2 px = 1.0 / uFull, uc = (floor(vUv * uFull) + 0.5) * px;   // (a full-size pixel's own middle: half-size, vUv falls on the corner between four)
       if (texture2D(tDepth, uc).r >= 1.0) { gl_FragColor = vec4(1.0); return; }
@@ -617,6 +729,8 @@ const aoPass = new ShaderPass(new THREE.ShaderMaterial({
       if (sc.y * uFull.y < 3.0) { gl_FragColor = vec4(1.0); return; }   // (a few pixels across: far off, it's nothing)
       sc = min(sc, vec2(0.15));
       vec2 ip = mod(floor(gl_FragCoord.xy), 4.0); float n = fract((ip.x * 4.0 + ip.y) * 0.3819660 + 0.123);   // (a different turn for each of the tile's 16)
+      float cs = uCS > 0.0 ? mix(contact(P, N, px, n), 1.0, smoothstep(12.0, 20.0, z)) : 1.0;
+      if (uAOOn <= 0.0) { gl_FragColor = vec4(1.0, cs, 1.0, 1.0); return; }
       float occ = 0.0;
       for (int i = 0; i < 12; i++) {
         float a = (float(i) + n) * 2.39996 + n * 6.2832, rr = (float(i) + 0.5) / 12.0;
@@ -624,36 +738,164 @@ const aoPass = new ShaderPass(new THREE.ShaderMaterial({
         occ += max(0.0, dot(v, N) * inversesqrt(vv + 1e-6) - 0.15) * (1.0 - smoothstep(R * R, 4.0 * R * R, vv));   // (each look counts once at most: how far it stands up off the surface, as an angle)
       }
       float ao = max(0.55, 1.0 - occ * 1.1 / 12.0);   // (a corner's shaded, never blacked out)
-      gl_FragColor = vec4(mix(ao, 1.0, smoothstep(22.0, 40.0, z)));
+      gl_FragColor = vec4(mix(ao, 1.0, smoothstep(22.0, 40.0, z)), cs, 1.0, 1.0);
     }`,
 }));
+// ---- floors that shine, reflecting what's really there (screen-space reflections): the waxed tile in the back, the terrazzo
+// at the door, the restrooms', Tony's checkerboard, and outside when it's wet. At half size, only for those pixels: from each,
+// a ray off the floor marched across the screen till it goes in behind something; that's what the floor shows there, with
+// Fresnel (most at a glance), fading out toward the screen's edges and with distance, where nothing's there to show. The
+// rooms' caught reflections (store/reflect.js) are under it; this has what they can't: people, carts, what moved ----
+const SSR_ZONES = [   // x0, z0, x1, z1; strength, roughness, top (anything higher isn't floor)
+  [[WALL_L, 0, 1.95, 4.35], [1, 0.2, 0.1]],                                  // the terrazzo at the entry (store/lobby.js)
+  [[BOH.x0, STORE.z, CLOSET.x0, BOH.hallZ], [0.8, 0.3, 0.1]],                // the back hall's tile
+  [[BOH.x0, BOH.hallZ, BOH.splitX, BOH.z1], [0.7, 0.2, 0.1]],                // the restrooms'
+  [[BOH.splitX, BOH.hallZ, STORE.x, BOH.officeZ], [0.7, 0.35, 0.1]],         // the break room's
+  [[13, 0, 21, 14], [0.45, 0.45, 0.1]],                                      // Tony's, worn
+];
+const ssrRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+const ssrPass = new ShaderPass(new THREE.ShaderMaterial({
+  uniforms: { tDepth: { value: mainRT.depthTexture }, tColor: { value: mainRT.texture }, uProj: { value: camera.projectionMatrix }, uInvProj: { value: camera.projectionMatrixInverse },
+    uView: { value: camera.matrixWorldInverse }, uCamWorld: { value: camera.matrixWorld }, uFull: { value: new THREE.Vector2(1, 1) }, uWet: { value: 0 },
+    uZoneA: { value: SSR_ZONES.map(([a]) => new THREE.Vector4(...a)) }, uZoneB: { value: SSR_ZONES.map(([, b]) => new THREE.Vector4(...b, 0)) } },
+  vertexShader: SCREEN_VERT,
+  fragmentShader: `varying vec2 vUv; uniform sampler2D tDepth, tColor; uniform mat4 uProj, uInvProj, uView, uCamWorld; uniform vec2 uFull; uniform float uWet;
+    uniform vec4 uZoneA[${SSR_ZONES.length}], uZoneB[${SSR_ZONES.length}];
+    ${VIEW_AT}
+    ${FOG_OUT_GLSL}
+    vec2 toScreen(vec3 Q) { vec4 c = uProj * vec4(Q, 1.0); return c.xy / c.w * 0.5 + 0.5; }
+    void main(){
+      vec2 px = 1.0 / uFull, uc = (floor(vUv * uFull) + 0.5) * px;
+      gl_FragColor = vec4(0.0);
+      if (texture2D(tDepth, uc).r >= 1.0) return;
+      vec3 P = viewAt(uc), W = (uCamWorld * vec4(P, 1.0)).xyz;
+      float k = 0.0, rough = 0.0;
+      for (int i = 0; i < ${SSR_ZONES.length}; i++) if (W.x > uZoneA[i].x && W.z > uZoneA[i].y && W.x < uZoneA[i].z && W.z < uZoneA[i].w && W.y < uZoneB[i].z) { k = uZoneB[i].x; rough = uZoneB[i].y; break; }
+      if (k <= 0.0 && uWet > 0.0 && fogOut(W)) { k = uWet; rough = 0.12; }   // (out in the rain: whatever's lying flat and wet)
+      if (k <= 0.0) return;
+      vec3 r = viewAt(uc + vec2(px.x, 0.0)), l = viewAt(uc - vec2(px.x, 0.0)), t = viewAt(uc + vec2(0.0, px.y)), b = viewAt(uc - vec2(0.0, px.y));
+      vec3 dx = abs(r.z - P.z) < abs(P.z - l.z) ? r - P : P - l, dy = abs(t.z - P.z) < abs(P.z - b.z) ? t - P : P - b;
+      vec3 N = normalize(cross(dx, dy)); if (dot(N, P) > 0.0) N = -N;
+      vec3 Nv = normalize((uView * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+      if (dot(N, Nv) < 0.92) return;               // (lying flat: the floor, not what's standing on it)
+      vec3 V = normalize(P), R = reflect(V, Nv);
+      float c = clamp(dot(-V, Nv), 0.0, 1.0), c5 = (1.0 - c) * (1.0 - c); c5 *= c5 * (1.0 - c);
+      float F = 0.04 + 0.96 * c5;
+      float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+      vec3 o = P + Nv * 0.02; float tt = 0.04 + 0.08 * jit, st = 0.12; vec2 hit = vec2(-1.0);
+      for (int i = 0; i < 24; i++) {
+        vec3 Q = o + R * tt; if (Q.z > -0.05) break;
+        vec2 s = toScreen(Q); if (s.x < 0.0 || s.y < 0.0 || s.x > 1.0 || s.y > 1.0) break;
+        float dz = viewAt(s).z - Q.z;
+        if (dz > 0.0 && dz < 0.3 + st) {            // gone in behind something: narrow it down
+          float a = tt - st, bb = tt;
+          for (int j = 0; j < 5; j++) { float m = 0.5 * (a + bb); vec3 M = o + R * m; if (viewAt(toScreen(M)).z - M.z > 0.0) bb = m; else a = m; }
+          hit = toScreen(o + R * bb); tt = bb; break;
+        }
+        tt += st; st *= 1.12;
+      }
+      if (hit.x < 0.0) return;
+      vec2 e = smoothstep(0.0, 0.07, hit) * smoothstep(1.0, 0.93, hit);
+      float w = F * k * e.x * e.y * (1.0 - smoothstep(4.0, 10.0, tt)) * (1.0 - 0.5 * rough) * smoothstep(-0.2, 0.1, R.z * -1.0 + 0.1);
+      gl_FragColor = vec4(texture2D(tColor, hit).rgb, w);
+    }`,
+}));
+// ---- the grade: a colour lookup table (LUT), 32 x 32 x 32, what each colour on screen becomes. Two of them, day and night,
+// mixed by the light outside. Made here from a grade written as a function of an sRGB colour (gradeDay, gradeNight), or read
+// from a .cube file (the format Resolve, Photoshop and the rest export) pasted in as a string: lutFromCube(text) ----
+const LUT_N = 32;
+function lutTexture(data, n) {
+  const t = new THREE.Data3DTexture(data, n, n, n);
+  t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType; t.minFilter = t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = t.wrapR = THREE.ClampToEdgeWrapping; t.unpackAlignment = 1; t.needsUpdate = true; return t;
+}
+function lutFrom(grade, n = LUT_N) {              // grade([r, g, b]) -> [r, g, b], all sRGB 0..1
+  const d = new Uint8Array(n * n * n * 4);
+  for (let b = 0, i = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++, i += 4) {
+    const o = grade([r / (n - 1), g / (n - 1), b / (n - 1)]);
+    for (let k = 0; k < 3; k++) d[i + k] = Math.round(255 * Math.min(1, Math.max(0, o[k]))); d[i + 3] = 255;
+  }
+  return lutTexture(d, n);
+}
+function lutFromCube(text) {                      // a .cube file's text: LUT_3D_SIZE n, then n³ lines "r g b", red fastest
+  let n = 0; const v = [];
+  for (const line of text.split(/\r?\n/)) {
+    const l = line.trim(); if (!l || l[0] === "#") continue;
+    if (l.startsWith("LUT_3D_SIZE")) { n = +l.split(/\s+/)[1]; continue; }
+    if (/^[A-Z]/.test(l)) continue;               // (TITLE, DOMAIN_MIN / MAX: 0..1 assumed)
+    v.push(...l.split(/\s+/).map(Number));
+  }
+  const d = new Uint8Array(n * n * n * 4);
+  for (let i = 0; i < n * n * n; i++) { for (let k = 0; k < 3; k++) d[i * 4 + k] = Math.round(255 * Math.min(1, Math.max(0, v[i * 3 + k]))); d[i * 4 + 3] = 255; }
+  return lutTexture(d, n);
+}
+// The look: a 90s film print. The blacks lifted a hair and gone a little blue-green, the highlights warm, a soft S through the
+// middle, colour a touch richer in the mids and easing off toward white, greens leaning teal and reds kept deep. Night's the
+// same stock pushed: cooler shadows, the sodium and neon left to glow warm
+function filmGrade({ lift, shadow, high, sat, contrast }) {
+  const L = c => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  return c => {
+    let [r, g, b] = c;
+    const s = x => x + contrast * (x - 0.5) * (1 - Math.abs(2 * x - 1)) * 0.9;   // a soft S, ends pinned
+    r = s(r); g = s(g); b = s(b);
+    let l = L([r, g, b]);
+    const k = sat * (1 - 0.6 * sm(0.6, 1.0, l)) * (0.8 + 0.2 * sm(0.0, 0.25, l));   // richer in the mids, less up toward white, less down in the mud
+    r = l + (r - l) * k; g = l + (g - l) * k; b = l + (b - l) * k;
+    const gr = Math.max(0, g - Math.max(r, b)) * 0.25; g -= gr * 0.4; b += gr;     // greens toward teal
+    l = L([r, g, b]);
+    const ws = 1 - sm(0.0, 0.45, l), wh = sm(0.35, 0.95, l);
+    r *= 1 + ws * shadow[0] + wh * high[0]; g *= 1 + ws * shadow[1] + wh * high[1]; b *= 1 + ws * shadow[2] + wh * high[2];
+    return [lift[0] + r * (1 - lift[0]), lift[1] + g * (1 - lift[1]), lift[2] + b * (1 - lift[2])];
+  };
+}
+const gradeDay = filmGrade({ lift: [0.018, 0.022, 0.028], shadow: [-0.03, 0.0, 0.03], high: [0.03, 0.005, -0.035], sat: 1.07, contrast: 0.12 });
+const gradeNight = filmGrade({ lift: [0.012, 0.018, 0.03], shadow: [-0.06, -0.01, 0.07], high: [0.045, 0.01, -0.05], sat: 1.1, contrast: 0.16 });
+const LUTS = { day: lutFrom(gradeDay), night: lutFrom(gradeNight) };
 // The last step before the screen: the scene with that shading (blurred over its tile), plus the glow; then the film look: the
-// highlights rolled off rather than clipped, a touch more colour, the light a little warm, the corners down, a fine grain that moves
+// highlights rolled off rather than clipped, the grade (the LUTs above), the corners down, a fine grain that moves
 const mixPass = new ShaderPass(new THREE.ShaderMaterial({
   uniforms: { baseTexture: { value: null }, bloomTexture: { value: glowRT.texture }, tDepth: { value: mainRT.depthTexture }, tAO: { value: aoRT.texture },
-    uInvProj: { value: camera.projectionMatrixInverse }, uAO: { value: 1 }, uFilm: { value: 1 }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uAORes: { value: new THREE.Vector2(1, 1) } },
+    uInvProj: { value: camera.projectionMatrixInverse }, uAO: { value: 1 }, uFilm: { value: 1 }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uAORes: { value: new THREE.Vector2(1, 1) },
+    uLutDay: { value: LUTS.day }, uLutNight: { value: LUTS.night }, uLutMix: { value: 0 }, tSSR: { value: ssrRT.texture }, uSSR: { value: 0 } },
   vertexShader: SCREEN_VERT,
   fragmentShader: `varying vec2 vUv; uniform sampler2D baseTexture, bloomTexture, tDepth, tAO; uniform mat4 uInvProj; uniform float uAO, uFilm, uTime; uniform vec2 uRes, uAORes;
+    uniform highp sampler3D uLutDay, uLutNight; uniform float uLutMix; uniform sampler2D tSSR; uniform float uSSR;
+    vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+    vec3 toLin(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+    vec3 lut(vec3 c) {                             // (linear in, linear out: looked up as the sRGB it'll be on screen)
+      vec3 u = clamp(toSRGB(clamp(c, 0.0, 1.0)), 0.0, 1.0) * ${((LUT_N - 1) / LUT_N).toFixed(5)} + ${(0.5 / LUT_N).toFixed(5)};
+      vec3 g = uLutMix <= 0.0 ? texture(uLutDay, u).rgb : uLutMix >= 1.0 ? texture(uLutNight, u).rgb : mix(texture(uLutDay, u).rgb, texture(uLutNight, u).rgb, uLutMix);
+      return toLin(g) + max(c - 1.0, 0.0);         // (what's over white stays over: the output's clamp has it)
+    }
     ${VIEW_AT}
     float hash(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
-    float aoAt() {                                 // the tile round this pixel, but only what's at about its depth
-      float zc = viewAt(vUv).z, s = 0.0, w = 0.0;
+    float aoAt() {                                 // the tile round this pixel, but only what's at about its depth (both: the shading where things meet, the contact shadows)
+      float zc = viewAt(vUv).z, w = 0.0; vec2 s = vec2(0.0);
       for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
         vec2 u2 = vUv + (vec2(float(i), float(j)) - 1.5) / uAORes;
         float wt = 1.0 / (0.002 + abs(viewAt(u2).z - zc) / max(0.05, -zc * 0.02));
-        s += texture2D(tAO, u2).r * wt; w += wt;
+        s += texture2D(tAO, u2).rg * wt; w += wt;
       }
-      return s / w;
+      return s.x * s.y / (w * w);
+    }
+    vec4 ssrAt() {                                 // the floor's reflection, softened over a few half-size pixels at about its depth
+      float zc = viewAt(vUv).z, w = 0.0; vec4 s = vec4(0.0);
+      for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+        vec2 u2 = vUv + (vec2(float(i), float(j)) - 1.0) * 1.5 / uAORes;
+        float wt = (i == 1 && j == 1 ? 2.0 : 1.0) / (0.002 + abs(viewAt(u2).z - zc) / max(0.05, -zc * 0.02));
+        vec4 t = texture2D(tSSR, u2); s += vec4(t.rgb * t.a, t.a) * wt; w += wt;
+      }
+      return s.a > 1e-4 ? vec4(s.rgb / s.a, s.a / w) : vec4(0.0);
     }
     void main(){
       vec4 base = texture2D(baseTexture, vUv);
       float ao = uAO > 0.0 && texture2D(tDepth, vUv).r < 1.0 ? aoAt() : 1.0;
-      vec3 c = base.rgb * ao + texture2D(bloomTexture, vUv).rgb;
+      vec3 c = base.rgb * ao;
+      if (uSSR > 0.0) { vec4 r = ssrAt(); c = mix(c, r.rgb, r.a); }
+      c += texture2D(bloomTexture, vUv).rgb;
       if (uFilm > 0.0) {
         vec3 hi = max(c - 0.8, 0.0); c = min(c, 0.8) + 0.25 * (1.0 - exp(-hi * 4.0));   // the highlights rolled off instead of clipping (the darks and middles left alone)
-        float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
-        c = max(mix(vec3(L), c, 1.05), 0.0);
-        c *= mix(vec3(0.99, 1.0, 1.015), vec3(1.025, 1.0, 0.97), smoothstep(0.03, 0.5, L));
+        c = lut(c);
         vec2 q = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0); c *= 1.0 - 0.22 * smoothstep(0.45, 1.1, length(q));
         c *= 1.0 + (hash(gl_FragCoord.xy + fract(uTime * 7.31) * vec2(113.0, 71.0)) - 0.5) * 0.07;
       }
@@ -663,7 +905,7 @@ const mixPass = new ShaderPass(new THREE.ShaderMaterial({
 const outputPass = new OutputPass(); outputPass.renderToScreen = true;
 function bloomResize() {
   const [w, h] = rtSize(); for (const rt of [mainRT, glowRT, mixRT]) rt.setSize(w, h); mixPass.uniforms.uRes.value.set(w, h);
-  const aw = Math.max(1, Math.round(w / 2)), ah = Math.max(1, Math.round(h / 2)); aoRT.setSize(aw, ah); mixPass.uniforms.uAORes.value.set(aw, ah); aoPass.uniforms.uFull.value.set(w, h);
+  const aw = Math.max(1, Math.round(w / 2)), ah = Math.max(1, Math.round(h / 2)); aoRT.setSize(aw, ah); ssrRT.setSize(aw, ah); ssrPass.uniforms.uFull.value.set(w, h); mixPass.uniforms.uAORes.value.set(aw, ah); aoPass.uniforms.uFull.value.set(w, h);
   bloomPass.setSize(w / 2, h / 2);
 }
 bloomResize();
@@ -744,6 +986,8 @@ function renderWithBloom() {
   scene.updateMatrixWorld();
   sunShadowRender();
   const mu = mixPass.uniforms; mu.uAO.value = SETTINGS.ao ? 1 : 0; mu.uFilm.value = SETTINGS.film ? 1 : 0; mu.uTime.value = performance.now() / 1000;
+  mu.uLutMix.value = 1 - THREE.MathUtils.smoothstep(TVU.uZone.value.w, 0.15, 0.6);   // (night's grade as the daylight goes)
+  if (typeof envStep === "function") envStep();   // the rooms' reflections, caught a face at a time when they're due (store/reflect.js)
   renderer.setRenderTarget(mainRT); renderer.render(scene, camera);
   // the glow: just the glowing things, over a clear (black) target that keeps mainRT's depth. (A color
   // background makes three clear the depth too, so the sky's out of this pass)
@@ -755,7 +999,16 @@ function renderWithBloom() {
   glowDrawsEnd();
   renderer.autoClear = true; camera.layers.mask = mask; scene.background = bg; renderer.setClearColor(clearWas, alpha);
   bloomPass.render(renderer, null, glowRT, 0, false);   // blurred, and added back onto glowRT
-  if (SETTINGS.ao) aoPass.render(renderer, aoRT, null);   // the shading where things meet, at half size
+  const cs = SETTINGS.shadows && SETTINGS.contact !== false, au = aoPass.uniforms;
+  mu.uAO.value = SETTINGS.ao || cs ? 1 : 0; au.uAOOn.value = SETTINGS.ao ? 1 : 0; au.uCS.value = cs ? 1 : 0;
+  if (cs) {                                      // which lamps are lighting things (the slots: see lightsTick), and the sun, for the contact shadows
+    lightSlots.forEach((l, i) => { au.uSlotP.value[i].set(l.position.x, l.position.y, l.position.z, l.distance || 0); au.uSlotI.value[i] = l.intensity * 3; });
+    au.uUpW.value = typeof lightsOut !== "undefined" && lightsOut ? 0.25 : 1;
+    au.uSunCS.value.copy(TVU.uSunDir.value).setW(TVU.uSunIsDay.value > 0.5 ? TVU.uSunK.value * 0.9 : 0);
+  }
+  if (mu.uAO.value) aoPass.render(renderer, aoRT, null);   // the shading where things meet, and the contact shadows, at half size
+  const ssrOn = SETTINGS.reflect !== false; mu.uSSR.value = ssrOn ? 1 : 0;
+  if (ssrOn) { ssrPass.uniforms.uWet.value = typeof WX !== "undefined" ? Math.min(1, WX.wet * 1.2) * (1 - Math.min(1, WX.cover * 2)) : 0; ssrPass.render(renderer, ssrRT, null); }   // the floors' reflections, at half size
   mixPass.render(renderer, mixRT, mainRT);               // the scene (so shaded) + the glow
   outputPass.render(renderer, null, mixRT);              // tone mapping, sRGB, to the screen
 }
@@ -769,7 +1022,7 @@ const SLOTS = 3, slotKey = n => n === 1 ? "vaultbuster-save" : `vaultbuster-save
 const SLOT = (() => { try { const n = +localStorage.getItem("vaultbuster-slot"); return n >= 1 && n <= SLOTS ? n : 1; } catch { return 1; } })();
 const SAVE_KEY = slotKey(SLOT);
 // settings (per browser, not per store): see the title menu's SETTINGS
-const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, aa: !LOWMEM, shadows: !LOWMEM, ao: !LOWMEM, film: true, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
+const SETTINGS = { sound: 100, sens: 100, invertY: false, shiftMin: 21, sharp: false, aa: !LOWMEM, shadows: !LOWMEM, ao: !LOWMEM, reflect: true, film: true, ...(() => { try { return JSON.parse(localStorage.getItem("vaultbuster-settings")) || {}; } catch { return {}; } })() };
 const SAVE_V = 3;                            // v1 keyed tapes by id (every season of a show shares it); v2 by catalog position (shifts when tapes are added)
 // a guest (see store/together.js): joined somebody else's game, so a customer in a store of the moment that's never saved. { who: the host, offer: till it's been answered }
 const GUEST = (() => { try { return JSON.parse(sessionStorage.getItem("vaultbuster-guest")); } catch { return null; } })();
@@ -1047,17 +1300,17 @@ const mat = {
   ceil: new THREE.MeshLambertMaterial({ map: ceilTex }),
   wall: wallSurface(new THREE.MeshLambertMaterial({ color: 0xe8ecf2 }), "paint"),
   stripe: new THREE.MeshLambertMaterial({ color: BLUE }),
-  glass: new THREE.MeshLambertMaterial({ color: 0x0a1428, transparent: true, opacity: 0.75 }),
+  glass: gloss(new THREE.MeshLambertMaterial({ color: 0x0a1428, transparent: true, opacity: 0.75 }), 1, 0.02, 0.1),
   frame: new THREE.MeshLambertMaterial({ color: 0xf4f4f4 }),
   board: new THREE.MeshLambertMaterial({ color: 0x9aa3ad }),
   upright: new THREE.MeshLambertMaterial({ color: 0x0f226b }),   // navy
   counter: new THREE.MeshLambertMaterial({ color: BLUE }),
-  counterTop: new THREE.MeshLambertMaterial({ color: YELLOW }),
+  counterTop: gloss(new THREE.MeshLambertMaterial({ color: YELLOW }), 1, 0.3, 0.08),   // laminate
   dark: new THREE.MeshLambertMaterial({ color: 0x14161a }),
   wood: new THREE.MeshLambertMaterial({ color: 0x7a4a22 }),
   tapeBody: new THREE.MeshLambertMaterial({ color: 0x101318 }),
   backing: new THREE.MeshLambertMaterial({ color: 0xeef0f2 }),
-  storefront: new THREE.MeshLambertMaterial({ color: 0x8fb8d8, transparent: true, opacity: 0.16 }), // big display glass — barely tinted, meant to be seen through
+  storefront: gloss(new THREE.MeshLambertMaterial({ color: 0x8fb8d8, transparent: true, opacity: 0.16 }), 1, 0.03, 0.14), // big display glass — barely tinted, meant to be seen through
   mullion: new THREE.MeshLambertMaterial({ color: 0x2a2e35 }),
   sidewalk: new THREE.MeshLambertMaterial({ color: 0x9a9d9f }),
   sidewalkJoint: new THREE.MeshBasicMaterial({ color: 0x6f7274 }),

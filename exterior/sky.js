@@ -200,6 +200,12 @@ const wxSky = (() => {
     vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * viewMatrix * vec4(position * 110.0 + cameraPosition, 1.0); }`,
     fragmentShader: `uniform vec3 uZen, uHor, uSun, uSunC, uMoon, uGlowC, uFogC; uniform float uSunUp, uMoonK, uStar, uT, uGlow, uFog; varying vec3 vDir;
       float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float vn(vec3 p) {                           // smooth value noise, and four octaves of it: clouds of light with no repeat to them
+        vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(h3(i), h3(i + vec3(1, 0, 0)), f.x), mix(h3(i + vec3(0, 1, 0)), h3(i + vec3(1, 1, 0)), f.x), f.y),
+                   mix(mix(h3(i + vec3(0, 0, 1)), h3(i + vec3(1, 0, 1)), f.x), mix(h3(i + vec3(0, 1, 1)), h3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+      }
+      float fbm(vec3 p) { float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * vn(p); p = p * 2.03 + 11.7; a *= 0.5; } return s; }
       void main() {
         vec3 d = normalize(vDir); float e = d.y;
         vec3 col = mix(uHor, uZen, smoothstep(0.0, 0.55, max(e, 0.0)));
@@ -209,9 +215,15 @@ const wxSky = (() => {
         float sd = dot(d, uSun);
         col += uSunC * uSunUp * (smoothstep(0.99955, 0.99975, sd) * 8.0 + pow(max(sd, 0.0), 350.0) * 0.9 + pow(max(sd, 0.0), 10.0) * 0.12);
         if (uStar > 0.003) {
-          vec3 sc = vec3(0.0), gal = normalize(vec3(0.38, 0.5, 0.78));              // the band of the galaxy, a slant across the sky
-          float gd = dot(d, gal), band = exp(-gd * gd * 22.0), gm = 0.55 + 0.25 * sin(d.x * 19.0 + d.y * 7.0 + 1.3) * sin(d.z * 23.0 - d.y * 11.0) + 0.2 * sin(d.x * 47.0 - d.z * 41.0);
-          col += vec3(0.1, 0.115, 0.17) * band * gm * uStar * smoothstep(0.02, 0.4, e);
+          vec3 sc = vec3(0.0), gal = normalize(vec3(0.38, 0.5, 0.78));              // the Milky Way, a slant across the sky: faint (the town's glow washes most of it out),
+          float gd = dot(d, gal), band = exp(-gd * gd * 26.0);                       // mottled, split down its length by a dark lane of dust, brighter and warmer toward its core
+          float gm = 0.0;
+          if (band > 0.02) {
+            float mott = fbm(d * 7.0), lane = exp(-(gd - 0.03) * (gd - 0.03) * 500.0) * smoothstep(0.35, 0.7, fbm(d * 13.0 + 4.0));
+            float core = smoothstep(-0.4, 0.9, dot(d, normalize(vec3(-0.9, 0.1, 0.4))));
+            gm = smoothstep(0.25, 0.75, mott) * (0.5 + 0.8 * core) * (1.0 - 0.75 * lane);
+            col += mix(vec3(0.045, 0.05, 0.068), vec3(0.07, 0.062, 0.055), core) * band * gm * uStar * smoothstep(0.05, 0.45, e);
+          }
           for (int l = 0; l < 3; l++) {                                            // star dust, thicker in the band; a fine field; a few bright ones
             float fl = float(l), sz = l == 0 ? 270.0 : l == 1 ? 160.0 : 64.0, thr = l == 0 ? 0.992 - 0.05 * band * gm : l == 1 ? 0.986 : 0.994;
             vec3 p = d * sz, c = floor(p); float hh = h3(c + fl * 17.0);
@@ -257,9 +269,11 @@ const wxSky = (() => {
       TVU.uFogC.value.setRGB(0.5 * L + 0.035, 0.53 * L + 0.04, 0.56 * L + 0.05).lerp(u.uHor.value, 0.25);
       TVU.uFogD.value = WX.fog ** 1.3 * 0.11 + WX.k * (WX.kind === "snow" ? 0.025 : 0.01);
       cloudGrey.setRGB(1, 1, 1).lerp(cloudLow, over * 0.8).lerp(u.uGlowC.value, Math.min(0.6, u.uGlow.value * 0.8));   // greyer under overcast; catching the glow
-      mat.cloud.color.copy(cloudGrey);
+      const night = Math.min(1, (1 - L) * 1.4);     // after dark: barely moonlit (that showed every facet, pale slabs), lit from under by the town instead
+      mat.cloud.color.copy(cloudGrey).multiplyScalar(1 - 0.85 * night);
       const gk = Math.min(1, u.uGlow.value * 1.4);   // their own light: the sky's, all round them (not the grass's green from under), and the glow when there is one
       cloudEm.setRGB(0.3 * L + 0.03, 0.31 * L + 0.035, 0.34 * L + 0.05).multiplyScalar(1 - 0.35 * over);
+      cloudEm.lerp(zen.copy(u.uZen.value).multiplyScalar(1.12).add(grey.copy(city).multiplyScalar(0.9 + 0.6 * over)), night);   // a shade over the sky behind them, warmed by the streetlights' glow
       mat.cloud.emissive.copy(cloudEm).lerp(glows[plan.glowHue || 0], gk * 0.6); mat.cloud.emissiveIntensity = 1;
     },
     dome, u,

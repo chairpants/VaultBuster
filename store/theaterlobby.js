@@ -76,7 +76,7 @@ const nowPlaying = { shown: undefined, poster: null, plate: null, ctx: null };
     }
   });
   bx(CASE1 - CASE0 - 0.03, 0.012, 0.03, new THREE.MeshBasicMaterial({ color: 0xfff2c8 }), (CASE0 + CASE1) / 2, CH - 0.05, CZ);   // the case's strip light
-  bx(CASE1 - CASE0, CH - 0.18, 0.008, lam(0xcfe9f7, { transparent: true, opacity: 0.16, depthWrite: false }), (CASE0 + CASE1) / 2, (CH + 0.14 - 0.04) / 2 + 0.02, FRONT);   // its glass
+  bx(CASE1 - CASE0, CH - 0.18, 0.008, gloss(lam(0xcfe9f7, { transparent: true, opacity: 0.16, depthWrite: false }), 1, 0.02, 0.1), (CASE0 + CASE1) / 2, (CH + 0.14 - 0.04) / 2 + 0.02, FRONT);   // its glass
   for (const x of [CASE0, CASE1]) bx(0.02, CH - 0.14, 0.02, gold, x, 0.14 + (CH - 0.14) / 2, FRONT);
   // on the counter: the register, a hot dog roller, the napkins and straws, sleeves of cups
   const TOP = CH + 0.046;

@@ -222,14 +222,14 @@ const bathTex = makeTexture((ctx, W, H) => {  // small white square tile, grey g
   ctx.fillStyle = "#9ea3a8"; ctx.fillRect(0, 0, W, H);
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = Math.random() < 0.06 ? "#e4e8ec" : "#f3f5f7"; ctx.fillRect(x * s + 2, y * s + 2, s - 4, s - 4); }
 }, 512, 512);
-const floorPatch = (tex, tileM, x0, x1, z0, z1) => {
+const floorPatch = (tex, tileM, x0, x1, z0, z1, rough) => {   // rough: a waxed floor's shine (see gloss)
   const t = tex.clone(); t.needsUpdate = true; t.repeat.set((x1 - x0) / tileM, (z1 - z0) / tileM);
-  const f = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshLambertMaterial({ map: t }));
+  const m = new THREE.MeshLambertMaterial({ map: t }), f = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), rough === undefined ? m : gloss(m, 1, rough, 0.1));   // (carpet: none)
   f.rotation.x = -Math.PI / 2; f.position.set((x0 + x1) / 2, 0.002, (z0 + z1) / 2); scene.add(f);
 };
-floorPatch(vctTex, 2.4, BX0, CLOSET.x0, BZ0, HZ);                         // hall — starts right where the store's carpet ends, mid-opening
-floorPatch(bathTex, 0.8, BX0, SX, HZ, BZ1);                               // restroom
-floorPatch(vctTex, 2.4, SX, XR, HZ, BOH.officeZ);                         // break room (the office has its carpet: store/office.js)
+floorPatch(vctTex, 2.4, BX0, CLOSET.x0, BZ0, HZ, 0.3);                        // hall — starts right where the store's carpet ends, mid-opening
+floorPatch(bathTex, 0.8, BX0, SX, HZ, BZ1, 0.2);                              // restroom
+floorPatch(vctTex, 2.4, SX, XR, HZ, BOH.officeZ, 0.35);                        // break room (the office has its carpet: store/office.js)
 // ceilings: the hall gets its own, its grid shifted so a row of tiles runs down the middle between
 // the walls (the hall lights sit in it) with a sliver of tile either side; the rooms keep the store's grid
 const hallMid = (BZ0 + WALL_T / 2 + HZ - WALL_T / 2) / 2, rowStart = hallMid - CEIL_TILE.z / 2;

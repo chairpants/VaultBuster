@@ -66,7 +66,8 @@ Sections inside a file start with a `// ---- name ----` comment; grep for the na
 | Playing together on the same network: pairing by swapping codes (shown as QR, read by the camera, or pasted), the direct WebRTC link, the other player's body, joining as a guest (`GUEST`), the shared time and weather, tape, doors and lights | `store/together.js` |
 | TV picture settings, screensaver | `store/lounge.js` |
 | The time and weather wheel (hold F) | `store/wheel.js` |
-| Renderer, TV-light shader, bloom, rewinding, canvas-texture helpers | `store/core.js` |
+| Renderer, TV-light shader, bloom, rewinding, canvas-texture helpers; the film grade's colour lookup tables (`LUTS`, `filmGrade`, `lutFromCube`); which materials shine (`gloss`) and the shader side of reflections (`ENV_GLSL`); the floors' screen-space reflections (`ssrPass`, `SSR_ZONES`) and contact shadows (in `aoPass`) | `store/core.js` |
+| Reflections and bounce light: each room caught once into an atlas (`ENV.probes`), re-caught as the day turns (`envStep`) | `store/reflect.js` |
 | The register terminal | `pos.js` · sound: `ambience.js` · touch controls: `touch.js` |
 
 ## Testing
