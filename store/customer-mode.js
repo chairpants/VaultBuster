@@ -1016,6 +1016,7 @@ function cmTick(dt) {
   if (afterClose()) {
     if (!inside) { cm.closeT = 0; if (!cm.nightHint) { cm.nightHint = true; toast("Closed for the night. The day's over when you sleep: there's a cardboard bed round the back", true); } }
     else if (player.onRoof) {}                    // up top nobody knows you're there, so nobody comes for you: the night's yours till you climb down
+    else if (!cmStaffOn().length) { cm.closeT = 0; }   // the closer's locked up and gone home: the store's yours
     else if ((cm.closeT += dt) > 25) { toast("They walk you to the door. Good night!", true); cmFade(() => cmPutAt(CM_LOT)); cm.closeT = -99; }
     else if (cm.closeT > 0 && cm.closeT - dt <= 0) toast(`${staff.find(e => e.c)?.first || "The clerk"}: "We're closed! Time to head out."`);
   }

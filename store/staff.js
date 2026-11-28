@@ -203,7 +203,11 @@ function empDespawn() {                          // out the door: gone for the d
 const weekday = () => shiftDate().getDay();
 function onDuty(e) {                             // should they be in the store right now?
   if (e.sentHome) return false;
-  if (shift.h >= SHIFT.close) return !!e.c && !!(e.sched[weekday()] >> (SCHED_SLOTS - 1) & 1);   // after close: whoever worked till close stays till you send them home (not someone just finishing up a late sale)
+  if (shift.h >= SHIFT.close) {
+    const closer = !!e.c && !!(e.sched[weekday()] >> (SCHED_SLOTS - 1) & 1);   // after close: whoever worked till close stays till you send them home (not someone just finishing up a late sale)
+    // a customer: nobody sends them home. They stay while you're still in the store (to see you out), then lock up and go, a couple of minutes after midnight at the latest (the clock's real time by then)
+    return CUSTOMER ? closer && cm.inside && !player.onRoof && shift.h < SHIFT.close + 2 / 60 : closer;
+  }
   const n = Math.floor(shift.h) - SCHED_H0;
   return n >= 0 && n < SCHED_SLOTS && !!(e.sched[weekday()] >> n & 1);
 }
@@ -641,10 +645,18 @@ const sandwichMesh = () => {                      // a sandwich in its wax paper
   m(0.11, 0.015, 0.09, 0xe0b878, 0); m(0.115, 0.008, 0.095, 0x5aa83a, 0.011); m(0.11, 0.008, 0.09, 0xd65a4a, 0.018); m(0.11, 0.015, 0.09, 0xe0b878, 0.03);
   return g;
 };
+const empSeeV = new THREE.Vector3();
+function empOutOfSight(p) {                       // off screen (or far off): nobody sees them go
+  if (Math.hypot(p.x - camera.position.x, p.z - camera.position.z) > 40) return true;
+  empSeeV.set(p.x, 1, p.z).project(camera); return empSeeV.z > 1 || Math.abs(empSeeV.x) > 1.15 || Math.abs(empSeeV.y) > 1.15;
+}
 function empTickOne(dt) {
   if (!emp.c) {                                   // off the clock: in when their shift starts (already at their post if the store's just loaded)
     if (!window.VaultCustomers || !posTerm || shift.report || !onDuty(emp)) return;
     const arrive = clockT > 3; empSpawn(arrive); if (arrive) logAct(`${emp.first} clocked in`);
+  }
+  if (CUSTOMER && emp.leaving && shift.h >= SHIFT.close + 4 / 60 && empOutOfSight(emp.c.group.position)) {   // still about after close, caught up in something: gone home all the same (once you're not looking)
+    const e = emp; empDespawn(); empHomeFrom(e, INSIDE_DOOR); return;
   }
   if (!emp.leaving && !onDuty(emp)) emp.leaving = true;   // their shift's over (or you sent them home): they finish up, then go
   else if (emp.leaving && onDuty(emp)) { emp.leaving = false; if (emp.state === "toExit") empGo("toPost", emp.home); }   // on again before they got out the door (a gap in the schedule, or it changed): they stay
